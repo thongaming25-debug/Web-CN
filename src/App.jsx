@@ -34171,15 +34171,15 @@ const CN_ORDER_TYPES = [{ value: "assisted", label: "Assisted Purchase" }];
 const cnOrderTypeLabel = (t) =>
   t === "direct" ? "Customer Direct" : "Assisted Purchase";
 
-// From "Inbound" onward the status is DRIVEN BY THE TK (packages table),
-// never advanced by hand — otherwise Order and TK drift apart.
+// Shipment milestones are driven by the linked TK. "Complete Order" is
+// the final staff-confirmed handoff, so it can also be selected manually from
+// the CN Order detail page after the order reaches Inbound Warehouse.
 const CN_AUTO_STAGES = new Set([
   "Inbound",
   "Outbound",
   "Arrived",
   "Shipping to Branch",
   "Inbound Warehouse",
-  "Complete Order",
 ]);
 
 // packages.status  →  cn_orders.status  (single source of truth = TK)
@@ -34320,6 +34320,11 @@ function cnAdvanceBlocker(row, parcels = []) {
   if (!next) return "This order has no next status.";
   if (CN_AUTO_STAGES.has(next))
     return "Updated automatically from the linked TK (physical shipment workflow).";
+  if (
+    next === "Complete Order" &&
+    cnNormalizeStatus(row.status) !== "Inbound Warehouse"
+  )
+    return "The order can only be completed after it reaches Inbound Warehouse.";
   if (next === "Purchased") {
     if (row.payment_status !== "Paid")
       return "Payment must be fully received before purchasing.";
@@ -36096,7 +36101,11 @@ function CnStatusUpdateModal({ open, row, parcels = [], onClose, onSaved }) {
         created_by: by,
         note:
           cnNz(note) ||
-          (next === "Purchased" ? `Supplier order ${supplierNo.trim()}` : null),
+          (next === "Purchased"
+            ? `Supplier order ${supplierNo.trim()}`
+            : next === "Complete Order"
+              ? "Order marked complete by staff."
+              : null),
       });
       emitCBToast("ok", "Order updated", `${row.order_id} → ${next}`);
       onSaved(data);
@@ -37039,6 +37048,12 @@ function CnOrderDetailPage() {
         <div className="rounded-xl bg-blue-50 text-blue-700 px-3.5 py-2.5 text-sm">
           Next step <b>{next}</b> updates automatically from the linked TK
           (matching the tracking number below) — no manual update needed.
+        </div>
+      )}
+      {canAdvance && next === "Complete Order" && (
+        <div className="rounded-xl bg-emerald-50 text-emerald-800 px-3.5 py-2.5 text-sm">
+          The shipment has reached <b>Inbound Warehouse</b>. Confirm{" "}
+          <b>Complete Order</b> when the customer has received the goods.
         </div>
       )}
 
