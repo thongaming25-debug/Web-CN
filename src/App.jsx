@@ -4205,6 +4205,49 @@ function PackageTrackingProvider({ children }) {
     });
   }
 
+  // Forget locally cached TK state after its owning CN Order was deleted.
+  // This prevents a deleted TK's old timeline/history reappearing if its number is reused.
+  function forgetDeletedTks(tks = []) {
+    const rows = (Array.isArray(tks) ? tks : [])
+      .map((tk) => String(tk || "").trim())
+      .filter(Boolean);
+    const keys = new Set(rows.map((tk) => tk.toLowerCase()));
+    setPackages((prev) =>
+      prev.filter(
+        (p) =>
+          !keys.has(
+            String(p.tk || "")
+              .trim()
+              .toLowerCase(),
+          ),
+      ),
+    );
+    setTimelines((prev) => {
+      const next = { ...prev };
+      rows.forEach((tk) => {
+        delete next[tk];
+        delete next[tk.toLowerCase()];
+      });
+      return next;
+    });
+    setStatusHistory((prev) => {
+      const next = { ...prev };
+      rows.forEach((tk) => {
+        delete next[tk];
+        delete next[tk.toLowerCase()];
+      });
+      return next;
+    });
+    setDbHistory((prev) => {
+      const next = { ...prev };
+      rows.forEach((tk) => {
+        delete next[tk];
+        delete next[tk.toLowerCase()];
+      });
+      return next;
+    });
+  }
+
   function advance(tk, proceedBy) {
     const current = getTimeline(tk);
     const next = advanceTimeline(current, proceedBy);
@@ -4347,6 +4390,7 @@ function PackageTrackingProvider({ children }) {
         },
         upsertPackage,
         deletePackage,
+        forgetDeletedTks,
         loading,
         ready,
         refetch,
@@ -23539,6 +23583,12 @@ const customerFeatureStore = {
   roles: ensureDefaultCustomerRole(lsRead(CUSTOMER_ROLES_KEY, [])),
   role: DEFAULT_CUSTOMER_ROLE, // role of the customer signed in right now
   rolesServer: false,
+  // When Supabase is configured, feature access stays closed until both
+  // server tables load successfully. This prevents another browser/device
+  // from showing features that Admin has disabled just because RLS blocked
+  // the read query.
+  serverStatus: supabase ? "loading" : "local",
+  serverError: "",
   version: 0,
   subs: new Set(),
 };
@@ -23575,6 +23625,9 @@ function findCustomerRole(name) {
 function isCustomerFeatureOn(key) {
   if (CHINA_ONLY && key === "tab_air") return false;
   if (CUSTOMER_FEATURE_DEF[key]?.locked) return true;
+  // Fail closed while remote permissions are loading or if RLS/table access
+  // fails. Core Home/Profile remain available so the customer is not locked out.
+  if (supabase && customerFeatureStore.serverStatus !== "ready") return false;
   if (customerFeatureStore.disabled[key]) return false;
   const role = findCustomerRole(customerFeatureStore.role);
   return !(role && role.denied.includes(key));
@@ -23600,39 +23653,70 @@ function useCustomerRoles() {
 // true = customer_features table reachable; roles table status is kept in
 // customerFeatureStore.rolesServer.
 async function syncCustomerFeaturesFromServer() {
-  if (!supabase) return false;
-  let ok = false;
+  if (!supabase) {
+    customerFeatureStore.serverStatus = "local";
+    customerFeatureStore.serverError = "";
+    return false;
+  }
+  let featureOk = false;
+  let rolesOk = false;
+  let featureError = null;
+  let roleError = null;
   try {
     const { data, error } = await supabase
       .from("customer_features")
       .select("key,enabled");
-    if (!error && Array.isArray(data)) {
+    if (error) {
+      featureError = error;
+    } else if (Array.isArray(data)) {
       const disabled = {};
       data.forEach((r) => {
         if (r.enabled === false) disabled[r.key] = true;
       });
-      commitCustomerFeatures(disabled);
-      ok = true;
+      commitCustomerFeatures(disabled, false);
+      featureOk = true;
     }
-  } catch {
-    /* table missing */
+  } catch (e) {
+    featureError = e;
   }
   try {
     const { data, error } = await supabase.from("customer_roles").select("*");
-    if (!error && Array.isArray(data)) {
+    if (error) {
+      roleError = error;
+    } else if (Array.isArray(data)) {
       customerFeatureStore.rolesServer = true;
-      if (data.length) commitCustomerRoles(data);
-    } else {
-      customerFeatureStore.rolesServer = false;
+      // Also clear stale local roles if the server intentionally has no rows;
+      // ensureDefaultCustomerRole keeps Standard available.
+      commitCustomerRoles(data, false);
+      rolesOk = true;
     }
-  } catch {
+  } catch (e) {
+    roleError = e;
     customerFeatureStore.rolesServer = false;
   }
-  return ok;
+  if (featureOk && rolesOk) {
+    customerFeatureStore.serverStatus = "ready";
+    customerFeatureStore.serverError = "";
+    notifyCustomerFeatures();
+    return true;
+  }
+  customerFeatureStore.serverStatus = "error";
+  const details = [featureError, roleError]
+    .filter(Boolean)
+    .map((e) => e?.message || String(e))
+    .filter(Boolean);
+  customerFeatureStore.serverError =
+    details.join(" · ") ||
+    "Could not load customer feature permissions from Supabase.";
+  notifyCustomerFeatures();
+  return false;
 }
 async function saveCustomerFeatures(disabled) {
-  commitCustomerFeatures(disabled);
-  if (!supabase) return { error: null, local: true };
+  // Without Supabase, explicitly fall back to this browser only.
+  if (!supabase) {
+    commitCustomerFeatures(disabled);
+    return { error: null, local: true };
+  }
   const rows = CUSTOMER_FEATURES.filter((f) => !f.locked).map((f) => ({
     key: f.key,
     enabled: !disabled[f.key],
@@ -23641,12 +23725,21 @@ async function saveCustomerFeatures(disabled) {
   const { error } = await supabase
     .from("customer_features")
     .upsert(rows, { onConflict: "key" });
-  return { error };
+  // Do not make a failed server save look like it succeeded in this browser.
+  if (!error) {
+    commitCustomerFeatures(disabled);
+    customerFeatureStore.serverStatus = "ready";
+    customerFeatureStore.serverError = "";
+  }
+  return { error, local: false };
 }
 async function saveCustomerRoles(roles, removedNames = []) {
-  commitCustomerRoles(roles);
-  if (!supabase) return { error: null, local: true };
-  const rows = customerFeatureStore.roles.map((r) => ({
+  const normalized = ensureDefaultCustomerRole(roles);
+  if (!supabase) {
+    commitCustomerRoles(normalized);
+    return { error: null, local: true };
+  }
+  const rows = normalized.map((r) => ({
     name: r.name,
     description: r.description || null,
     is_system: r.system,
@@ -23662,8 +23755,18 @@ async function saveCustomerRoles(roles, removedNames = []) {
       .delete()
       .in("name", removedNames));
   }
+  if (!error) commitCustomerRoles(normalized);
   customerFeatureStore.rolesServer = !error;
-  return { error };
+  if (!error) {
+    customerFeatureStore.serverStatus = "ready";
+    customerFeatureStore.serverError = "";
+  } else {
+    customerFeatureStore.serverStatus = "error";
+    customerFeatureStore.serverError =
+      error.message || "Failed to save customer roles.";
+  }
+  notifyCustomerFeatures();
+  return { error, local: false };
 }
 
 const CustomerApp = (() => {
@@ -24153,7 +24256,7 @@ const CustomerApp = (() => {
       const { data, error } = await supabase
         .from("cn_orders")
         .select(
-          "id,order_id,customer_id,order_type,product_name,product_url,shop_name,platform,variant,quantity,total_due_usd,payment_status,status,created_at,updated_at",
+          "id,order_id,customer_id,order_type,product_name,product_url,shop_name,platform,variant,quantity,total_due_usd,payment_status,status,created_at,updated_at,cn_order_items,pricing_mode,unit_price_cny,unit_price_usd,cny_per_usd",
         )
         .eq("customer_id", customerId)
         .order("created_at", { ascending: false })
@@ -25404,8 +25507,54 @@ const CustomerApp = (() => {
     const { pathname } = useLocation();
     const first = useRef(true);
     const feat = useCustomerFeatures();
+    // Refresh permissions on route changes, focus/visibility return and at a
+    // short interval so an Admin's saved feature switches reach already-open
+    // Customer Portals too. Supabase Realtime is an optional faster path.
     useEffect(() => {
-      if (supabase) syncCustomerFeaturesFromServer(); // pick up admin switches
+      if (!supabase) return;
+      let active = true;
+      const refreshFeatures = () => {
+        if (!active || (typeof document !== "undefined" && document.hidden))
+          return;
+        void syncCustomerFeaturesFromServer();
+      };
+      refreshFeatures();
+      const onFocus = () => refreshFeatures();
+      const onVisibility = () => {
+        if (document.visibilityState === "visible") refreshFeatures();
+      };
+      window.addEventListener("focus", onFocus);
+      document.addEventListener("visibilitychange", onVisibility);
+      const refreshTimer = window.setInterval(refreshFeatures, 15000);
+      let featureChannel = null;
+      try {
+        featureChannel = supabase
+          .channel("customer-feature-permissions-live")
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "customer_features" },
+            refreshFeatures,
+          )
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "customer_roles" },
+            refreshFeatures,
+          )
+          .subscribe();
+      } catch {
+        // Focus/visibility + periodic refresh remain available without Realtime.
+      }
+      return () => {
+        active = false;
+        window.removeEventListener("focus", onFocus);
+        document.removeEventListener("visibilitychange", onVisibility);
+        window.clearInterval(refreshTimer);
+        if (featureChannel && supabase) {
+          try {
+            supabase.removeChannel(featureChannel);
+          } catch {}
+        }
+      };
     }, [pathname]);
     useEffect(() => {
       if (first.current) {
@@ -25477,6 +25626,34 @@ const CustomerApp = (() => {
     return (
       <div className="min-h-screen bg-slate-50 text-slate-900" style={FONT}>
         <div className="max-w-md mx-auto pb-24 relative">
+          {supabase && customerFeatureStore.serverStatus === "error" && (
+            <div
+              role="alert"
+              className="mx-4 mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900"
+            >
+              <p className="font-semibold">
+                {tr(
+                  "Customer permissions could not be loaded",
+                  "មិនអាចទាញយកសិទ្ធិអតិថិជនបានទេ",
+                )}
+              </p>
+              <p className="mt-1 text-xs break-words">
+                {customerFeatureStore.serverError}
+              </p>
+              <button
+                type="button"
+                onClick={() => void syncCustomerFeaturesFromServer()}
+                className="mt-2 font-semibold underline"
+              >
+                {tr("Retry", "ព្យាយាមម្ដងទៀត")}
+              </button>
+            </div>
+          )}
+          {supabase && customerFeatureStore.serverStatus === "loading" && (
+            <div className="px-4 pt-3 text-xs text-slate-500" role="status">
+              {tr("Loading account permissions…", "កំពុងទាញយកសិទ្ធិគណនី…")}
+            </div>
+          )}
           <Outlet />
           {toast && (
             <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-sm px-4 py-2 rounded-full shadow-lg z-50">
@@ -27481,6 +27658,10 @@ const CustomerApp = (() => {
         tr("Default Address", "អាសយដ្ឋានលំនាំដើម"),
         def ? [def.district, def.province].filter(Boolean).join(", ") : "—",
       ],
+      [
+        tr("Customer Role", "តួនាទីអតិថិជន"),
+        me.customer_role || DEFAULT_CUSTOMER_ROLE,
+      ],
     ];
     const links = [
       ...(feat("wallet")
@@ -27814,6 +27995,10 @@ const CustomerApp = (() => {
                         {r.product_name ||
                           r.product_url ||
                           tr("CN Purchase", "ការបញ្ជាទិញពីចិន")}
+                        {Array.isArray(r.cn_order_items) &&
+                        r.cn_order_items.length > 1
+                          ? ` + ${r.cn_order_items.length - 1} more item(s)`
+                          : ""}
                       </p>
                       <p className="text-xs text-slate-400 mt-1">
                         {[r.platform, r.shop_name]
@@ -27864,7 +28049,7 @@ const CustomerApp = (() => {
       const { data } = await supabase
         .from("cn_orders")
         .select(
-          "id,order_id,order_type,product_name,product_url,shop_name,platform,variant,quantity,total_due_usd,payment_status,status,created_at,updated_at",
+          "id,order_id,order_type,product_name,product_url,shop_name,platform,variant,quantity,total_due_usd,payment_status,status,created_at,updated_at,cn_order_items,pricing_mode,unit_price_cny,unit_price_usd,cny_per_usd",
         )
         .eq("customer_id", me.id)
         .eq("order_id", id)
@@ -28175,33 +28360,61 @@ const CustomerApp = (() => {
 // ------------------------------------------------------------
 // pages/CustomerFeatures.jsx — Customer Roles × Feature permission matrix
 // ------------------------------------------------------------
-const CUSTOMER_FEATURES_SQL = `create table if not exists customer_features (
+const CUSTOMER_FEATURES_SQL = `-- Make Customer Features work across browsers and devices.
+-- Run in Supabase SQL Editor as the project owner.
+create table if not exists public.customer_features (
   key text primary key,
+  label text,
   enabled boolean not null default true,
-  updated_at timestamptz default now()
+  updated_at timestamptz not null default now()
 );
-create table if not exists customer_roles (
+create table if not exists public.customer_roles (
   name text primary key,
   description text,
-  is_system boolean default false,
+  is_system boolean not null default false,
   denied_features text[] not null default '{}',
-  updated_at timestamptz default now()
+  updated_at timestamptz not null default now()
 );
-alter table customers add column if not exists customer_role text default 'Standard';
-alter table customer_features enable row level security;
-alter table customer_roles enable row level security;
-create policy "customer_features read" on customer_features
+
+-- The China schema originally used denied/status; keep compatibility and add
+-- the column names consumed by the current app.
+alter table public.customer_roles add column if not exists is_system boolean not null default false;
+alter table public.customer_roles add column if not exists denied_features text[] not null default '{}';
+do $migration$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name='customer_roles' and column_name='denied'
+  ) then
+    execute 'update public.customer_roles set denied_features = denied where (denied_features is null or denied_features = ''{}'') and denied is not null';
+  end if;
+end
+$migration$;
+alter table public.customers add column if not exists customer_role text default 'Customer';
+
+alter table public.customer_features enable row level security;
+alter table public.customer_roles enable row level security;
+-- Feature flags and role permission arrays contain configuration only. Every
+-- authenticated customer needs SELECT access so the portal can enforce them.
+grant select on public.customer_features, public.customer_roles to authenticated;
+drop policy if exists customer_features_portal_read on public.customer_features;
+create policy customer_features_portal_read on public.customer_features
   for select to authenticated using (true);
-create policy "customer_roles read" on customer_roles
+drop policy if exists customer_roles_portal_read on public.customer_roles;
+create policy customer_roles_portal_read on public.customer_roles
   for select to authenticated using (true);
-create policy "customer_features write" on customer_features
+
+-- Only permitted staff may change them (compatible with existing permission helper).
+drop policy if exists customer_features_manage_current on public.customer_features;
+create policy customer_features_manage_current on public.customer_features
   for all to authenticated
-  using (exists (select 1 from users u where u.auth_user_id = auth.uid() and u.role = 'Super Admin'))
-  with check (exists (select 1 from users u where u.auth_user_id = auth.uid() and u.role = 'Super Admin'));
-create policy "customer_roles write" on customer_roles
+  using (exists (select 1 from public.users u where u.auth_user_id = auth.uid() and (u.role = 'Super Admin' or public.has_permission('role.edit'))))
+  with check (exists (select 1 from public.users u where u.auth_user_id = auth.uid() and (u.role = 'Super Admin' or public.has_permission('role.edit'))));
+drop policy if exists customer_roles_manage_current on public.customer_roles;
+create policy customer_roles_manage_current on public.customer_roles
   for all to authenticated
-  using (exists (select 1 from users u where u.auth_user_id = auth.uid() and u.role = 'Super Admin'))
-  with check (exists (select 1 from users u where u.auth_user_id = auth.uid() and u.role = 'Super Admin'));`;
+  using (exists (select 1 from public.users u where u.auth_user_id = auth.uid() and (u.role = 'Super Admin' or public.has_permission('role.edit'))))
+  with check (exists (select 1 from public.users u where u.auth_user_id = auth.uid() and (u.role = 'Super Admin' or public.has_permission('role.edit'))));`;
 
 function CustomerFeaturesPage() {
   const { user } = useAuth();
@@ -28320,8 +28533,17 @@ function CustomerFeaturesPage() {
       .filter((n) => !draft.roles.some((r) => r.name === n));
     try {
       const f1 = await saveCustomerFeatures(disabled);
+      if (f1.error) {
+        setMsg({
+          type: "err",
+          text:
+            "Cannot save feature switches to Supabase: " +
+            (f1.error.message || "unknown error"),
+        });
+        return;
+      }
       const f2 = await saveCustomerRoles(draft.roles, removed);
-      const error = f1.error || f2.error;
+      const error = f2.error;
       if (error) {
         setMsg({
           type: "err",
@@ -28369,6 +28591,13 @@ function CustomerFeaturesPage() {
           <p className="text-sm text-ink-600/55 mt-0.5">
             Customer Role = feature ណាដែលភ្ញៀវប្រើបាន · Master =
             បិទសម្រាប់ភ្ញៀវទាំងអស់
+          </p>
+          <p className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 mt-2 max-w-3xl">
+            Master OFF hides the feature for every customer. A Role checkbox
+            only applies to customers assigned that exact role (for example,
+            Standard customers use the Standard column, not the Customer
+            column). Changes are saved to Supabase and Customer Portals refresh
+            permissions automatically.
           </p>
         </div>
         {canManage && (
@@ -34502,8 +34731,8 @@ function CnTotalsBox({ totals, rate, pricingMode = "cny" }) {
         <b>{Number(rate) > 0 ? money(totals.totalDueUsd) : "—"}</b>
       </div>
       <p className="text-[11px] text-slate-400">
-        Goods + China shipping + service fee. International freight is billed
-        later from CBM/weight at Inbound.
+        Goods + China shipping + service fee + additional services.
+        International freight is billed later from CBM/weight at Inbound.
       </p>
     </div>
   );
@@ -34767,6 +34996,19 @@ function CnProductInfoCard({ row, images, loading, tr, Card }) {
   const total = Number(row.total_due_usd);
   const showTotal =
     row.order_type !== "direct" && Number.isFinite(total) && total > 0;
+  const itemRows =
+    Array.isArray(row.cn_order_items) && row.cn_order_items.length
+      ? row.cn_order_items
+      : [
+          {
+            product_name: row.product_name,
+            product_url: row.product_url,
+            variant: row.variant,
+            quantity: row.quantity,
+            unit_price_cny: row.unit_price_cny,
+            unit_price_usd: row.unit_price_usd,
+          },
+        ];
   return (
     <Card className="p-5">
       <h2 className="font-bold mb-4">
@@ -34825,6 +35067,11 @@ function CnProductInfoCard({ row, images, loading, tr, Card }) {
           {showTotal && (
             <p className="font-bold text-[15px] mt-2">{money(total)}</p>
           )}
+          {itemRows.length > 1 && (
+            <p className="text-xs text-slate-500 mt-1">
+              {itemRows.length} {tr("product items", "មុខទំនិញ")}
+            </p>
+          )}
           {n > 0 && (
             <button
               type="button"
@@ -34837,6 +35084,54 @@ function CnProductInfoCard({ row, images, loading, tr, Card }) {
           )}
         </div>
       </div>
+      {itemRows.length > 0 && (
+        <div className="mt-4 rounded-xl border border-slate-200 divide-y divide-slate-100 overflow-hidden">
+          {itemRows.map((item, index) => (
+            <div
+              key={`${row.id || row.order_id}-customer-item-${index}`}
+              className="px-3 py-3 flex items-start justify-between gap-3"
+            >
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-slate-800 break-words">
+                  {item.product_name ||
+                    item.product_url ||
+                    `${tr("Item", "មុខទំនិញ")} ${index + 1}`}
+                </p>
+                {item.variant && (
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {item.variant}
+                  </p>
+                )}
+                {item.product_url && item.product_name && (
+                  <a
+                    className="text-xs text-blue-600 break-all"
+                    href={item.product_url}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {item.product_url}
+                  </a>
+                )}
+                <p className="text-xs text-slate-500 mt-1">
+                  {tr("Quantity", "ចំនួន")}: {item.quantity || 1}
+                </p>
+              </div>
+              {row.order_type !== "direct" && (
+                <div className="text-right shrink-0">
+                  <p className="text-sm font-bold text-slate-800">
+                    {row.pricing_mode === "usd"
+                      ? money(item.unit_price_usd || 0)
+                      : cnCny(item.unit_price_cny || 0)}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {tr("per item", "ក្នុងមួយដុំ")}
+                  </p>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
       {viewer && (
         <AirImageViewerFull
           images={images}
@@ -35025,6 +35320,18 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
   const [url, setUrl] = useState("");
   const [variant, setVariant] = useState("");
   const [qty, setQty] = useState("");
+  // Multi-item rows are stored additively in cn_orders.cn_order_items. Legacy
+  // single-item fields below remain populated from the first row for older UI.
+  const [lineItems, setLineItems] = useState([
+    {
+      product_name: "",
+      product_url: "",
+      variant: "",
+      quantity: "1",
+      unit_price_cny: "",
+      unit_price_usd: "",
+    },
+  ]);
   const [pricingMode, setPricingMode] = useState("cny");
   const [price, setPrice] = useState("");
   const [priceUsd, setPriceUsd] = useState("");
@@ -35056,6 +35363,16 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
     setUrl("");
     setVariant("");
     setQty("");
+    setLineItems([
+      {
+        product_name: "",
+        product_url: "",
+        variant: "",
+        quantity: "1",
+        unit_price_cny: "",
+        unit_price_usd: "",
+      },
+    ]);
     setPricingMode("cny");
     setPrice("");
     setPriceUsd("");
@@ -35081,13 +35398,23 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
     return sum + q * unit;
   }, 0);
   const totals = (() => {
-    const q = Number(qty) || 0;
     const r = Number(rate) || 0;
+    const round = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const validLines = lineItems.map((item) => {
+      const q = Number(item.quantity) || 0;
+      const unitCny = Number(item.unit_price_cny) || 0;
+      const unitUsd = Number(item.unit_price_usd) || 0;
+      return { q, unitCny, unitUsd };
+    });
+    const productTotalCny =
+      pricingMode === "cny"
+        ? validLines.reduce((sum, item) => sum + item.q * item.unitCny, 0)
+        : 0;
     const goodsUsd =
       pricingMode === "usd"
-        ? (Number(priceUsd) || 0) * q
+        ? validLines.reduce((sum, item) => sum + item.q * item.unitUsd, 0)
         : r > 0
-          ? ((Number(price) || 0) * q) / r
+          ? productTotalCny / r
           : 0;
     const shippingUsd =
       pricingMode === "usd"
@@ -35096,9 +35423,10 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
           ? (Number(domShip) || 0) / r
           : 0;
     const feeUsd = goodsUsd * ((Number(feePct) || 0) / 100);
-    const round = (n) => Math.round(n * 100) / 100;
+    const totalQuantity = validLines.reduce((sum, item) => sum + item.q, 0);
     return {
-      productTotalCny: round((Number(price) || 0) * q),
+      totalQuantity,
+      productTotalCny: round(productTotalCny),
       goodsUsd: round(goodsUsd),
       shippingUsd: round(shippingUsd),
       serviceFeeUsd: round(feeUsd),
@@ -35112,10 +35440,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
   async function submit(e) {
     e.preventDefault();
     const paidEff = paidNow && !isDirect;
-    const qn = isDirect && String(qty).trim() === "" ? 1 : Number(qty),
-      pn = pricingMode === "cny" ? Number(price) : 0,
-      pu = pricingMode === "usd" ? Number(priceUsd) : 0,
-      rn = Number(rate),
+    const rn = Number(rate),
       dn = pricingMode === "cny" ? (domShip === "" ? 0 : Number(domShip)) : 0,
       du =
         pricingMode === "usd"
@@ -35126,14 +35451,40 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
       fn = feePct === "" ? 0 : Number(feePct);
     if (!supabase) return setError("Supabase is not connected.");
     if (!customer) return setError("Please select a Customer.");
-    if (!isDirect && !cnNz(product) && !cnNz(url))
-      return setError("Enter a product name or a product link.");
-    if (!Number.isInteger(qn) || qn <= 0)
-      return setError("Quantity must be a whole number above 0.");
-    if (!isDirect && pricingMode === "cny" && (!Number.isFinite(pn) || pn <= 0))
-      return setError("Unit price (CNY) must be above 0.");
-    if (!isDirect && pricingMode === "usd" && (!Number.isFinite(pu) || pu <= 0))
-      return setError("Unit price (USD) must be above 0.");
+    if (!lineItems.length) return setError("Add at least one product item.");
+    for (let i = 0; i < lineItems.length; i++) {
+      const item = lineItems[i];
+      const itemQty = Number(item.quantity);
+      if (!isDirect && !cnNz(item.product_name) && !cnNz(item.product_url))
+        return setError(`Enter a product name or link for Item ${i + 1}.`);
+      if (!Number.isInteger(itemQty) || itemQty <= 0)
+        return setError(
+          `Quantity for Item ${i + 1} must be a whole number above 0.`,
+        );
+      if (
+        !isDirect &&
+        pricingMode === "cny" &&
+        (!Number.isFinite(Number(item.unit_price_cny)) ||
+          Number(item.unit_price_cny) <= 0)
+      )
+        return setError(`Unit price (CNY) for Item ${i + 1} must be above 0.`);
+      if (
+        !isDirect &&
+        pricingMode === "usd" &&
+        (!Number.isFinite(Number(item.unit_price_usd)) ||
+          Number(item.unit_price_usd) <= 0)
+      )
+        return setError(`Unit price (USD) for Item ${i + 1} must be above 0.`);
+    }
+    const qn = lineItems.reduce(
+      (sum, item) => sum + (Number(item.quantity) || 0),
+      0,
+    );
+    const firstItem = lineItems[0] || {};
+    const pn =
+      pricingMode === "cny" ? Number(firstItem.unit_price_cny) || 0 : 0;
+    const pu =
+      pricingMode === "usd" ? Number(firstItem.unit_price_usd) || 0 : 0;
     if (
       !isDirect &&
       (!Number.isFinite(dn) || dn < 0 || !Number.isFinite(du) || du < 0)
@@ -35148,15 +35499,47 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
     try {
       const now = new Date().toISOString(),
         by = cnBy(user);
+      const storedItems = lineItems.map((item) => {
+        const itemQty = Number(item.quantity) || 1;
+        const itemCny =
+          pricingMode === "cny" && !isDirect
+            ? Number(item.unit_price_cny) || 0
+            : 0;
+        const itemUsd =
+          pricingMode === "usd" && !isDirect
+            ? Number(item.unit_price_usd) || 0
+            : 0;
+        const round = (n) => Math.round((Number(n) || 0) * 100) / 100;
+        return {
+          product_name: cnNz(item.product_name),
+          product_url: cnNz(item.product_url),
+          variant: cnNz(item.variant),
+          quantity: itemQty,
+          pricing_mode: pricingMode,
+          unit_price_cny: itemCny,
+          unit_price_usd: itemUsd,
+          line_total_cny: round(itemQty * itemCny),
+          line_total_usd: round(
+            isDirect
+              ? 0
+              : pricingMode === "usd"
+                ? itemQty * itemUsd
+                : rn > 0
+                  ? (itemQty * itemCny) / rn
+                  : 0,
+          ),
+        };
+      });
       const row = {
         customer_id: String(customer.id),
         customer: airOrderCustomerLabel(customer),
         platform,
         shop_name: cnNz(shop),
-        product_name: cnNz(product),
-        product_url: cnNz(url),
-        variant: cnNz(variant),
+        product_name: cnNz(firstItem.product_name),
+        product_url: cnNz(firstItem.product_url),
+        variant: cnNz(firstItem.variant),
         quantity: qn,
+        cn_order_items: storedItems,
         pricing_mode: pricingMode,
         unit_price_cny: pn,
         unit_price_usd: pu,
@@ -35416,34 +35799,6 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
           />
         </div>
       </div>
-      <div>
-        <label className={LABEL_CLS}>Product</label>
-        <input
-          className={INPUT_CLS}
-          value={product}
-          onChange={(e) => setProduct(e.target.value)}
-          placeholder="Product / description"
-        />
-      </div>
-      <div>
-        <label className={LABEL_CLS}>Product Link</label>
-        <input
-          className={INPUT_CLS}
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="https://…"
-        />
-      </div>
-      <div>
-        <label className={LABEL_CLS}>Variant / Color / Size</label>
-        <input
-          className={INPUT_CLS}
-          value={variant}
-          onChange={(e) => setVariant(e.target.value)}
-        />
-      </div>
-      <CnImagePicker files={imgFiles} setFiles={setImgFiles} />
-
       {!isDirect && (
         <div className="space-y-3 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
           <label className={LABEL_CLS}>Pricing Mode</label>
@@ -35464,34 +35819,168 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
             </button>
           </div>
           <p className="text-xs text-slate-500">
-            USD Direct uses your selling price. CNY Exchange converts the China
-            purchase price using the saved exchange rate.
+            Set a separate quantity and unit price for every product line. USD
+            Direct uses USD prices; CNY Exchange converts each CNY line using
+            the saved exchange rate.
           </p>
         </div>
       )}
+
+      <section className="rounded-xl border border-slate-200 p-3 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h4 className="text-sm font-bold text-slate-800">Product Items</h4>
+            <p className="text-xs text-slate-500">
+              Different items can have different quantities and unit prices.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              setLineItems((items) => [
+                ...items,
+                {
+                  product_name: "",
+                  product_url: "",
+                  variant: "",
+                  quantity: "1",
+                  unit_price_cny: "",
+                  unit_price_usd: "",
+                },
+              ])
+            }
+            className="shrink-0 rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white hover:bg-blue-700"
+          >
+            + Add Item
+          </button>
+        </div>
+        {lineItems.map((item, index) => {
+          const itemQty = Number(item.quantity) || 0;
+          const itemUnit =
+            pricingMode === "usd"
+              ? Number(item.unit_price_usd) || 0
+              : Number(item.unit_price_cny) || 0;
+          const itemSubtotal = itemQty * itemUnit;
+          const setField = (field, value) =>
+            setLineItems((items) =>
+              items.map((x, i) => (i === index ? { ...x, [field]: value } : x)),
+            );
+          return (
+            <div
+              key={index}
+              className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-3"
+            >
+              <div className="flex items-center justify-between">
+                <b className="text-sm text-slate-800">Item {index + 1}</b>
+                {lineItems.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setLineItems((items) =>
+                        items.filter((_, i) => i !== index),
+                      )
+                    }
+                    className="rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50"
+                  >
+                    Remove
+                  </button>
+                )}
+              </div>
+              <div>
+                <label className={LABEL_CLS}>
+                  Product / Description {isDirect ? "" : "*"}
+                </label>
+                <input
+                  className={INPUT_CLS}
+                  value={item.product_name}
+                  onChange={(e) => setField("product_name", e.target.value)}
+                  placeholder="Product name / description"
+                />
+              </div>
+              <div>
+                <label className={LABEL_CLS}>Product Link</label>
+                <input
+                  className={INPUT_CLS}
+                  value={item.product_url}
+                  onChange={(e) => setField("product_url", e.target.value)}
+                  placeholder="https://…"
+                />
+              </div>
+              <div>
+                <label className={LABEL_CLS}>Variant / Color / Size</label>
+                <input
+                  className={INPUT_CLS}
+                  value={item.variant}
+                  onChange={(e) => setField("variant", e.target.value)}
+                  placeholder="Optional variant"
+                />
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div>
+                  <label className={LABEL_CLS}>Quantity *</label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    className={INPUT_CLS}
+                    value={item.quantity}
+                    onChange={(e) => setField("quantity", e.target.value)}
+                  />
+                </div>
+                {!isDirect && pricingMode === "cny" && (
+                  <div>
+                    <label className={LABEL_CLS}>Unit Price (CNY) *</label>
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      className={INPUT_CLS}
+                      value={item.unit_price_cny}
+                      onChange={(e) =>
+                        setField("unit_price_cny", e.target.value)
+                      }
+                      placeholder="0.00"
+                    />
+                  </div>
+                )}
+                {!isDirect && pricingMode === "usd" && (
+                  <div>
+                    <label className={LABEL_CLS}>Unit Price (USD) *</label>
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      className={INPUT_CLS}
+                      value={item.unit_price_usd}
+                      onChange={(e) =>
+                        setField("unit_price_usd", e.target.value)
+                      }
+                      placeholder="0.00"
+                    />
+                  </div>
+                )}
+                {!isDirect && (
+                  <div className="flex flex-col justify-end">
+                    <span className={LABEL_CLS}>Line Subtotal</span>
+                    <b className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-800">
+                      {pricingMode === "usd"
+                        ? money(itemSubtotal)
+                        : cnCny(itemSubtotal)}
+                    </b>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+        <div className="flex justify-between border-t border-slate-200 pt-3 text-sm">
+          <span className="font-semibold text-slate-600">Total quantity</span>
+          <b className="text-slate-900">{totals.totalQuantity || 0}</b>
+        </div>
+      </section>
+      <CnImagePicker files={imgFiles} setFiles={setImgFiles} />
+
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <div>
-          <label className={LABEL_CLS}>Quantity {isDirect ? "" : "*"}</label>
-          <input
-            type="number"
-            min="1"
-            step="1"
-            className={INPUT_CLS}
-            value={qty}
-            onChange={(e) => setQty(e.target.value)}
-          />
-        </div>
-        <div className={isDirect || pricingMode !== "cny" ? "hidden" : ""}>
-          <label className={LABEL_CLS}>Unit Price (CNY) *</label>
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            className={INPUT_CLS}
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-          />
-        </div>
         <div className={isDirect || pricingMode !== "cny" ? "hidden" : ""}>
           <label className={LABEL_CLS}>China Shipping (CNY)</label>
           <input
@@ -35513,18 +36002,6 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
             value={rate}
             onChange={(e) => setRate(e.target.value)}
             placeholder="e.g. 7.20"
-          />
-        </div>
-        <div className={isDirect || pricingMode !== "usd" ? "hidden" : ""}>
-          <label className={LABEL_CLS}>Unit Price (USD) *</label>
-          <input
-            type="number"
-            min="0.01"
-            step="0.01"
-            className={INPUT_CLS}
-            value={priceUsd}
-            onChange={(e) => setPriceUsd(e.target.value)}
-            placeholder="e.g. 25.00"
           />
         </div>
         <div className={isDirect || pricingMode !== "usd" ? "hidden" : ""}>
@@ -36065,22 +36542,193 @@ function CnStatusUpdateModal({ open, row, parcels = [], onClose, onSaved }) {
           throw new Error("Actual cost must be 0 or more.");
         patch.supplier_order_no = supplierNo.trim();
         patch.actual_cost_cny = ac;
+        patch.actual_cost_method = "total";
+        patch.purchase_exchange_rate =
+          Number(row.purchase_exchange_rate || row.cny_per_usd) > 0
+            ? Number(row.purchase_exchange_rate || row.cny_per_usd)
+            : null;
         patch.purchased_by = by;
         patch.purchased_at = now;
       }
-      const { data, error } = await supabase
-        .from("cn_orders")
-        .update(patch)
-        .eq("id", row.id)
-        .eq("status", row.status) // someone else may have moved it already
-        .select("*")
-        .single();
-      if (error)
-        throw new Error(
-          error.code === "PGRST116"
-            ? "This order was just updated by someone else. Reload and try again."
-            : error.message,
+      let data = null;
+      if (next === "Complete Order") {
+        // Complete the CN Order and its linked physical TKs together. In
+        // Packages / TK the final stage is named "Completed" (not
+        // "Complete Order"), so keep that canonical package status.
+        const { data: linkedTks, error: linkedTksError } = await supabase
+          .from("packages")
+          .select("id,tk,status")
+          .eq("cn_order_id", row.id);
+        if (linkedTksError) throw linkedTksError;
+        if (!linkedTks?.length) {
+          throw new Error(
+            "No TK is linked to this CN Order. Link its China tracking number to a TK before completing the order.",
+          );
+        }
+        const alreadyCompleted = (linkedTks || []).filter(
+          (p) => String(p.status || "").trim() === "Completed",
         );
+        const needsCompletion = (linkedTks || []).filter(
+          (p) => String(p.status || "").trim() !== "Completed",
+        );
+        const notReady = needsCompletion.filter(
+          (p) => String(p.status || "").trim() !== "Inbound Warehouse",
+        );
+        if (notReady.length) {
+          throw new Error(
+            `All linked TKs must reach Inbound Warehouse first. Not ready: ${notReady
+              .map((p) => `${p.tk} (${p.status || "No status"})`)
+              .join(", ")}`,
+          );
+        }
+
+        // Record the TKs changed by this action so we can roll them back if
+        // the CN Order status cannot be committed afterwards.
+        let changedTks = [];
+        let orderWasCompletedHere = false;
+        try {
+          if (needsCompletion.length) {
+            const { data: completedTks, error: completeTksError } =
+              await supabase
+                .from("packages")
+                .update({
+                  status: "Completed",
+                  updated_by: by,
+                  updated_at: now,
+                })
+                .in(
+                  "id",
+                  needsCompletion.map((p) => p.id),
+                )
+                .select("id,tk,status");
+            if (completeTksError) throw completeTksError;
+            if (
+              !completedTks ||
+              completedTks.length !== needsCompletion.length
+            ) {
+              throw new Error(
+                "Some linked TKs could not be updated. Check TK permissions/RLS and try again.",
+              );
+            }
+            changedTks = completedTks;
+          }
+
+          // A database trigger may already have synced the CN Order to
+          // Complete Order after its linked TKs changed. Re-read before doing
+          // a guarded fallback update to avoid a conflicting second write.
+          const { data: latestOrder, error: latestOrderError } = await supabase
+            .from("cn_orders")
+            .select("*")
+            .eq("id", row.id)
+            .maybeSingle();
+          if (latestOrderError) throw latestOrderError;
+          if (!latestOrder)
+            throw new Error("CN Order not found. Reload and try again.");
+
+          if (cnNormalizeStatus(latestOrder.status) === "Complete Order") {
+            data = latestOrder;
+          } else {
+            if (cnNormalizeStatus(latestOrder.status) !== "Inbound Warehouse") {
+              throw new Error(
+                `CN Order status changed to ${latestOrder.status || "unknown"}. Reload and try again.`,
+              );
+            }
+            const { data: updatedOrder, error: completeOrderError } =
+              await supabase
+                .from("cn_orders")
+                .update(patch)
+                .eq("id", row.id)
+                .eq("status", latestOrder.status)
+                .select("*")
+                .maybeSingle();
+            if (completeOrderError) throw completeOrderError;
+            if (!updatedOrder) {
+              throw new Error(
+                "CN Order was updated by another user. Please reload and check the order status.",
+              );
+            }
+            data = updatedOrder;
+            orderWasCompletedHere = true;
+          }
+
+          // Shared TK timeline/history must agree with Packages / TK.
+          if (changedTks.length) {
+            const { error: tkHistoryError } = await supabase
+              .from("status_history")
+              .insert(
+                changedTks.map((p) => ({
+                  tk: p.tk,
+                  status: "Completed",
+                  remark: `Completed with CN Order ${row.order_id}`,
+                  created_by: by,
+                  created_at: now,
+                })),
+              );
+            if (tkHistoryError) {
+              console.error(
+                "[CN Complete Order] TK history insert failed",
+                tkHistoryError,
+              );
+            }
+          }
+        } catch (completeError) {
+          // Avoid leaving a CN Order and its TKs at different final statuses
+          // if the second half of the operation fails.
+          if (changedTks.length) {
+            const { error: rollbackTksError } = await supabase
+              .from("packages")
+              .update({
+                status: "Inbound Warehouse",
+                updated_by: by,
+                updated_at: new Date().toISOString(),
+              })
+              .in(
+                "id",
+                changedTks.map((p) => p.id),
+              )
+              .eq("status", "Completed");
+            if (rollbackTksError) {
+              console.error(
+                "[CN Complete Order] TK rollback failed",
+                rollbackTksError,
+              );
+            }
+          }
+          if (orderWasCompletedHere) {
+            const { error: rollbackOrderError } = await supabase
+              .from("cn_orders")
+              .update({
+                status: "Inbound Warehouse",
+                updated_by: by,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", row.id)
+              .eq("status", "Complete Order");
+            if (rollbackOrderError) {
+              console.error(
+                "[CN Complete Order] order rollback failed",
+                rollbackOrderError,
+              );
+            }
+          }
+          throw completeError;
+        }
+      } else {
+        const { data: updatedRow, error } = await supabase
+          .from("cn_orders")
+          .update(patch)
+          .eq("id", row.id)
+          .eq("status", row.status) // someone else may have moved it already
+          .select("*")
+          .single();
+        if (error)
+          throw new Error(
+            error.code === "PGRST116"
+              ? "This order was just updated by someone else. Reload and try again."
+              : error.message,
+          );
+        data = updatedRow;
+      }
       if (next === "Shipping to China WH" && newTracks.length) {
         // inserted AFTER the status change: the DB trigger may then pick up
         // a TK that was already scanned and advance the order further.
@@ -36448,17 +37096,512 @@ function CnStatusTimeline({ row: rowProp, status, history = [], orderType }) {
 }
 
 // ------------------------------------------------------------
-// List page
+// CN finance calculation — keep billed customer charges separate from cash
+// collected and actual supplier costs. A final margin needs both actual cost
+// fields, but a minimum loss is already certain when goods cost alone exceeds
+// the customer charge, even if China shipping has not been recorded yet.
+// International freight and operating expenses are not included. Refunded
+// orders are excluded from profit/loss totals.
+// ------------------------------------------------------------
+function cnPurchaseFinancials(order) {
+  const rateValue = order?.purchase_exchange_rate ?? order?.cny_per_usd;
+  const rate = Number(rateValue);
+  const validRate = Number.isFinite(rate) && rate > 0;
+  const hasGoods =
+    order?.actual_cost_cny !== null &&
+    order?.actual_cost_cny !== undefined &&
+    String(order.actual_cost_cny).trim() !== "" &&
+    Number.isFinite(Number(order.actual_cost_cny)) &&
+    Number(order.actual_cost_cny) >= 0;
+  const hasShipping =
+    order?.actual_domestic_shipping_cny !== null &&
+    order?.actual_domestic_shipping_cny !== undefined &&
+    String(order.actual_domestic_shipping_cny).trim() !== "" &&
+    Number.isFinite(Number(order.actual_domestic_shipping_cny)) &&
+    Number(order.actual_domestic_shipping_cny) >= 0;
+  const goodsUsd =
+    hasGoods && validRate ? Number(order.actual_cost_cny) / rate : null;
+  const shippingUsd =
+    hasShipping && validRate
+      ? Number(order.actual_domestic_shipping_cny) / rate
+      : null;
+  const totalCostUsd =
+    goodsUsd !== null && shippingUsd !== null ? goodsUsd + shippingUsd : null;
+  const refunded =
+    order?.payment_status === "Refunded" ||
+    cnNormalizeStatus(order?.status) === "Refund Order";
+  const customerChargeUsd = Math.max(0, Number(order?.total_due_usd) || 0);
+  const preFreightMarginUsd =
+    !refunded && totalCostUsd !== null
+      ? customerChargeUsd - totalCostUsd
+      : null;
+  // Conservative lower bound: if goods cost alone already exceeds revenue,
+  // the order is certainly losing money even before unknown domestic shipping.
+  const minimumKnownLossUsd =
+    !refunded && totalCostUsd === null && goodsUsd !== null
+      ? Math.max(0, goodsUsd - customerChargeUsd)
+      : 0;
+  return {
+    rate: validRate ? rate : null,
+    hasGoods: hasGoods && validRate,
+    hasShipping: hasShipping && validRate,
+    goodsUsd,
+    shippingUsd,
+    totalCostUsd,
+    customerChargeUsd,
+    preFreightMarginUsd,
+    minimumKnownLossUsd,
+    refunded,
+    costComplete: hasGoods && hasShipping && validRate,
+  };
+}
+
+// ------------------------------------------------------------
+// Actual purchase cost editor — additive; keeps customer pricing unchanged.
+// ------------------------------------------------------------
+function CnActualCostModal({ row, onClose, onSaved }) {
+  const { user } = useAuth();
+  const orderItems =
+    Array.isArray(row.cn_order_items) && row.cn_order_items.length
+      ? row.cn_order_items
+      : [
+          {
+            product_name: row.product_name,
+            product_url: row.product_url,
+            variant: row.variant,
+            quantity: row.quantity ?? 1,
+            unit_price_cny: row.unit_price_cny,
+            unit_price_usd: row.unit_price_usd,
+          },
+        ];
+  const pricingMode = row.pricing_mode === "usd" ? "usd" : "cny";
+  const customerRate = Number(row.cny_per_usd);
+  const orderGoodsCny = orderItems.reduce(
+    (sum, item) =>
+      sum + (Number(item.quantity) || 0) * (Number(item.unit_price_cny) || 0),
+    0,
+  );
+  const orderGoodsUsd =
+    pricingMode === "usd"
+      ? orderItems.reduce(
+          (sum, item) =>
+            sum +
+            (Number(item.quantity) || 0) * (Number(item.unit_price_usd) || 0),
+          0,
+        )
+      : customerRate > 0
+        ? (Number(row.product_total_cny) || orderGoodsCny) / customerRate
+        : null;
+  const [totalGoodsCny, setTotalGoodsCny] = useState(
+    row.actual_cost_cny == null ? "" : String(row.actual_cost_cny),
+  );
+  const [shippingCny, setShippingCny] = useState(
+    row.actual_domestic_shipping_cny == null
+      ? ""
+      : String(row.actual_domestic_shipping_cny),
+  );
+  const [rate, setRate] = useState(
+    String(row.purchase_exchange_rate ?? row.cny_per_usd ?? "6.1"),
+  );
+  const [supplierNo, setSupplierNo] = useState(row.supplier_order_no || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const fx = Number(rate);
+  const goodsCny = totalGoodsCny === "" ? null : Number(totalGoodsCny);
+  const ship = shippingCny === "" ? null : Number(shippingCny);
+  const goodsUsd = goodsCny != null && fx > 0 ? goodsCny / fx : null;
+  const shipUsd = ship != null && fx > 0 ? ship / fx : null;
+  const completeCost =
+    goodsUsd != null && shipUsd != null ? goodsUsd + shipUsd : null;
+  // Show an immediate warning while editing if the recorded actual cost is
+  // already above what the customer is charged. If shipping is still unknown,
+  // only report a conservative minimum loss based on goods cost alone.
+  const customerTotalUsd =
+    row.total_due_usd == null || row.total_due_usd === ""
+      ? null
+      : Number(row.total_due_usd);
+  const hasValidCustomerTotal =
+    customerTotalUsd != null &&
+    Number.isFinite(customerTotalUsd) &&
+    customerTotalUsd >= 0;
+  const shippingKnown = shipUsd != null;
+  const knownCostUsd =
+    goodsUsd == null ? null : goodsUsd + (shippingKnown ? shipUsd : 0);
+  const currentDifferenceUsd =
+    hasValidCustomerTotal && knownCostUsd != null
+      ? knownCostUsd - customerTotalUsd
+      : null;
+  const showLossWarning =
+    currentDifferenceUsd != null && currentDifferenceUsd > 0.005;
+  const minimumLossWarning = showLossWarning && !shippingKnown;
+  const warningLossUsd = showLossWarning
+    ? minimumLossWarning
+      ? Math.max(0, goodsUsd - customerTotalUsd)
+      : Math.max(0, currentDifferenceUsd)
+    : 0;
+
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      if (
+        !hasPermission(user, "cn_order.purchase") &&
+        !hasPermission(user, "cn_order.edit")
+      )
+        throw new Error("You do not have permission to record purchase costs.");
+      if (!Number.isFinite(fx) || fx <= 0)
+        throw new Error("Purchase exchange rate must be greater than 0.");
+      if (
+        totalGoodsCny !== "" &&
+        (!Number.isFinite(Number(totalGoodsCny)) || Number(totalGoodsCny) < 0)
+      )
+        throw new Error("Actual goods cost must be 0 or more.");
+      if (
+        shippingCny !== "" &&
+        (!Number.isFinite(Number(shippingCny)) || Number(shippingCny) < 0)
+      )
+        throw new Error("Actual China shipping cost must be 0 or more.");
+      const now = new Date().toISOString();
+      const patch = {
+        actual_cost_cny: goodsCny,
+        actual_cost_method: "total",
+        actual_domestic_shipping_cny: ship,
+        purchase_exchange_rate: fx,
+        supplier_order_no: supplierNo.trim() || row.supplier_order_no || null,
+        updated_at: now,
+        updated_by: cnBy(user),
+      };
+      // Deliberately do not rewrite cn_order_items. Existing product pricing and
+      // any previously recorded per-item actual-cost metadata stay untouched.
+      const { data, error: saveError } = await supabase
+        .from("cn_orders")
+        .update(patch)
+        .eq("id", row.id)
+        .select("*")
+        .single();
+      if (saveError) throw saveError;
+      const noteParts = [];
+      noteParts.push(
+        goodsCny == null
+          ? "Actual goods cost not recorded"
+          : `Actual goods cost ${Number(goodsCny).toFixed(2)} CNY`,
+      );
+      noteParts.push(
+        ship == null
+          ? "actual shipping not recorded"
+          : `actual China shipping ${Number(ship).toFixed(2)} CNY`,
+      );
+      await supabase.from("cn_order_history").insert({
+        cn_order_id: row.id,
+        event: "purchase_cost",
+        status: row.status,
+        created_by: cnBy(user),
+        note: `Optional actual supplier costs updated: ${noteParts.join("; ")}.`,
+      });
+      emitCBToast(
+        "ok",
+        "Actual purchase costs saved",
+        `${row.order_id} · ${goodsUsd == null ? "Goods cost pending" : money(goodsUsd) + " actual goods cost"}`,
+      );
+      onSaved(data);
+      onClose();
+    } catch (err) {
+      setError(err?.message || "Unable to save actual purchase costs.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] bg-slate-950/45 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <form
+        onSubmit={submit}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white shadow-2xl"
+      >
+        <div className="sticky top-0 z-10 px-5 py-4 bg-white border-b border-slate-200 flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-bold text-lg text-slate-900">
+              Actual Purchase Cost (Optional)
+            </h2>
+            <p className="text-xs text-slate-500 mt-1">
+              {row.order_id} · New CN Purchase Order remains the source for
+              customer prices.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-lg hover:bg-slate-100"
+            aria-label="Close"
+          >
+            <Icons.X size={18} />
+          </button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="rounded-xl border border-blue-100 bg-blue-50/70 p-4 space-y-2">
+            <div className="flex items-start gap-2">
+              <Icons.Info size={17} className="text-blue-700 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-sm font-bold text-blue-900">
+                  You do not need to enter the CN Order prices again.
+                </p>
+                <p className="text-xs leading-5 text-blue-800 mt-1">
+                  Use this form only when you want to record the real supplier
+                  cost after purchase. The values below are optional and will
+                  not change customer pricing, invoice, amount due or payment
+                  history. If you do not track actual cost, close this window
+                  without saving.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 overflow-hidden">
+            <div className="px-4 py-3 bg-slate-50 flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-slate-800">
+                  Existing CN Order Prices
+                </p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Read-only ·{" "}
+                  {pricingMode === "usd" ? "USD Direct" : "CNY Exchange to USD"}
+                </p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-slate-500">Customer goods amount</p>
+                <b className="text-base text-slate-900">
+                  {orderGoodsUsd == null ? "—" : money(orderGoodsUsd)}
+                </b>
+              </div>
+            </div>
+            <div className="divide-y divide-slate-100">
+              {orderItems.map((item, index) => {
+                const q = Number(item.quantity) || 0;
+                const unit =
+                  pricingMode === "usd"
+                    ? Number(item.unit_price_usd) || 0
+                    : Number(item.unit_price_cny) || 0;
+                const currency =
+                  pricingMode === "usd" ? money(q * unit) : cnCny(q * unit);
+                return (
+                  <div
+                    key={`existing-order-price-${index}`}
+                    className="px-4 py-2.5 flex items-center justify-between gap-3 text-sm"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-800 truncate">
+                        {item.product_name ||
+                          item.product_url ||
+                          `Item ${index + 1}`}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        Qty {q} ×{" "}
+                        {pricingMode === "usd" ? money(unit) : cnCny(unit)}
+                        {item.variant ? ` · ${item.variant}` : ""}
+                      </p>
+                    </div>
+                    <b className="shrink-0 text-slate-700">{currency}</b>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="px-4 py-2.5 border-t border-slate-200 flex justify-between gap-3 text-sm">
+              <span className="text-slate-600">
+                Customer total (including fees/eligible shipping)
+              </span>
+              <b>{money(row.total_due_usd || 0)}</b>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="text-sm font-semibold text-slate-700">
+              Purchase Exchange Rate (CNY per USD)
+              <input
+                required
+                type="number"
+                min="0.0001"
+                step="0.0001"
+                value={rate}
+                onChange={(e) => setRate(e.target.value)}
+                className={`${INPUT_CLS} mt-1`}
+              />
+              <span className="block mt-1 text-xs font-normal text-slate-500">
+                Defaults to the CN Order rate. Change only if the supplier
+                payment used a different rate.
+              </span>
+            </label>
+            <label className="text-sm font-semibold text-slate-700">
+              Supplier Order No. (optional)
+              <input
+                value={supplierNo}
+                onChange={(e) => setSupplierNo(e.target.value)}
+                className={`${INPUT_CLS} mt-1`}
+                placeholder="Supplier reference"
+              />
+            </label>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="text-sm font-semibold text-slate-700">
+              Actual Goods Cost Total (CNY, optional)
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={totalGoodsCny}
+                onChange={(e) => setTotalGoodsCny(e.target.value)}
+                className={`${INPUT_CLS} mt-1`}
+                placeholder="Enter only if actual cost is known"
+              />
+              <span className="block mt-1 text-xs font-normal text-slate-500">
+                Enter the supplier receipt total, not the customer selling
+                price.
+              </span>
+            </label>
+            <label className="text-sm font-semibold text-slate-700">
+              Actual China Shipping (CNY, optional)
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={shippingCny}
+                onChange={(e) => setShippingCny(e.target.value)}
+                className={`${INPUT_CLS} mt-1`}
+                placeholder="Leave blank if unknown"
+              />
+              <span className="block mt-1 text-xs font-normal text-slate-500">
+                Enter 0 only if shipping is confirmed free.
+              </span>
+            </label>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2">
+            <div className="flex justify-between gap-3 text-sm">
+              <span className="text-slate-600">
+                Recorded actual goods cost (USD)
+              </span>
+              <b>{goodsUsd == null ? "Not recorded" : money(goodsUsd)}</b>
+            </div>
+            <div className="flex justify-between gap-3 text-sm">
+              <span className="text-slate-600">
+                Recorded actual China shipping (USD)
+              </span>
+              <b>{shipUsd == null ? "Not recorded" : money(shipUsd)}</b>
+            </div>
+            <div className="border-t border-slate-200 pt-2 flex justify-between gap-3">
+              <span className="font-bold">Total recorded actual cost</span>
+              <b className="text-lg">
+                {completeCost == null ? "Incomplete" : money(completeCost)}
+              </b>
+            </div>
+            <p className="text-[11px] leading-4 text-slate-500">
+              International freight and other operating expenses are not
+              included. This section is for optional cost tracking only.
+            </p>
+          </div>
+          {showLossWarning && (
+            <div
+              role="alert"
+              aria-live="polite"
+              className="rounded-xl border border-red-200 bg-red-50 p-4 space-y-3"
+            >
+              <div className="flex items-start gap-3">
+                <Icons.TriangleAlert
+                  size={21}
+                  className="mt-0.5 shrink-0 text-red-600"
+                />
+                <div className="min-w-0">
+                  <p className="text-lg font-extrabold text-red-700">
+                    {minimumLossWarning
+                      ? `Loss at least ${money(warningLossUsd)}`
+                      : `Pre-freight loss ${money(warningLossUsd)}`}
+                  </p>
+                  <p className="mt-1 text-sm leading-5 text-red-700">
+                    {minimumLossWarning
+                      ? "Goods cost already exceeds customer charges; China shipping is not recorded, so the final loss may be higher."
+                      : "Recorded goods and China shipping costs exceed customer charges. International freight and other operating expenses are not included, so the final loss may be higher."}
+                  </p>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 border-t border-red-200 pt-3 text-sm">
+                <div className="flex sm:block items-center justify-between gap-2">
+                  <span className="text-red-700/80">Customer total</span>
+                  <b className="block text-red-800">
+                    {money(customerTotalUsd)}
+                  </b>
+                </div>
+                <div className="flex sm:block items-center justify-between gap-2">
+                  <span className="text-red-700/80">
+                    {minimumLossWarning
+                      ? "Actual goods cost"
+                      : "Known actual cost"}
+                  </span>
+                  <b className="block text-red-800">{money(knownCostUsd)}</b>
+                </div>
+                <div className="flex sm:block items-center justify-between gap-2">
+                  <span className="text-red-700/80">
+                    {minimumLossWarning
+                      ? "Minimum loss"
+                      : "Loss before international freight"}
+                  </span>
+                  <b className="block text-red-800">{money(warningLossUsd)}</b>
+                </div>
+              </div>
+            </div>
+          )}
+          {error && (
+            <div className="rounded-lg border border-red-200 bg-red-50 text-red-700 px-3 py-2 text-sm">
+              {error}
+            </div>
+          )}
+        </div>
+        <div className="sticky bottom-0 bg-white border-t border-slate-200 px-5 py-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-10 px-4 rounded-xl border border-slate-200 text-sm font-semibold"
+          >
+            Close
+          </button>
+          <button
+            disabled={busy}
+            type="submit"
+            className="h-10 px-4 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-50"
+          >
+            {busy ? "Saving…" : "Save Actual Cost"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// CN Orders / TK List / Purchase & Finance
 // ------------------------------------------------------------
 function CnOrdersPage() {
   const { user } = useAuth();
   const canCreate = hasPermission(user, "cn_order.create");
+  const canRecordCost =
+    hasPermission(user, "cn_order.purchase") ||
+    hasPermission(user, "cn_order.edit");
   const [rows, setRows] = useState([]);
+  const [tkRows, setTkRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [tkLoading, setTkLoading] = useState(false);
+  const [tkError, setTkError] = useState("");
+  const [activeTab, setActiveTab] = useState("orders");
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [pay, setPay] = useState("");
+  const [tkStatus, setTkStatus] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [actualCostOrder, setActualCostOrder] = useState(null);
   const load = React.useCallback(async () => {
     if (!supabase) return setLoading(false);
     setLoading(true);
@@ -36475,28 +37618,51 @@ function CnOrdersPage() {
       () => {},
     );
   }, []);
+  const loadTks = React.useCallback(async () => {
+    if (!supabase) return setTkLoading(false);
+    setTkLoading(true);
+    setTkError("");
+    const { data, error } = await supabase
+      .from("packages")
+      .select("*")
+      .not("cn_order_id", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(5000);
+    if (error) {
+      setTkError(error.message || "Unable to load TK list.");
+      setTkRows([]);
+    } else {
+      setTkRows(data || []);
+    }
+    setTkLoading(false);
+  }, []);
   useEffect(() => {
     load();
   }, [load]);
+  useEffect(() => {
+    if (activeTab === "tks" || activeTab === "orders") loadTks();
+  }, [activeTab, loadTks]);
 
   const active = (r) =>
     !CN_ORDER_TERMINAL_STATUSES.has(cnNormalizeStatus(r.status));
-  const stats = [
-    ["Total", rows.length, "text-slate-900"],
+  const orderStats = [
+    ["Total Orders", rows.length, "text-slate-900"],
     [
-      "Need payment",
+      "Need Payment",
       rows.filter(
         (r) =>
           active(r) &&
-          r.status === "Order Processing" &&
+          cnNormalizeStatus(r.status) === "Order Processing" &&
           r.payment_status !== "Paid",
       ).length,
       "text-red-700",
     ],
     [
-      "Ready to purchase",
+      "Ready to Purchase",
       rows.filter(
-        (r) => r.status === "Order Processing" && r.payment_status === "Paid",
+        (r) =>
+          cnNormalizeStatus(r.status) === "Order Processing" &&
+          r.payment_status === "Paid",
       ).length,
       "text-sky-700",
     ],
@@ -36522,23 +37688,188 @@ function CnOrdersPage() {
       "text-emerald-700",
     ],
   ];
-  const filtered = rows.filter((r) => {
-    const hay = [
+  const totalOrderValue = rows.reduce(
+    (sum, r) => sum + (Number(r.total_due_usd) || 0),
+    0,
+  );
+  const totalPaid = rows.reduce(
+    (sum, r) => sum + Math.max(0, Number(r.amount_paid_usd) || 0),
+    0,
+  );
+  const outstanding = rows.reduce(
+    (sum, r) =>
+      sum +
+      (r.payment_status === "Refunded"
+        ? 0
+        : Math.max(
+            0,
+            (Number(r.total_due_usd) || 0) - (Number(r.amount_paid_usd) || 0),
+          )),
+    0,
+  );
+  const financeBreakdowns = rows.map((r) => ({
+    row: r,
+    calc: cnPurchaseFinancials(r),
+  }));
+  // These recorded-cost totals are sums of known values. They may include
+  // partial records, so margin totals below only use fully recorded costs.
+  const actualGoodsUsd = financeBreakdowns.reduce(
+    (sum, x) => sum + (x.calc.goodsUsd ?? 0),
+    0,
+  );
+  const actualShippingUsd = financeBreakdowns.reduce(
+    (sum, x) => sum + (x.calc.shippingUsd ?? 0),
+    0,
+  );
+  const recordedActualCostUsd = actualGoodsUsd + actualShippingUsd;
+  const marginReadyRows = financeBreakdowns.filter(
+    (x) => x.calc.preFreightMarginUsd !== null,
+  );
+  const marginPendingCount = financeBreakdowns.filter(
+    (x) => !x.calc.refunded && x.calc.preFreightMarginUsd === null,
+  ).length;
+  // Profits require complete cost data. Loss includes final losses from complete
+  // records plus minimum confirmed losses where goods alone already exceed charges.
+  const totalPreFreightProfit = marginReadyRows.reduce(
+    (sum, x) => sum + Math.max(0, x.calc.preFreightMarginUsd),
+    0,
+  );
+  const completedLoss = marginReadyRows.reduce(
+    (sum, x) => sum + Math.max(0, -x.calc.preFreightMarginUsd),
+    0,
+  );
+  const minimumKnownLoss = financeBreakdowns.reduce(
+    (sum, x) => sum + (x.calc.minimumKnownLossUsd || 0),
+    0,
+  );
+  const totalPreFreightLoss = completedLoss + minimumKnownLoss;
+  const totalPreFreightNet = totalPreFreightProfit - totalPreFreightLoss;
+  const anyMarginPending = marginPendingCount > 0;
+  const tkStats = [
+    ["Linked TKs", tkRows.length, "text-slate-900"],
+    [
+      "Inbound Warehouse",
+      tkRows.filter((p) => p.status === "Inbound Warehouse").length,
+      "text-sky-700",
+    ],
+    [
+      "Completed",
+      tkRows.filter((p) => p.status === "Completed").length,
+      "text-emerald-700",
+    ],
+    [
+      "Other Status",
+      tkRows.filter(
+        (p) => !["Inbound Warehouse", "Completed"].includes(p.status),
+      ).length,
+      "text-violet-700",
+    ],
+    [
+      "Linked Orders",
+      new Set(tkRows.map((p) => p.cn_order_id).filter(Boolean)).size,
+      "text-blue-700",
+    ],
+  ];
+  const financeStats = [
+    ["Customer Charges (Gross)", money(totalOrderValue), "text-slate-900"],
+    ["Customer Paid", money(totalPaid), "text-emerald-700"],
+    ["Customer Outstanding", money(outstanding), "text-red-700"],
+    [
+      "Recorded Actual Costs (Known)",
+      money(recordedActualCostUsd),
+      "text-sky-700",
+    ],
+    [
+      "Pre-Freight Profit (complete costs)",
+      money(totalPreFreightProfit),
+      "text-emerald-700",
+    ],
+    [
+      "Pre-Freight Loss (known minimum)",
+      money(totalPreFreightLoss),
+      "text-red-700",
+    ],
+    [
+      "Net Pre-Freight Margin",
+      anyMarginPending ? "Pending" : money(totalPreFreightNet),
+      anyMarginPending
+        ? "text-amber-700"
+        : totalPreFreightNet >= 0
+          ? "text-emerald-700"
+          : "text-red-700",
+    ],
+    ["Margin Incomplete", marginPendingCount, "text-amber-700"],
+  ];
+  const stats =
+    activeTab === "tks"
+      ? tkStats
+      : activeTab === "finance"
+        ? financeStats
+        : orderStats;
+  const searchableOrder = (r) =>
+    [
       r.order_id,
       r.customer,
       r.shop_name,
       r.product_name,
       r.supplier_order_no,
       r.status,
+      ...(Array.isArray(r.cn_order_items)
+        ? r.cn_order_items.flatMap((it) => [
+            it.product_name,
+            it.product_url,
+            it.variant,
+          ])
+        : []),
     ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+  const filtered = rows.filter(
+    (r) =>
+      (!q || searchableOrder(r).includes(q.toLowerCase())) &&
+      (!status || cnNormalizeStatus(r.status) === status) &&
+      (!pay || r.payment_status === pay),
+  );
+  const ordersById = new Map(rows.map((r) => [r.id, r]));
+  const filteredTks = tkRows.filter((p) => {
+    const order = ordersById.get(p.cn_order_id);
+    const hay = [
+      p.tk,
+      p.order_no,
+      p.order_id,
+      p.status,
+      order?.order_id,
+      order?.customer,
+      order?.product_name,
+      order?.shop_name,
+      ...(Array.isArray(order?.cn_order_items)
+        ? order.cn_order_items.flatMap((it) => [
+            it.product_name,
+            it.product_url,
+            it.variant,
+          ])
+        : []),
+    ]
+      .filter(Boolean)
       .join(" ")
       .toLowerCase();
     return (
       (!q || hay.includes(q.toLowerCase())) &&
-      (!status || cnNormalizeStatus(r.status) === status) &&
-      (!pay || r.payment_status === pay)
+      (!tkStatus || p.status === tkStatus)
     );
   });
+  const formatActualCost = (r, field) => {
+    const val = r[field];
+    const rate = Number(r.purchase_exchange_rate || r.cny_per_usd);
+    if (val == null || !(rate > 0)) return "Pending";
+    return money(Number(val) / rate);
+  };
+  const tabs = [
+    { id: "orders", label: "CN Orders", icon: Icons.ShoppingCart },
+    { id: "tks", label: "TK List", icon: Icons.Package },
+    { id: "finance", label: "Purchase & Finance", icon: Icons.Wallet },
+  ];
 
   return (
     <div className="space-y-5">
@@ -36549,11 +37880,10 @@ function CnOrdersPage() {
             Purchase Orders
           </h1>
           <p className="text-sm text-ink-600/55 mt-1">
-            Buy for customers from China. Customer pays first → Purchased →
-            China warehouse → Cambodia.
+            Orders, linked TK tracking and purchase costs in one workspace.
           </p>
         </div>
-        {canCreate && (
+        {activeTab === "orders" && canCreate && (
           <button
             type="button"
             onClick={() => setCreateOpen(true)}
@@ -36569,11 +37899,38 @@ function CnOrdersPage() {
         </div>
       )}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        {stats.map(([l, n, c]) => (
-          <div key={l} className="cb-surface p-4">
-            <p className="text-xs text-slate-500">{l}</p>
-            <p className={`text-2xl font-extrabold mt-1 ${c}`}>{n}</p>
+        {stats.map(([label, value, color]) => (
+          <div key={label} className="cb-surface p-4 min-w-0">
+            <p className="text-xs text-slate-500">{label}</p>
+            <p
+              className={`text-xl lg:text-2xl font-extrabold mt-1 break-words ${color}`}
+            >
+              {value}
+            </p>
           </div>
+        ))}
+      </div>
+      <div
+        className="cb-surface p-1.5 flex gap-1 overflow-x-auto"
+        role="tablist"
+        aria-label="CN purchase workspace"
+      >
+        {tabs.map(({ id: tabId, label, icon: TabIcon }) => (
+          <button
+            key={tabId}
+            type="button"
+            role="tab"
+            aria-selected={activeTab === tabId}
+            onClick={() => {
+              setActiveTab(tabId);
+              setStatus("");
+              setTkStatus("");
+            }}
+            className={`shrink-0 h-10 px-4 rounded-lg inline-flex items-center gap-2 text-sm font-bold transition-colors ${activeTab === tabId ? "bg-blue-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"}`}
+          >
+            <TabIcon size={16} />
+            {label}
+          </button>
         ))}
       </div>
       <div className="cb-surface overflow-hidden">
@@ -36587,132 +37944,560 @@ function CnOrdersPage() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               className={`${INPUT_CLS} pl-9`}
-              placeholder="Search Order ID, Customer, Product, Supplier Order…"
+              placeholder={
+                activeTab === "tks"
+                  ? "Search TK, CN Order ID, customer or product…"
+                  : "Search Order ID, Customer, Product, Supplier Order…"
+              }
             />
           </div>
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className={`${INPUT_CLS} w-auto min-w-[190px]`}
-          >
-            <option value="">All Status</option>
-            {[...CN_ORDER_STATUS_FLOW, CN_ORDER_TERMINAL].map((x) => (
-              <option key={x}>{x}</option>
-            ))}
-          </select>
-          <select
-            value={pay}
-            onChange={(e) => setPay(e.target.value)}
-            className={`${INPUT_CLS} w-auto min-w-[150px]`}
-          >
-            <option value="">All Payment</option>
-            {CN_PAYMENT_STATUSES.map((x) => (
-              <option key={x}>{x}</option>
-            ))}
-          </select>
-        </div>
-        <div className="overflow-auto">
-          <table className="min-w-[1100px] w-full text-sm">
-            <thead>
-              <tr className="bg-mist-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                {[
-                  "Order ID",
-                  "Customer",
-                  "Product",
-                  "Total (USD)",
-                  "Payment",
-                  "Status",
-                  "Updated",
-                ].map((x) => (
-                  <th key={x} className="px-4 py-3 font-semibold">
+          {activeTab === "tks" ? (
+            <select
+              value={tkStatus}
+              onChange={(e) => setTkStatus(e.target.value)}
+              className={`${INPUT_CLS} w-auto min-w-[180px]`}
+            >
+              <option value="">All TK Statuses</option>
+              {Array.from(new Set(tkRows.map((p) => p.status).filter(Boolean)))
+                .sort()
+                .map((x) => (
+                  <option key={x} value={x}>
                     {x}
-                  </th>
+                  </option>
                 ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-mist-100">
-              {loading ? (
-                Array.from({ length: 6 }).map((_, i) => (
-                  <tr key={`cn-sk-${i}`} aria-hidden="true">
-                    {Array.from({ length: 7 }).map((_, j) => (
-                      <td key={j} className="px-4 py-3.5">
-                        <Skeleton
-                          className="h-3.5"
-                          style={{ width: j === 0 ? 110 : 72 }}
-                          delay={i * 70}
-                        />
-                      </td>
+            </select>
+          ) : (
+            <>
+              <select
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+                className={`${INPUT_CLS} w-auto min-w-[180px]`}
+              >
+                <option value="">All Status</option>
+                {[...CN_ORDER_STATUS_FLOW, CN_ORDER_TERMINAL].map((x) => (
+                  <option key={x} value={x}>
+                    {x}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={pay}
+                onChange={(e) => setPay(e.target.value)}
+                className={`${INPUT_CLS} w-auto min-w-[150px]`}
+              >
+                <option value="">All Payment</option>
+                {CN_PAYMENT_STATUSES.map((x) => (
+                  <option key={x}>{x}</option>
+                ))}
+              </select>
+            </>
+          )}
+        </div>
+
+        {activeTab === "orders" && (
+          <div className="overflow-auto">
+            <table className="min-w-[1160px] w-full text-sm">
+              <thead>
+                <tr className="bg-mist-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                  {[
+                    "Order ID",
+                    "Customer",
+                    "Product Items",
+                    "Linked TKs",
+                    "Total (USD)",
+                    "Paid / Balance",
+                    "Payment",
+                    "Status",
+                    "Updated",
+                  ].map((x) => (
+                    <th key={x} className="px-4 py-3 font-semibold">
+                      {x}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-mist-100">
+                {loading ? (
+                  Array.from({ length: 6 }).map((_, i) => (
+                    <tr key={`cn-sk-${i}`} aria-hidden="true">
+                      {Array.from({ length: 9 }).map((__, j) => (
+                        <td key={j} className="px-4 py-3.5">
+                          <Skeleton
+                            className="h-3.5"
+                            style={{ width: j === 0 ? 110 : 72 }}
+                            delay={i * 70}
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                ) : !filtered.length ? (
+                  <tr>
+                    <td
+                      colSpan={9}
+                      className="px-4 py-10 text-center text-slate-400"
+                    >
+                      No CN purchase orders found.
+                    </td>
+                  </tr>
+                ) : (
+                  filtered.map((r) => {
+                    const its = Array.isArray(r.cn_order_items)
+                      ? r.cn_order_items
+                      : [];
+                    const paidAmt = Math.max(0, Number(r.amount_paid_usd) || 0);
+                    const balance =
+                      r.payment_status === "Refunded"
+                        ? 0
+                        : Math.max(0, (Number(r.total_due_usd) || 0) - paidAmt);
+                    const linked = tkRows.filter(
+                      (p) => p.cn_order_id === r.id,
+                    ).length;
+                    return (
+                      <tr key={r.id} className="hover:bg-slate-50/70">
+                        <td className="px-4 py-3 font-bold text-slate-900">
+                          <Link
+                            to={`/cn-orders/${encodeURIComponent(r.order_id)}`}
+                            className="hover:text-blue-600"
+                          >
+                            {r.order_id}
+                          </Link>
+                        </td>
+                        <td className="px-4 py-3 text-slate-700">
+                          {r.customer || "—"}
+                        </td>
+                        <td className="px-4 py-3 text-slate-600">
+                          <div className="flex items-center gap-3">
+                            <AirImg
+                              src={r.cover_url}
+                              alt={r.product_name || r.order_id}
+                              className="w-10 h-10 rounded-lg border border-slate-200"
+                              fallbackSize={16}
+                              FallbackIcon={Icons.ShoppingCart}
+                            />
+                            <div className="min-w-0">
+                              <span className="block truncate max-w-[220px]">
+                                {r.product_name ||
+                                  its[0]?.product_name ||
+                                  r.product_url ||
+                                  "—"}
+                              </span>
+                              <span className="text-xs text-slate-400">
+                                {its.length > 1
+                                  ? `${its.length} items`
+                                  : [r.platform, r.shop_name]
+                                      .filter(Boolean)
+                                      .join(" · ")}
+                              </span>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveTab("tks");
+                              setQ(r.order_id);
+                              setTkStatus("");
+                            }}
+                            className="text-blue-700 hover:underline font-semibold"
+                          >
+                            {linked} TK{linked === 1 ? "" : "s"}
+                          </button>
+                        </td>
+                        <td className="px-4 py-3 font-semibold text-slate-900">
+                          {money(r.total_due_usd)}
+                        </td>
+                        <td className="px-4 py-3 text-xs">
+                          <b className="block text-slate-700">
+                            Paid {money(paidAmt)}
+                          </b>
+                          <span
+                            className={
+                              balance > 0 ? "text-red-600" : "text-emerald-600"
+                            }
+                          >
+                            Balance {money(balance)}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">
+                          <CnPaymentBadge status={r.payment_status} />
+                        </td>
+                        <td className="px-4 py-3">
+                          <CnStatusBadge
+                            status={r.status}
+                            partial={r.is_partial}
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-slate-500">
+                          {r.updated_at ? formatDbTimestamp(r.updated_at) : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {activeTab === "tks" && (
+          <div className="overflow-auto">
+            <table className="min-w-[1120px] w-full text-sm">
+              <thead>
+                <tr className="bg-mist-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                  {[
+                    "Tracking Number",
+                    "CN Order",
+                    "Customer",
+                    "Product",
+                    "Status",
+                    "Origin Warehouse",
+                    "Cambodia Branch",
+                    "Updated",
+                  ].map((x) => (
+                    <th key={x} className="px-4 py-3 font-semibold">
+                      {x}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-mist-100">
+                {tkLoading ? (
+                  Array.from({ length: 5 }).map((_, i) => (
+                    <tr key={`tk-sk-${i}`}>
+                      {Array.from({ length: 8 }).map((__, j) => (
+                        <td key={j} className="px-4 py-3.5">
+                          <Skeleton
+                            className="h-3.5"
+                            style={{ width: j === 0 ? 120 : 80 }}
+                          />
+                        </td>
+                      ))}
+                    </tr>
+                  ))
+                ) : tkError ? (
+                  <tr>
+                    <td
+                      colSpan={8}
+                      className="px-4 py-8 text-center text-red-600"
+                    >
+                      {tkError}{" "}
+                      <button
+                        className="ml-2 underline"
+                        type="button"
+                        onClick={loadTks}
+                      >
+                        Retry
+                      </button>
+                    </td>
+                  </tr>
+                ) : !filteredTks.length ? (
+                  <tr>
+                    <td
+                      colSpan={8}
+                      className="px-4 py-10 text-center text-slate-400"
+                    >
+                      No TKs linked to CN Orders found.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredTks.map((p) => {
+                    const o = ordersById.get(p.cn_order_id);
+                    const productLabel =
+                      Array.isArray(o?.cn_order_items) &&
+                      o.cn_order_items.length > 1
+                        ? `${o.cn_order_items[0]?.product_name || o.product_name || "Products"} + ${o.cn_order_items.length - 1} more`
+                        : o?.product_name ||
+                          o?.cn_order_items?.[0]?.product_name ||
+                          "—";
+                    return (
+                      <tr key={p.id || p.tk} className="hover:bg-slate-50/70">
+                        <td className="px-4 py-3 font-bold">
+                          <Link
+                            to={`/packages/${encodeURIComponent(p.tk || "")}`}
+                            className="text-blue-700 hover:underline"
+                          >
+                            {p.tk || "—"}
+                          </Link>
+                        </td>
+                        <td className="px-4 py-3 font-semibold">
+                          <Link
+                            to={`/cn-orders/${encodeURIComponent(o?.order_id || "")}`}
+                            className="text-blue-700 hover:underline"
+                          >
+                            {o?.order_id || "CN Order not found"}
+                          </Link>
+                        </td>
+                        <td className="px-4 py-3">
+                          {o?.customer ||
+                            p.customer_name ||
+                            p.customer_id ||
+                            "—"}
+                        </td>
+                        <td className="px-4 py-3 text-slate-600 max-w-[200px] truncate">
+                          {productLabel}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${p.status === "Completed" ? "bg-emerald-50 text-emerald-700" : p.status === "Inbound Warehouse" ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-700"}`}
+                          >
+                            {p.status || "Unknown"}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-slate-600">
+                          {p.origin_wh_code || p.warehouse || "—"}
+                        </td>
+                        <td className="px-4 py-3 text-slate-600">
+                          {p.dest_branch_code || "—"}
+                        </td>
+                        <td className="px-4 py-3 text-slate-500">
+                          {p.updated_at
+                            ? formatDbTimestamp(p.updated_at)
+                            : p.created_at
+                              ? formatDbTimestamp(p.created_at)
+                              : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {activeTab === "finance" && (
+          <>
+            <div className="px-4 py-3 border-b border-mist-100 bg-slate-50/70 text-xs leading-5 text-slate-600 space-y-1">
+              <p>
+                Customer charges come from New CN Purchase Order; Customer Paid
+                and Outstanding are tracked separately. Actual costs are
+                recorded from the supplier receipt. Blank costs are unknown, not
+                zero.
+              </p>
+              <p>
+                <b>Pre-freight profit/loss</b> = Customer Total Due − Actual
+                Goods Cost − Actual China Domestic Shipping. Final profit/loss
+                needs both actual cost fields and a valid purchase exchange
+                rate. If goods cost alone already exceeds customer charges, the
+                table and Loss card show the minimum confirmed loss even if
+                shipping is still unknown. Net margin stays Pending while any
+                non-refunded order has incomplete costs. International freight
+                and other operating costs are excluded.
+              </p>
+            </div>
+            <div className="overflow-auto">
+              <table className="min-w-[1510px] w-full text-sm">
+                <thead>
+                  <tr className="bg-mist-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                    {[
+                      "CN Order",
+                      "Customer",
+                      "Customer Charges",
+                      "Customer Paid",
+                      "Outstanding",
+                      "Actual Goods Cost",
+                      "Actual China Shipping",
+                      "Total Recorded Cost",
+                      "Pre-Freight Profit / Loss",
+                      "Payment",
+                      "Cost Record",
+                    ].map((x) => (
+                      <th key={x} className="px-4 py-3 font-semibold">
+                        {x}
+                      </th>
                     ))}
                   </tr>
-                ))
-              ) : !filtered.length ? (
-                <tr>
-                  <td
-                    colSpan={7}
-                    className="px-4 py-10 text-center text-slate-400"
-                  >
-                    No CN purchase orders found.
-                  </td>
-                </tr>
-              ) : (
-                filtered.map((r) => (
-                  <tr key={r.id} className="hover:bg-slate-50/70">
-                    <td className="px-4 py-3 font-bold text-slate-900">
-                      <Link
-                        to={`/cn-orders/${encodeURIComponent(r.order_id)}`}
-                        className="hover:text-blue-600"
+                </thead>
+                <tbody className="divide-y divide-mist-100">
+                  {loading ? (
+                    Array.from({ length: 6 }).map((_, i) => (
+                      <tr key={`fin-sk-${i}`}>
+                        {Array.from({ length: 11 }).map((__, j) => (
+                          <td key={j} className="px-4 py-3.5">
+                            <Skeleton
+                              className="h-3.5"
+                              style={{ width: j === 0 ? 100 : 70 }}
+                            />
+                          </td>
+                        ))}
+                      </tr>
+                    ))
+                  ) : !filtered.length ? (
+                    <tr>
+                      <td
+                        colSpan={11}
+                        className="px-4 py-10 text-center text-slate-400"
                       >
-                        {r.order_id}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 text-slate-700">
-                      {r.customer || "—"}
-                    </td>
-                    <td className="px-4 py-3 text-slate-600">
-                      <div className="flex items-center gap-3">
-                        <AirImg
-                          src={r.cover_url}
-                          alt={r.product_name || r.order_id}
-                          className="w-11 h-11 rounded-lg border border-slate-200"
-                          fallbackSize={16}
-                          FallbackIcon={Icons.ShoppingCart}
-                        />
-                        <div className="min-w-0">
-                          <span className="block truncate max-w-[220px]">
-                            {r.product_name || r.product_url || "—"}
-                          </span>
-                          <span className="text-xs text-slate-400">
-                            {[r.platform, r.shop_name]
-                              .filter(Boolean)
-                              .join(" · ")}
-                          </span>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 font-semibold text-slate-900">
-                      {money(r.total_due_usd)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <CnPaymentBadge status={r.payment_status} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <CnStatusBadge status={r.status} partial={r.is_partial} />
-                    </td>
-                    <td className="px-4 py-3 text-slate-500">
-                      {r.updated_at ? formatDbTimestamp(r.updated_at) : "—"}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                        No finance records found.
+                      </td>
+                    </tr>
+                  ) : (
+                    filtered.map((r) => {
+                      const calc = cnPurchaseFinancials(r);
+                      const paidAmt = Math.max(
+                        0,
+                        Number(r.amount_paid_usd) || 0,
+                      );
+                      const balance =
+                        r.payment_status === "Refunded"
+                          ? 0
+                          : Math.max(
+                              0,
+                              (Number(r.total_due_usd) || 0) - paidAmt,
+                            );
+                      const margin = calc.preFreightMarginUsd;
+                      const hasMinimumLoss = calc.minimumKnownLossUsd > 0.005;
+                      const marginLabel = calc.refunded
+                        ? "Excluded (Refunded)"
+                        : margin == null
+                          ? hasMinimumLoss
+                            ? `Loss at least ${money(calc.minimumKnownLossUsd)}`
+                            : "Pending actual costs"
+                          : margin > 0.005
+                            ? `Profit ${money(margin)}`
+                            : margin < -0.005
+                              ? `Loss ${money(Math.abs(margin))}`
+                              : `Break-even ${money(0)}`;
+                      const marginColor =
+                        calc.refunded || (margin == null && !hasMinimumLoss)
+                          ? "text-amber-700"
+                          : hasMinimumLoss ||
+                              (margin != null && margin < -0.005)
+                            ? "text-red-700"
+                            : margin > 0.005
+                              ? "text-emerald-700"
+                              : "text-slate-700";
+                      const marginNote =
+                        margin != null && !calc.refunded
+                          ? "Before international freight & other costs"
+                          : hasMinimumLoss
+                            ? "Goods cost already exceeds charges; shipping not recorded, so final loss may be higher."
+                            : null;
+                      return (
+                        <tr key={r.id} className="hover:bg-slate-50/70">
+                          <td className="px-4 py-3 font-bold">
+                            <Link
+                              to={`/cn-orders/${encodeURIComponent(r.order_id)}`}
+                              className="text-blue-700 hover:underline"
+                            >
+                              {r.order_id}
+                            </Link>
+                            <span className="block text-xs font-normal text-slate-400">
+                              {r.status}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">{r.customer || "—"}</td>
+                          <td className="px-4 py-3 font-semibold">
+                            {money(r.total_due_usd)}
+                          </td>
+                          <td className="px-4 py-3 text-emerald-700">
+                            {money(paidAmt)}
+                          </td>
+                          <td
+                            className={`px-4 py-3 font-semibold ${balance > 0 ? "text-red-600" : "text-emerald-700"}`}
+                          >
+                            {money(balance)}
+                          </td>
+                          <td className="px-4 py-3">
+                            {calc.goodsUsd != null ? (
+                              <>
+                                <b>{money(calc.goodsUsd)}</b>
+                                <span className="block text-xs text-slate-400">
+                                  {cnCny(r.actual_cost_cny)}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-amber-700">
+                                Not recorded
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            {calc.shippingUsd != null ? (
+                              <>
+                                <b>{money(calc.shippingUsd)}</b>
+                                <span className="block text-xs text-slate-400">
+                                  {cnCny(r.actual_domestic_shipping_cny)}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-amber-700">
+                                Not recorded
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 font-semibold">
+                            {calc.totalCostUsd == null ? (
+                              <span className="text-amber-700">Incomplete</span>
+                            ) : (
+                              <>
+                                <b>{money(calc.totalCostUsd)}</b>
+                                <span className="block text-xs text-slate-400">
+                                  Rate{" "}
+                                  {calc.rate.toLocaleString(undefined, {
+                                    maximumFractionDigits: 4,
+                                  })}
+                                </span>
+                              </>
+                            )}
+                          </td>
+                          <td className={`px-4 py-3 font-bold ${marginColor}`}>
+                            <span>{marginLabel}</span>
+                            {marginNote && (
+                              <span className="block text-xs font-normal text-slate-400 max-w-[210px]">
+                                {marginNote}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <CnPaymentBadge status={r.payment_status} />
+                          </td>
+                          <td className="px-4 py-3">
+                            {canRecordCost ? (
+                              <button
+                                type="button"
+                                onClick={() => setActualCostOrder(r)}
+                                className="h-8 px-3 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-xs font-bold hover:bg-blue-100"
+                              >
+                                {r.actual_cost_cny != null ||
+                                r.actual_domestic_shipping_cny != null
+                                  ? "Edit Actual Cost"
+                                  : "Record Actual Cost"}
+                              </button>
+                            ) : (
+                              <span className="text-xs text-slate-400">
+                                View only
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
       {createOpen && (
         <CnOrderCreateModal
           open={createOpen}
           onClose={() => setCreateOpen(false)}
           onSaved={() => load()}
+        />
+      )}
+      {actualCostOrder && (
+        <CnActualCostModal
+          key={actualCostOrder.id}
+          row={actualCostOrder}
+          onClose={() => setActualCostOrder(null)}
+          onSaved={() => {
+            setActualCostOrder(null);
+            load();
+          }}
         />
       )}
     </div>
@@ -36726,6 +38511,7 @@ function CnOrderDetailPage() {
   const { id } = useParams();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { refetch: refetchPackages, forgetDeletedTks } = usePackageTracking();
   const [row, setRow] = useState(null);
   const [parcels, setParcels] = useState([]);
   const [partial, setPartial] = useState(false);
@@ -36869,18 +38655,151 @@ function CnOrderDetailPage() {
     load();
   }
   async function handleDelete() {
+    requirePermission(user, "cn_order.delete");
+    if (!supabase) {
+      emitCBToast(
+        "err",
+        "Delete unavailable",
+        "Connect to Supabase before deleting a CN Order.",
+      );
+      return;
+    }
+
+    // Read the exact linked TKs first so the confirmation explains the cascade.
+    const { data: linkedPackages, error: linkedErr } = await supabase
+      .from("packages")
+      .select("id,tk,status")
+      .eq("cn_order_id", row.id);
+    if (linkedErr) {
+      emitCBToast("err", "Cannot inspect linked TKs", linkedErr.message);
+      return;
+    }
+    const linkedTks = [
+      ...new Set(
+        (linkedPackages || [])
+          .map((p) => String(p.tk || "").trim())
+          .filter(Boolean),
+      ),
+    ];
     const ok = await confirmDialog({
-      title: "Delete CN Order?",
-      message: `${row.order_id} and its history will be permanently deleted. This cannot be undone.`,
-      confirmText: "Delete",
+      title: "Delete CN Order and Linked Shipment Records?",
+      message: `${row.order_id} will be permanently deleted with its linked ${linkedTks.length} TK/package record(s). Those TKs will be removed from Packages/TK, Shipment Lookup, customer shipment tracking, sorting and pending delivery items. Active container entries will be marked Removed; unrelated TKs in the same container/delivery will remain. CN Order parcels, history and images will also be deleted. This cannot be undone.`,
+      confirmText: "Delete Order + Linked TKs",
     });
     if (!ok) return;
-    const { error } = await supabase
-      .from("cn_orders")
-      .delete()
-      .eq("id", row.id);
-    if (error) return emitCBToast("err", "Delete failed", error.message);
-    emitCBToast("ok", "CN Order deleted", row.order_id);
+
+    // Storage paths are captured before the database cascade, then removed after
+    // the transaction succeeds; this avoids deleting files if the DB operation fails.
+    let cnImagePaths = [];
+    let cargoPhotoPaths = [];
+    try {
+      const { data, error } = await supabase
+        .from("cn_order_images")
+        .select("storage_path")
+        .eq("cn_order_id", row.id);
+      if (error) console.warn("[CN delete] cannot list CN image paths", error);
+      else
+        cnImagePaths = (data || []).map((x) => x.storage_path).filter(Boolean);
+    } catch (e) {
+      console.warn("[CN delete] cannot list CN image paths", e);
+    }
+    if (linkedTks.length) {
+      try {
+        const { data, error } = await supabase
+          .from("cargo_photos")
+          .select("storage_path")
+          .in("tk", linkedTks);
+        if (error)
+          console.warn("[CN delete] cannot list TK photo paths", error);
+        else
+          cargoPhotoPaths = (data || [])
+            .map((x) => x.storage_path)
+            .filter(Boolean);
+      } catch (e) {
+        console.warn("[CN delete] cannot list TK photo paths", e);
+      }
+    }
+
+    let rpcData;
+    try {
+      const { data, error } = await supabase.rpc("delete_cn_order_with_links", {
+        p_cn_order_id: row.id,
+        p_deleted_by: cnBy(user),
+      });
+      if (error) {
+        const migrationHint =
+          /function .*delete_cn_order_with_links|does not exist|schema cache/i.test(
+            error.message || "",
+          )
+            ? " Run supabase_cn_order_cascade_delete.sql in Supabase SQL Editor first."
+            : " No records were deleted; fix the database permission/error and try again.";
+        emitCBToast("err", "Delete failed", `${error.message}${migrationHint}`);
+        return;
+      }
+      rpcData = data;
+    } catch (e) {
+      emitCBToast(
+        "err",
+        "Delete failed",
+        e?.message ||
+          "Unable to delete the CN Order and linked shipment records.",
+      );
+      return;
+    }
+
+    // Clean storage objects after the database transaction succeeds. Failed file
+    // cleanup is non-fatal because all database references have already been removed.
+    const storageCleanupWarnings = [];
+    const removeInBatches = async (bucket, paths) => {
+      const unique = [...new Set(paths)];
+      for (let i = 0; i < unique.length; i += 100) {
+        const { error } = await supabase.storage
+          .from(bucket)
+          .remove(unique.slice(i, i + 100));
+        if (error) storageCleanupWarnings.push(`${bucket}: ${error.message}`);
+      }
+    };
+    try {
+      if (cnImagePaths.length)
+        await removeInBatches(CN_IMG_BUCKET, cnImagePaths);
+    } catch (e) {
+      storageCleanupWarnings.push(
+        `CN images: ${e?.message || "cleanup failed"}`,
+      );
+    }
+    try {
+      if (cargoPhotoPaths.length)
+        await removeInBatches("cargo-photos", cargoPhotoPaths);
+    } catch (e) {
+      storageCleanupWarnings.push(
+        `TK photos: ${e?.message || "cleanup failed"}`,
+      );
+    }
+
+    delete CN_ORDER_NO_BY_ID[row.id];
+    try {
+      forgetDeletedTks?.(linkedTks);
+    } catch (e) {
+      console.warn("[CN delete] local TK cache cleanup failed", e);
+    }
+    try {
+      await refetchPackages?.();
+    } catch (e) {
+      console.warn("[CN delete] package refresh failed", e);
+    }
+    if (storageCleanupWarnings.length) {
+      emitCBToast(
+        "warn",
+        "CN Order and linked TKs deleted",
+        `${row.order_id}. Some image files may need storage cleanup.`,
+      );
+    } else {
+      emitCBToast(
+        "ok",
+        "CN Order and linked TKs deleted",
+        `${row.order_id} · ${linkedTks.length} linked TK/package record(s) removed.`,
+      );
+    }
     navigate("/cn-orders");
   }
 
@@ -36904,10 +38823,8 @@ function CnOrderDetailPage() {
   const terminal = CN_ORDER_TERMINAL_STATUSES.has(row.status);
   const next = cnNextStatus(row.status);
   const canAdvance = canPurchase && cnStatusCanAdvance(row.status);
-  const estMargin =
-    row.actual_cost_cny != null && Number(row.cny_per_usd) > 0
-      ? due - Number(row.actual_cost_cny) / Number(row.cny_per_usd)
-      : null;
+  const purchaseFinance = cnPurchaseFinancials(row);
+  const estMargin = purchaseFinance.preFreightMarginUsd;
 
   return (
     <div className="space-y-5">
@@ -37131,10 +39048,27 @@ function CnOrderDetailPage() {
               <h2 className="font-bold text-sm mb-4">Payment</h2>
               <InfoGrid
                 items={[
-                  { label: "Goods (CNY)", value: cnCny(row.product_total_cny) },
+                  {
+                    label:
+                      row.pricing_mode === "usd"
+                        ? "Goods (USD)"
+                        : "Goods (CNY)",
+                    value:
+                      row.pricing_mode === "usd"
+                        ? money(
+                            (Number(row.total_due_usd) || 0) -
+                              (Number(row.domestic_shipping_usd) || 0) -
+                              (Number(row.service_fee_usd) || 0) -
+                              (Number(row.additional_services_total_usd) || 0),
+                          )
+                        : cnCny(row.product_total_cny),
+                  },
                   {
                     label: "China shipping",
-                    value: cnCny(row.domestic_shipping_cny),
+                    value:
+                      row.pricing_mode === "usd"
+                        ? money(row.domestic_shipping_usd || 0)
+                        : cnCny(row.domestic_shipping_cny),
                   },
                   { label: "Rate (CNY/USD)", value: row.cny_per_usd ?? "—" },
                   {
@@ -37198,6 +39132,64 @@ function CnOrderDetailPage() {
           )}
           <div className="cb-surface p-5">
             <h2 className="font-bold text-sm mb-4">Order Information</h2>
+            {Array.isArray(row.cn_order_items) &&
+              row.cn_order_items.length > 0 && (
+                <div className="mb-4 rounded-xl border border-slate-200 overflow-hidden">
+                  <div className="bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600">
+                    Product Items ({row.cn_order_items.length})
+                  </div>
+                  <div className="divide-y divide-slate-100">
+                    {row.cn_order_items.map((item, index) => (
+                      <div
+                        key={`${row.id}-item-${index}`}
+                        className="grid grid-cols-12 gap-2 px-3 py-3 text-sm"
+                      >
+                        <div className="col-span-8 min-w-0">
+                          <b className="block text-slate-800">
+                            {item.product_name || `Item ${index + 1}`}
+                          </b>
+                          {item.variant && (
+                            <span className="block text-xs text-slate-500">
+                              {item.variant}
+                            </span>
+                          )}
+                          {item.product_url && (
+                            <a
+                              href={item.product_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block truncate text-xs text-blue-600 hover:underline"
+                            >
+                              {item.product_url}
+                            </a>
+                          )}
+                        </div>
+                        <div className="col-span-4 text-right">
+                          <b>
+                            {item.quantity} ×{" "}
+                            {row.pricing_mode === "usd"
+                              ? money(item.unit_price_usd || 0)
+                              : cnCny(item.unit_price_cny || 0)}
+                          </b>
+                          <span className="block text-xs text-slate-500">
+                            {row.pricing_mode === "usd"
+                              ? money(
+                                  item.line_total_usd ??
+                                    (Number(item.quantity) || 0) *
+                                      (Number(item.unit_price_usd) || 0),
+                                )
+                              : cnCny(
+                                  item.line_total_cny ??
+                                    (Number(item.quantity) || 0) *
+                                      (Number(item.unit_price_cny) || 0),
+                                )}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             <InfoGrid
               items={[
                 {
@@ -37229,23 +39221,61 @@ function CnOrderDetailPage() {
                 },
                 { label: "Variant", value: row.variant || "—" },
                 {
-                  label: "Qty · Unit",
-                  value: `${row.quantity ?? "—"} · ${cnCny(row.unit_price_cny)}`,
+                  label:
+                    Array.isArray(row.cn_order_items) &&
+                    row.cn_order_items.length > 1
+                      ? "Total Quantity"
+                      : "Qty · Unit Price",
+                  value:
+                    Array.isArray(row.cn_order_items) &&
+                    row.cn_order_items.length > 1
+                      ? `${row.cn_order_items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0)} units · Individual prices shown above`
+                      : `${row.quantity ?? "—"} · ${row.pricing_mode === "usd" ? money(row.unit_price_usd ?? 0) : cnCny(row.unit_price_cny)}`,
                 },
                 {
                   label: "Supplier Order No.",
                   value: row.supplier_order_no || "—",
                   span: true,
                 },
-                { label: "Actual cost", value: cnCny(row.actual_cost_cny) },
-                ...(estMargin != null
-                  ? [
-                      {
-                        label: "Est. margin (before freight)",
-                        value: money(estMargin),
-                      },
-                    ]
-                  : []),
+                {
+                  label: "Actual goods cost",
+                  value:
+                    purchaseFinance.goodsUsd == null
+                      ? "Pending actual cost"
+                      : `${cnCny(row.actual_cost_cny)} (${money(purchaseFinance.goodsUsd)})`,
+                },
+                {
+                  label: "Actual China shipping cost",
+                  value:
+                    purchaseFinance.shippingUsd == null
+                      ? "Pending actual cost"
+                      : `${cnCny(row.actual_domestic_shipping_cny)} (${money(purchaseFinance.shippingUsd)})`,
+                },
+                {
+                  label: "Total actual purchase cost",
+                  value:
+                    purchaseFinance.totalCostUsd == null
+                      ? "Pending — record both actual cost fields"
+                      : money(purchaseFinance.totalCostUsd),
+                },
+                {
+                  label: "Purchase FX rate (CNY/USD)",
+                  value: purchaseFinance.rate || "—",
+                },
+                {
+                  label: "Pre-freight profit / loss",
+                  value: purchaseFinance.refunded
+                    ? "Excluded (Refunded)"
+                    : estMargin != null
+                      ? estMargin > 0.005
+                        ? `Profit ${money(estMargin)}`
+                        : estMargin < -0.005
+                          ? `Loss ${money(Math.abs(estMargin))}`
+                          : `Break-even ${money(0)}`
+                      : purchaseFinance.minimumKnownLossUsd > 0.005
+                        ? `Loss at least ${money(purchaseFinance.minimumKnownLossUsd)} (shipping not recorded)`
+                        : "Pending actual goods + China shipping costs",
+                },
                 { label: "Purchased by", value: row.purchased_by || "—" },
                 {
                   label: "Created",
@@ -42329,8 +44359,81 @@ function cnInvoiceHtml({ company, customer, orders, issuedBy, when }) {
 table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:13px}th,td{border:1px solid #9aa3b5;padding:9px 8px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f1f3f6;font-weight:700}.left{text-align:left}.total{text-align:right;font-weight:700;padding-right:14px}.sum{font-weight:700}.sign{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;margin-top:34px;font-size:14px;font-weight:600}.sign div{padding-bottom:48px}.line{border-top:1px solid #d5d9e0;margin-top:18px}
 </style></head><body><div class="top"><div class="logo">${logo ? `<img src="${e(logo)}" alt="">` : `<b>${e(company?.name || "")}</b>`}</div><h1>CN Order Invoice</h1><div class="meta"><div><b>Date:</b> ${e(when)}</div><div><b>Issued By:</b> ${e(issuedBy)}</div></div></div>
 <div class="cust"><div><b>Customer ID:</b> ${e(customer.code)}</div><div><b>Customer Name:</b> ${e(customer.name)}</div><div><b>Phone Number:</b> ${e(customer.phone)}</div><div><b>Total Order:</b> ${orders.length}</div></div>
-<table><colgroup><col style="width:7%"><col style="width:22%"><col style="width:31%"><col style="width:9%"><col style="width:15%"><col style="width:16%"></colgroup><tr><th>#</th><th>CN Order ID</th><th>Product</th><th>Qty</th><th>Status</th><th>Amount (USD)</th></tr>
-${orders.map((o, i) => `<tr><td>${i + 1}</td><td>${e(o.order_id || "—")}</td><td class="left">${e(o.product_name || o.shop_name || o.product_url || "—")}</td><td>${e(o.quantity ?? 1)}</td><td>${e(o.status || "—")}</td><td>${usd(o.total_due_usd)}</td></tr>`).join("")}
+<table><colgroup><col style="width:7%"><col style="width:22%"><col style="width:31%"><col style="width:9%"><col style="width:15%"><col style="width:16%"></colgroup><tr><th>#</th><th>CN Order ID</th><th>Product / Variant</th><th>Qty</th><th>Unit Price (USD)</th><th>Amount (USD)</th></tr>
+${orders
+  .map((o, i) => {
+    const mode = o.pricing_mode || "cny";
+    const rate = Number(o.cny_per_usd) || 0;
+    const rawItems =
+      Array.isArray(o.cn_order_items) && o.cn_order_items.length
+        ? o.cn_order_items
+        : [
+            {
+              product_name: o.product_name,
+              product_url: o.product_url,
+              variant: o.variant,
+              quantity: o.quantity ?? 1,
+              unit_price_cny: o.unit_price_cny,
+              unit_price_usd: o.unit_price_usd,
+              line_total_cny: o.product_total_cny,
+              line_total_usd:
+                mode === "usd"
+                  ? (Number(o.quantity) || 1) * (Number(o.unit_price_usd) || 0)
+                  : rate > 0
+                    ? ((Number(o.quantity) || 1) *
+                        (Number(o.unit_price_cny) || 0)) /
+                      rate
+                    : 0,
+            },
+          ];
+    const lines = rawItems.map((item, j) => {
+      const q = Number(item.quantity) || 1;
+      const unitUsd =
+        mode === "usd"
+          ? Number(item.unit_price_usd) || 0
+          : rate > 0
+            ? (Number(item.unit_price_cny) || 0) / rate
+            : 0;
+      const amount =
+        mode === "usd"
+          ? Number(item.line_total_usd) || q * unitUsd
+          : Number(item.line_total_usd) || q * unitUsd;
+      const product = [
+        item.product_name || item.product_url || o.shop_name || "Product",
+        item.variant,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      return `<tr><td>${i + 1}.${j + 1}</td><td>${e(o.order_id || "—")}</td><td class="left">${e(product)}</td><td>${e(q)}</td><td>${usd(unitUsd)}</td><td>${usd(amount)}</td></tr>`;
+    });
+    const extra = [];
+    const shipUsd =
+      mode === "usd"
+        ? Number(o.domestic_shipping_usd) || 0
+        : rate > 0
+          ? (Number(o.domestic_shipping_cny) || 0) / rate
+          : 0;
+    if (shipUsd > 0)
+      extra.push(
+        `<tr><td>—</td><td>${e(o.order_id || "—")}</td><td class="left">China Shipping</td><td>—</td><td>—</td><td>${usd(shipUsd)}</td></tr>`,
+      );
+    if ((Number(o.service_fee_usd) || 0) > 0)
+      extra.push(
+        `<tr><td>—</td><td>${e(o.order_id || "—")}</td><td class="left">Service Fee</td><td>—</td><td>—</td><td>${usd(o.service_fee_usd)}</td></tr>`,
+      );
+    (Array.isArray(o.additional_services) ? o.additional_services : []).forEach(
+      (service) => {
+        const q = Number(service.quantity) || 1;
+        const unit = Number(service.unit_price_usd) || 0;
+        if (q * unit > 0)
+          extra.push(
+            `<tr><td>—</td><td>${e(o.order_id || "—")}</td><td class="left">${e(service.name || "Additional Service")}${service.description ? ` · ${e(service.description)}` : ""}</td><td>${q}</td><td>${usd(unit)}</td><td>${usd(q * unit)}</td></tr>`,
+          );
+      },
+    );
+    return [...lines, ...extra].join("");
+  })
+  .join("")}
 <tr><td colspan="5" class="total">Total Amount</td><td class="sum">${usd(total)}</td></tr></table><div class="sign"><div>Customer Signature</div><div>Employee Signature</div><div>Authorized Signature</div></div><div class="line"></div></body></html>`;
 }
 
@@ -42349,7 +44452,7 @@ function CnInvoiceModal({ row, onClose }) {
         let query = supabase
           .from("cn_orders")
           .select(
-            "id,order_id,customer,customer_id,product_name,product_url,shop_name,quantity,total_due_usd,status,created_at,order_type",
+            "id,order_id,customer,customer_id,product_name,product_url,shop_name,variant,quantity,total_due_usd,status,created_at,order_type,cn_order_items,pricing_mode,unit_price_cny,unit_price_usd,cny_per_usd,product_total_cny,domestic_shipping_cny,domestic_shipping_usd,service_fee_usd,additional_services,additional_services_total_usd",
           )
           .order("created_at", { ascending: false });
         query = row.customer_id
