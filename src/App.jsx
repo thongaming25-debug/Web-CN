@@ -34282,57 +34282,17 @@ function cnCalcTotals({
   domesticShippingCny = 0,
   cnyPerUsd,
   serviceFeePct = 0,
-  pricingMode = "cny",
-  unitPriceUsd = 0,
-  domesticShippingUsd = 0,
-  additionalServices = [],
 }) {
   const rate = Number(cnyPerUsd) || 0;
-  const qty = Number(quantity) || 0;
-  const productCny = (Number(unitPriceCny) || 0) * qty;
-  const shippingCny = Number(domesticShippingCny) || 0;
-  const goodsUsd =
-    pricingMode === "usd"
-      ? (Number(unitPriceUsd) || 0) * qty
-      : rate > 0
-        ? productCny / rate
-        : 0;
-  const shippingUsd =
-    pricingMode === "usd"
-      ? Number(domesticShippingUsd) || 0
-      : rate > 0
-        ? shippingCny / rate
-        : 0;
-  // Service fee applies to goods only, never to shipping or other services.
+  const productCny = (Number(unitPriceCny) || 0) * (Number(quantity) || 0);
+  const goodsCny = productCny + (Number(domesticShippingCny) || 0);
+  const goodsUsd = rate > 0 ? goodsCny / rate : 0;
   const feeUsd = goodsUsd * ((Number(serviceFeePct) || 0) / 100);
-  const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-  const normalizedServices = (
-    Array.isArray(additionalServices) ? additionalServices : []
-  )
-    .map((item) => ({
-      name: String(item?.name || "").trim(),
-      description: String(item?.description || "").trim(),
-      quantity: Math.max(0, Number(item?.quantity) || 0),
-      unit_price_usd: Math.max(0, Number(item?.unit_price_usd) || 0),
-      line_total_usd: r2(
-        Math.max(0, Number(item?.quantity) || 0) *
-          Math.max(0, Number(item?.unit_price_usd) || 0),
-      ),
-    }))
-    .filter((item) => item.name || item.description || item.line_total_usd > 0);
-  const servicesUsd = normalizedServices.reduce(
-    (sum, item) => sum + item.line_total_usd,
-    0,
-  );
+  const r2 = (n) => Math.round(n * 100) / 100;
   return {
     productTotalCny: r2(productCny),
-    goodsSubtotalUsd: r2(goodsUsd),
-    chinaShippingCny: r2(shippingCny),
-    chinaShippingUsd: r2(shippingUsd),
     serviceFeeUsd: r2(feeUsd),
-    additionalServices: normalizedServices,
-    additionalServicesTotalUsd: r2(servicesUsd),
-    totalDueUsd: r2(goodsUsd + shippingUsd + feeUsd + servicesUsd),
+    totalDueUsd: r2(goodsUsd + feeUsd),
   };
 }
 function cnPaymentStatusOf(totalDue, amountPaid, refunded = 0) {
@@ -34508,63 +34468,37 @@ function CnModalShell({
 }
 
 function CnTotalsBox({ totals, rate, pricingMode = "cny" }) {
-  const validRate = pricingMode === "usd" || Number(rate) > 0;
   return (
-    <div className="rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-3 text-sm space-y-2">
-      {pricingMode === "cny" && (
-        <>
-          <div className="flex justify-between text-slate-600">
-            <span>Goods (CNY)</span>
-            <b>{cnCny(totals.productTotalCny)}</b>
-          </div>
-          <div className="flex justify-between text-slate-600">
-            <span>China shipping (CNY)</span>
-            <b>{cnCny(totals.chinaShippingCny)}</b>
-          </div>
-          <div className="flex justify-between text-slate-600">
-            <span>Exchange rate</span>
-            <b>{Number(rate) > 0 ? `¥${Number(rate).toFixed(4)} / $1` : "—"}</b>
-          </div>
-        </>
-      )}
+    <div className="rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-3 text-sm space-y-1">
       <div className="flex justify-between text-slate-600">
-        <span>Goods subtotal (USD)</span>
-        <b>{money(totals.goodsSubtotalUsd)}</b>
+        <span>Goods ({pricingMode === "usd" ? "USD" : "CNY"})</span>
+        <b>
+          {pricingMode === "usd"
+            ? money(totals.goodsUsd || 0)
+            : cnCny(totals.productTotalCny)}
+        </b>
       </div>
       <div className="flex justify-between text-slate-600">
         <span>China shipping (USD)</span>
-        <b>{money(totals.chinaShippingUsd)}</b>
+        <b>{money(totals.shippingUsd || 0)}</b>
       </div>
       <div className="flex justify-between text-slate-600">
         <span>Service fee (USD)</span>
         <b>{money(totals.serviceFeeUsd)}</b>
       </div>
-      {totals.additionalServices?.length > 0 && (
-        <>
-          {totals.additionalServices.map((item, i) => (
-            <div
-              key={`${item.name}-${i}`}
-              className="flex justify-between gap-3 text-slate-600"
-            >
-              <span className="truncate">
-                {item.name || `Additional service ${i + 1}`} × {item.quantity}
-              </span>
-              <b>{money(item.line_total_usd)}</b>
-            </div>
-          ))}
-        </>
+      {(totals.additionalServicesUsd || 0) > 0 && (
+        <div className="flex justify-between text-slate-600">
+          <span>Additional services (USD)</span>
+          <b>{money(totals.additionalServicesUsd)}</b>
+        </div>
       )}
-      <div className="flex justify-between text-slate-600">
-        <span>Additional services total (USD)</span>
-        <b>{money(totals.additionalServicesTotalUsd || 0)}</b>
-      </div>
-      <div className="flex justify-between text-slate-900 text-base pt-2 border-t border-slate-200">
-        <span className="font-bold">Customer pays now (USD)</span>
-        <b>{validRate ? money(totals.totalDueUsd) : "—"}</b>
+      <div className="flex justify-between text-slate-900 text-base pt-1 border-t border-slate-200">
+        <span className="font-bold">Customer pays now</span>
+        <b>{Number(rate) > 0 ? money(totals.totalDueUsd) : "—"}</b>
       </div>
       <p className="text-[11px] text-slate-400">
-        Goods + China shipping + service fee + additional services.
-        International freight is billed later from CBM/weight at Inbound.
+        Goods + China shipping + service fee. International freight is billed
+        later from CBM/weight at Inbound.
       </p>
     </div>
   );
@@ -35086,14 +35020,14 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
   const [url, setUrl] = useState("");
   const [variant, setVariant] = useState("");
   const [qty, setQty] = useState("");
-  const [price, setPrice] = useState("");
-  const [domShip, setDomShip] = useState("");
-  const [rate, setRate] = useState("");
-  const [feePct, setFeePct] = useState("0");
   const [pricingMode, setPricingMode] = useState("cny");
+  const [price, setPrice] = useState("");
   const [priceUsd, setPriceUsd] = useState("");
+  const [domShip, setDomShip] = useState("");
   const [domShipUsd, setDomShipUsd] = useState("");
   const [additionalServices, setAdditionalServices] = useState([]);
+  const [rate, setRate] = useState("");
+  const [feePct, setFeePct] = useState("0");
   const [paidNow, setPaidNow] = useState(false);
   const [method, setMethod] = useState(CN_PAYMENT_METHODS[0]);
   const [ref, setRef] = useState("");
@@ -35117,10 +35051,10 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
     setUrl("");
     setVariant("");
     setQty("");
-    setPrice("");
-    setDomShip("");
     setPricingMode("cny");
+    setPrice("");
     setPriceUsd("");
+    setDomShip("");
     setDomShipUsd("");
     setAdditionalServices([]);
     // the last rate / fee % used are remembered so staff don't retype them
@@ -35136,27 +35070,54 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
   }, [open]);
   if (!open) return null;
 
-  const totals = cnCalcTotals({
-    unitPriceCny: price,
-    quantity: qty,
-    domesticShippingCny: domShip,
-    cnyPerUsd: rate,
-    serviceFeePct: feePct,
-    pricingMode,
-    unitPriceUsd: priceUsd,
-    domesticShippingUsd: domShipUsd,
-    additionalServices,
-  });
+  const additionalServicesTotalUsd = additionalServices.reduce((sum, item) => {
+    const q = Number(item.quantity) || 0;
+    const unit = Number(item.unit_price_usd) || 0;
+    return sum + q * unit;
+  }, 0);
+  const totals = (() => {
+    const q = Number(qty) || 0;
+    const r = Number(rate) || 0;
+    const goodsUsd =
+      pricingMode === "usd"
+        ? (Number(priceUsd) || 0) * q
+        : r > 0
+          ? ((Number(price) || 0) * q) / r
+          : 0;
+    const shippingUsd =
+      pricingMode === "usd"
+        ? Number(domShipUsd) || 0
+        : r > 0
+          ? (Number(domShip) || 0) / r
+          : 0;
+    const feeUsd = goodsUsd * ((Number(feePct) || 0) / 100);
+    const round = (n) => Math.round(n * 100) / 100;
+    return {
+      productTotalCny: round((Number(price) || 0) * q),
+      goodsUsd: round(goodsUsd),
+      shippingUsd: round(shippingUsd),
+      serviceFeeUsd: round(feeUsd),
+      additionalServicesUsd: round(additionalServicesTotalUsd),
+      totalDueUsd: round(
+        goodsUsd + shippingUsd + feeUsd + additionalServicesTotalUsd,
+      ),
+    };
+  })();
 
   async function submit(e) {
     e.preventDefault();
     const paidEff = paidNow && !isDirect;
     const qn = isDirect && String(qty).trim() === "" ? 1 : Number(qty),
       pn = pricingMode === "cny" ? Number(price) : 0,
-      pu = priceUsd === "" ? 0 : Number(priceUsd),
+      pu = pricingMode === "usd" ? Number(priceUsd) : 0,
       rn = Number(rate),
-      dn = domShip === "" ? 0 : Number(domShip),
-      dsu = domShipUsd === "" ? 0 : Number(domShipUsd),
+      dn = pricingMode === "cny" ? (domShip === "" ? 0 : Number(domShip)) : 0,
+      du =
+        pricingMode === "usd"
+          ? domShipUsd === ""
+            ? 0
+            : Number(domShipUsd)
+          : 0,
       fn = feePct === "" ? 0 : Number(feePct);
     if (!supabase) return setError("Supabase is not connected.");
     if (!customer) return setError("Please select a Customer.");
@@ -35168,32 +35129,15 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
       return setError("Unit price (CNY) must be above 0.");
     if (!isDirect && pricingMode === "usd" && (!Number.isFinite(pu) || pu <= 0))
       return setError("Unit price (USD) must be above 0.");
-    if (!isDirect && pricingMode === "cny" && (!Number.isFinite(dn) || dn < 0))
-      return setError("China shipping must be 0 or more.");
     if (
       !isDirect &&
-      pricingMode === "usd" &&
-      (!Number.isFinite(dsu) || dsu < 0)
+      (!Number.isFinite(dn) || dn < 0 || !Number.isFinite(du) || du < 0)
     )
-      return setError("China shipping (USD) must be 0 or more.");
+      return setError("China shipping must be 0 or more.");
     if (!isDirect && pricingMode === "cny" && (!Number.isFinite(rn) || rn <= 0))
       return setError("Exchange rate (CNY per 1 USD) is required.");
     if (!isDirect && (!Number.isFinite(fn) || fn < 0 || fn > 100))
       return setError("Service fee % must be between 0 and 100.");
-    if (
-      !isDirect &&
-      additionalServices.some(
-        (item) =>
-          !String(item.name || "").trim() ||
-          !Number.isFinite(Number(item.quantity)) ||
-          Number(item.quantity) <= 0 ||
-          !Number.isFinite(Number(item.unit_price_usd)) ||
-          Number(item.unit_price_usd) < 0,
-      )
-    )
-      return setError(
-        "Each additional service needs a name, quantity above 0, and a valid USD unit price.",
-      );
     setBusy(true);
     setError("");
     try {
@@ -35208,20 +35152,22 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
         product_url: cnNz(url),
         variant: cnNz(variant),
         quantity: qn,
-        unit_price_cny: pricingMode === "cny" ? pn : 0,
-        cny_per_usd: pricingMode === "cny" ? rn : 1,
-        product_total_cny: pricingMode === "cny" ? totals.productTotalCny : 0,
-        domestic_shipping_cny: pricingMode === "cny" ? dn : 0,
+        pricing_mode: pricingMode,
+        unit_price_cny: pn,
+        unit_price_usd: pu,
+        cny_per_usd: rn,
+        product_total_cny: totals.productTotalCny,
+        domestic_shipping_cny: dn,
+        domestic_shipping_usd: du,
+        additional_services: additionalServices.map((item) => ({
+          ...item,
+          quantity: Number(item.quantity) || 1,
+          unit_price_usd: Number(item.unit_price_usd) || 0,
+        })),
         service_fee_pct: fn,
         service_fee_usd: totals.serviceFeeUsd,
+        additional_services_total_usd: totals.additionalServicesUsd,
         total_due_usd: totals.totalDueUsd,
-        pricing_mode: pricingMode,
-        unit_price_usd: pricingMode === "usd" ? pu : 0,
-        domestic_shipping_usd: pricingMode === "usd" ? dsu : 0,
-        goods_subtotal_usd: totals.goodsSubtotalUsd,
-        china_shipping_usd: totals.chinaShippingUsd,
-        additional_services: totals.additionalServices,
-        additional_services_total_usd: totals.additionalServicesTotalUsd,
         payment_status: paidEff ? "Paid" : "Unpaid",
         amount_paid_usd: paidEff ? totals.totalDueUsd : 0,
         payment_method: paidEff ? method : null,
@@ -35239,20 +35185,18 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
       if (isDirect)
         Object.assign(row, {
           status: "Shipping to China WH",
+          pricing_mode: "cny",
           unit_price_cny: 0,
+          unit_price_usd: 0,
+          domestic_shipping_usd: 0,
+          additional_services: [],
+          additional_services_total_usd: 0,
           cny_per_usd: 1,
           product_total_cny: 0,
           domestic_shipping_cny: 0,
           service_fee_pct: 0,
           service_fee_usd: 0,
           total_due_usd: 0,
-          pricing_mode: "cny",
-          unit_price_usd: 0,
-          domestic_shipping_usd: 0,
-          goods_subtotal_usd: 0,
-          china_shipping_usd: 0,
-          additional_services: [],
-          additional_services_total_usd: 0,
           payment_status: "Unpaid",
           amount_paid_usd: 0,
           payment_method: null,
@@ -36779,6 +36723,7 @@ function CnOrderDetailPage() {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [payOpen, setPayOpen] = useState(false);
+  const [cnInvoiceOpen, setCnInvoiceOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [refundOpen, setRefundOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -36982,6 +36927,13 @@ function CnOrderDetailPage() {
           {row.order_type !== "direct" && (
             <CnPaymentBadge status={row.payment_status} />
           )}
+          <button
+            type="button"
+            onClick={() => setCnInvoiceOpen(true)}
+            className="h-10 px-3 rounded-xl border border-blue-200 bg-blue-50 text-blue-700 text-sm font-bold inline-flex items-center gap-1.5 hover:bg-blue-100"
+          >
+            <Icons.Printer size={15} /> Invoice
+          </button>
           {canPay && !terminal && due - paid > 0.005 && (
             <button
               onClick={() => setPayOpen(true)}
@@ -37164,77 +37116,16 @@ function CnOrderDetailPage() {
               <h2 className="font-bold text-sm mb-4">Payment</h2>
               <InfoGrid
                 items={[
+                  { label: "Goods (CNY)", value: cnCny(row.product_total_cny) },
                   {
-                    label: "Pricing mode",
-                    value:
-                      row.pricing_mode === "usd"
-                        ? "USD Direct"
-                        : "CNY Exchange to USD",
+                    label: "China shipping",
+                    value: cnCny(row.domestic_shipping_cny),
                   },
-                  ...(row.pricing_mode === "usd"
-                    ? [
-                        {
-                          label: "Unit price (USD)",
-                          value: money(row.unit_price_usd),
-                        },
-                        {
-                          label: "Goods subtotal (USD)",
-                          value: money(
-                            row.goods_subtotal_usd ??
-                              Number(row.unit_price_usd || 0) *
-                                Number(row.quantity || 0),
-                          ),
-                        },
-                        {
-                          label: "China shipping (USD)",
-                          value: money(
-                            row.domestic_shipping_usd ??
-                              row.china_shipping_usd ??
-                              0,
-                          ),
-                        },
-                      ]
-                    : [
-                        {
-                          label: "Goods (CNY)",
-                          value: cnCny(row.product_total_cny),
-                        },
-                        {
-                          label: "China shipping (CNY)",
-                          value: cnCny(row.domestic_shipping_cny),
-                        },
-                        {
-                          label: "Rate (CNY/USD)",
-                          value: row.cny_per_usd ?? "—",
-                        },
-                        {
-                          label: "Goods subtotal (USD)",
-                          value: money(row.goods_subtotal_usd ?? 0),
-                        },
-                        {
-                          label: "China shipping (USD)",
-                          value: money(row.china_shipping_usd ?? 0),
-                        },
-                      ]),
+                  { label: "Rate (CNY/USD)", value: row.cny_per_usd ?? "—" },
                   {
                     label: `Service fee ${row.service_fee_pct ?? 0}%`,
                     value: money(row.service_fee_usd),
                   },
-                  {
-                    label: "Additional services",
-                    value: money(row.additional_services_total_usd ?? 0),
-                  },
-                  ...(Array.isArray(row.additional_services)
-                    ? row.additional_services.map((service, index) => ({
-                        label:
-                          service.name || `Additional service ${index + 1}`,
-                        value: money(
-                          service.line_total_usd ??
-                            Number(service.quantity || 0) *
-                              Number(service.unit_price_usd || 0),
-                        ),
-                      }))
-                    : []),
                   { label: "Total due", value: money(due) },
                   { label: "Paid", value: money(paid) },
                   { label: "Remaining", value: money(Math.max(0, due - paid)) },
@@ -37370,6 +37261,9 @@ function CnOrderDetailPage() {
             reloadCnImages(row.id);
           }}
         />
+      )}
+      {cnInvoiceOpen && (
+        <CnInvoiceModal row={row} onClose={() => setCnInvoiceOpen(false)} />
       )}
       <CnPaymentModal
         open={payOpen}
@@ -42403,6 +42297,278 @@ function AirInvoiceModal({ row, onClose }) {
 }
 
 // Sidebar card on the TK detail page.
+// CN Purchase Order invoice: same select -> preview -> print flow as AIR Indo,
+// but it reads only CN orders and keeps the AIR invoice implementation untouched.
+function cnInvoiceHtml({ company, customer, orders, issuedBy, when }) {
+  const e = htmlEsc;
+  const logo = company?.logoUrl || company?.logoDataUrl || "";
+  const usd = (n) => `$${(Number(n) || 0).toFixed(2)}`;
+  const total = orders.reduce(
+    (sum, order) => sum + (Number(order.total_due_usd) || 0),
+    0,
+  );
+  return `<!doctype html><html><head><meta charset="utf-8"><title>CN Invoice ${e(customer.code)}</title>
+<style>
+@page{size:A4;margin:16mm 14mm}*{box-sizing:border-box}body{font-family:'Inter','Noto Sans Khmer',Arial,sans-serif;font-size:14px;color:#111;margin:0}
+.top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;margin-bottom:22px}.logo img{max-height:60px;max-width:200px;object-fit:contain}.logo b{font-size:20px}.top h1{font-size:22px;font-weight:600;margin:0;text-align:center}.meta{text-align:right;line-height:1.55}.cust{line-height:1.8;margin-bottom:16px;font-size:15px}
+table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:13px}th,td{border:1px solid #9aa3b5;padding:9px 8px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f1f3f6;font-weight:700}.left{text-align:left}.total{text-align:right;font-weight:700;padding-right:14px}.sum{font-weight:700}.sign{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;margin-top:34px;font-size:14px;font-weight:600}.sign div{padding-bottom:48px}.line{border-top:1px solid #d5d9e0;margin-top:18px}
+</style></head><body><div class="top"><div class="logo">${logo ? `<img src="${e(logo)}" alt="">` : `<b>${e(company?.name || "")}</b>`}</div><h1>CN Order Invoice</h1><div class="meta"><div><b>Date:</b> ${e(when)}</div><div><b>Issued By:</b> ${e(issuedBy)}</div></div></div>
+<div class="cust"><div><b>Customer ID:</b> ${e(customer.code)}</div><div><b>Customer Name:</b> ${e(customer.name)}</div><div><b>Phone Number:</b> ${e(customer.phone)}</div><div><b>Total Order:</b> ${orders.length}</div></div>
+<table><colgroup><col style="width:7%"><col style="width:22%"><col style="width:31%"><col style="width:9%"><col style="width:15%"><col style="width:16%"></colgroup><tr><th>#</th><th>CN Order ID</th><th>Product</th><th>Qty</th><th>Status</th><th>Amount (USD)</th></tr>
+${orders.map((o, i) => `<tr><td>${i + 1}</td><td>${e(o.order_id || "—")}</td><td class="left">${e(o.product_name || o.shop_name || o.product_url || "—")}</td><td>${e(o.quantity ?? 1)}</td><td>${e(o.status || "—")}</td><td>${usd(o.total_due_usd)}</td></tr>`).join("")}
+<tr><td colspan="5" class="total">Total Amount</td><td class="sum">${usd(total)}</td></tr></table><div class="sign"><div>Customer Signature</div><div>Employee Signature</div><div>Authorized Signature</div></div><div class="line"></div></body></html>`;
+}
+
+function CnInvoiceModal({ row, onClose }) {
+  const { user } = useAuth();
+  const company = useSystemSettings()?.company;
+  const [orders, setOrders] = useState(null);
+  const [picked, setPicked] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [previewHtml, setPreviewHtml] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      let list = [];
+      if (supabase && row.id) {
+        let query = supabase
+          .from("cn_orders")
+          .select(
+            "id,order_id,customer,customer_id,product_name,product_url,shop_name,quantity,total_due_usd,status,created_at,order_type",
+          )
+          .order("created_at", { ascending: false });
+        query = row.customer_id
+          ? query.eq("customer_id", row.customer_id)
+          : query.eq("customer", row.customer);
+        const { data, error } = await query;
+        if (error)
+          emitCBToast(
+            "err",
+            "Invoice orders failed to load",
+            error.message || "Please try again.",
+          );
+        list = data || [];
+      }
+      if (!list.some((x) => x.id === row.id)) list = [row, ...list];
+      if (!alive) return;
+      setOrders(list);
+      setPicked(Object.fromEntries(list.map((x) => [x.id, true])));
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [row.id]);
+  const chosen = (orders || []).filter((o) => picked[o.id]);
+  const total = chosen.reduce(
+    (sum, o) => sum + (Number(o.total_due_usd) || 0),
+    0,
+  );
+  async function openPreview() {
+    if (!chosen.length) return;
+    setBusy(true);
+    try {
+      const first = chosen[0];
+      const [codeMaybe, ...nameParts] = String(first.customer || "").split(
+        " · ",
+      );
+      let record = null;
+      if (supabase) {
+        const columns = "name,customer_code,phone";
+        if (first.customer_id) {
+          const { data } = await supabase
+            .from("customers")
+            .select(columns)
+            .eq("id", first.customer_id)
+            .maybeSingle();
+          record = data || null;
+        }
+        if (!record && codeMaybe) {
+          const { data } = await supabase
+            .from("customers")
+            .select(columns)
+            .eq("customer_code", codeMaybe.trim())
+            .maybeSingle();
+          record = data || null;
+        }
+      }
+      const customer = {
+        code: record?.customer_code || codeMaybe || "—",
+        name: record?.name || nameParts.join(" · ") || first.customer || "—",
+        phone: record?.phone || "—",
+      };
+      setPreviewHtml(
+        cnInvoiceHtml({
+          company,
+          customer,
+          orders: chosen,
+          issuedBy: user?.name || user?.email || "—",
+          when: invoiceStamp(),
+        }),
+      );
+    } catch (err) {
+      emitCBToast(
+        "err",
+        "Preview failed",
+        err.message || "Unable to prepare CN invoice.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  function confirmPrint() {
+    try {
+      printInvoiceHtml(previewHtml);
+      onClose();
+    } catch (err) {
+      emitCBToast(
+        "err",
+        "Print failed",
+        err.message || "Unable to print CN invoice.",
+      );
+    }
+  }
+  if (previewHtml) {
+    const framed = previewHtml.replace(
+      "</style>",
+      "@media screen{body{padding:28px 32px;background:#fff}}</style>",
+    );
+    return createPortal(
+      <div
+        className="fixed inset-0 z-[80] bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4"
+        onClick={onClose}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="w-full max-w-5xl rounded-2xl bg-white shadow-2xl overflow-hidden"
+        >
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+            <h3 className="font-bold text-lg">CN Invoice Preview</h3>
+            <button type="button" onClick={onClose}>
+              <Icons.X size={18} />
+            </button>
+          </div>
+          <div className="p-5 bg-slate-50 max-h-[75vh] overflow-y-auto">
+            <iframe
+              title="CN Invoice preview"
+              srcDoc={framed}
+              onLoad={(e) => {
+                const el = e.currentTarget;
+                const h = el.contentDocument?.documentElement?.scrollHeight;
+                if (h) el.style.height = h + "px";
+              }}
+              className="w-full h-[60vh] rounded-lg border border-slate-200 bg-white"
+            />
+          </div>
+          <div className="px-5 py-4 border-t border-slate-200 flex items-center justify-end gap-3">
+            <button
+              type="button"
+              onClick={confirmPrint}
+              className="h-10 px-5 rounded-xl bg-blue-600 text-white text-sm font-bold inline-flex items-center gap-2"
+            >
+              <Icons.Printer size={15} /> Print / Save PDF
+            </button>
+            <button
+              type="button"
+              onClick={() => setPreviewHtml(null)}
+              className="h-10 px-5 rounded-xl border border-slate-300 bg-white text-sm font-semibold inline-flex items-center gap-2"
+            >
+              <Icons.X size={15} /> Back
+            </button>
+          </div>
+        </div>
+      </div>,
+      document.body,
+    );
+  }
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[80] bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-lg rounded-2xl bg-white shadow-2xl overflow-hidden"
+      >
+        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <div>
+            <h3 className="font-bold text-lg">Create CN Invoice</h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Select orders for {row.customer || "this customer"}
+            </p>
+          </div>
+          <button type="button" onClick={onClose}>
+            <Icons.X size={18} />
+          </button>
+        </div>
+        <div className="p-5 max-h-[60vh] overflow-y-auto">
+          {orders === null ? (
+            <p className="text-sm text-slate-400 py-6 text-center">
+              Loading customer orders…
+            </p>
+          ) : (
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-xs font-semibold text-slate-500">
+                <input
+                  type="checkbox"
+                  checked={orders.length > 0 && chosen.length === orders.length}
+                  onChange={(e) =>
+                    setPicked(
+                      Object.fromEntries(
+                        orders.map((o) => [o.id, e.target.checked]),
+                      ),
+                    )
+                  }
+                />{" "}
+                Select all ({orders.length})
+              </label>
+              {orders.map((o) => (
+                <label
+                  key={o.id}
+                  className="flex items-center gap-3 rounded-xl border border-slate-200 px-3 py-2.5 cursor-pointer hover:bg-slate-50"
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!picked[o.id]}
+                    onChange={(e) =>
+                      setPicked({ ...picked, [o.id]: e.target.checked })
+                    }
+                  />
+                  <div className="flex-1 min-w-0">
+                    <b className="text-sm block truncate">{o.order_id}</b>
+                    <span className="text-xs text-slate-500">
+                      {o.product_name || o.shop_name || "CN Order"} ·{" "}
+                      {o.status || "—"}
+                    </span>
+                  </div>
+                  <b className="text-sm">{money(o.total_due_usd)}</b>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="px-5 py-4 border-t border-slate-200 flex items-center justify-between gap-3">
+          <div className="text-sm">
+            <span className="text-slate-500">Selected:</span>{" "}
+            <b>{chosen.length}</b>
+            <span className="text-slate-500 ml-3">Total:</span>{" "}
+            <b>{money(total)}</b>
+          </div>
+          <button
+            type="button"
+            disabled={busy || !chosen.length || orders === null}
+            onClick={openPreview}
+            className="h-10 px-5 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-50 inline-flex items-center gap-2"
+          >
+            <Icons.Printer size={15} />
+            {busy ? "Preparing…" : "Preview Invoice"}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function PayShippingCard({ pkg, stage }) {
   const { user } = useAuth();
   const canPay = hasPermission(user, "payment.manage");
