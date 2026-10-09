@@ -34282,17 +34282,57 @@ function cnCalcTotals({
   domesticShippingCny = 0,
   cnyPerUsd,
   serviceFeePct = 0,
+  pricingMode = "cny",
+  unitPriceUsd = 0,
+  domesticShippingUsd = 0,
+  additionalServices = [],
 }) {
   const rate = Number(cnyPerUsd) || 0;
-  const productCny = (Number(unitPriceCny) || 0) * (Number(quantity) || 0);
-  const goodsCny = productCny + (Number(domesticShippingCny) || 0);
-  const goodsUsd = rate > 0 ? goodsCny / rate : 0;
+  const qty = Number(quantity) || 0;
+  const productCny = (Number(unitPriceCny) || 0) * qty;
+  const shippingCny = Number(domesticShippingCny) || 0;
+  const goodsUsd =
+    pricingMode === "usd"
+      ? (Number(unitPriceUsd) || 0) * qty
+      : rate > 0
+        ? productCny / rate
+        : 0;
+  const shippingUsd =
+    pricingMode === "usd"
+      ? Number(domesticShippingUsd) || 0
+      : rate > 0
+        ? shippingCny / rate
+        : 0;
+  // Service fee applies to goods only, never to shipping or other services.
   const feeUsd = goodsUsd * ((Number(serviceFeePct) || 0) / 100);
-  const r2 = (n) => Math.round(n * 100) / 100;
+  const r2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+  const normalizedServices = (
+    Array.isArray(additionalServices) ? additionalServices : []
+  )
+    .map((item) => ({
+      name: String(item?.name || "").trim(),
+      description: String(item?.description || "").trim(),
+      quantity: Math.max(0, Number(item?.quantity) || 0),
+      unit_price_usd: Math.max(0, Number(item?.unit_price_usd) || 0),
+      line_total_usd: r2(
+        Math.max(0, Number(item?.quantity) || 0) *
+          Math.max(0, Number(item?.unit_price_usd) || 0),
+      ),
+    }))
+    .filter((item) => item.name || item.description || item.line_total_usd > 0);
+  const servicesUsd = normalizedServices.reduce(
+    (sum, item) => sum + item.line_total_usd,
+    0,
+  );
   return {
     productTotalCny: r2(productCny),
+    goodsSubtotalUsd: r2(goodsUsd),
+    chinaShippingCny: r2(shippingCny),
+    chinaShippingUsd: r2(shippingUsd),
     serviceFeeUsd: r2(feeUsd),
-    totalDueUsd: r2(goodsUsd + feeUsd),
+    additionalServices: normalizedServices,
+    additionalServicesTotalUsd: r2(servicesUsd),
+    totalDueUsd: r2(goodsUsd + shippingUsd + feeUsd + servicesUsd),
   };
 }
 function cnPaymentStatusOf(totalDue, amountPaid, refunded = 0) {
@@ -34467,24 +34507,64 @@ function CnModalShell({
   );
 }
 
-function CnTotalsBox({ totals, rate }) {
+function CnTotalsBox({ totals, rate, pricingMode = "cny" }) {
+  const validRate = pricingMode === "usd" || Number(rate) > 0;
   return (
-    <div className="rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-3 text-sm space-y-1">
+    <div className="rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-3 text-sm space-y-2">
+      {pricingMode === "cny" && (
+        <>
+          <div className="flex justify-between text-slate-600">
+            <span>Goods (CNY)</span>
+            <b>{cnCny(totals.productTotalCny)}</b>
+          </div>
+          <div className="flex justify-between text-slate-600">
+            <span>China shipping (CNY)</span>
+            <b>{cnCny(totals.chinaShippingCny)}</b>
+          </div>
+          <div className="flex justify-between text-slate-600">
+            <span>Exchange rate</span>
+            <b>{Number(rate) > 0 ? `¥${Number(rate).toFixed(4)} / $1` : "—"}</b>
+          </div>
+        </>
+      )}
       <div className="flex justify-between text-slate-600">
-        <span>Goods (CNY)</span>
-        <b>{cnCny(totals.productTotalCny)}</b>
+        <span>Goods subtotal (USD)</span>
+        <b>{money(totals.goodsSubtotalUsd)}</b>
+      </div>
+      <div className="flex justify-between text-slate-600">
+        <span>China shipping (USD)</span>
+        <b>{money(totals.chinaShippingUsd)}</b>
       </div>
       <div className="flex justify-between text-slate-600">
         <span>Service fee (USD)</span>
         <b>{money(totals.serviceFeeUsd)}</b>
       </div>
-      <div className="flex justify-between text-slate-900 text-base pt-1 border-t border-slate-200">
-        <span className="font-bold">Customer pays now</span>
-        <b>{Number(rate) > 0 ? money(totals.totalDueUsd) : "—"}</b>
+      {totals.additionalServices?.length > 0 && (
+        <>
+          {totals.additionalServices.map((item, i) => (
+            <div
+              key={`${item.name}-${i}`}
+              className="flex justify-between gap-3 text-slate-600"
+            >
+              <span className="truncate">
+                {item.name || `Additional service ${i + 1}`} × {item.quantity}
+              </span>
+              <b>{money(item.line_total_usd)}</b>
+            </div>
+          ))}
+        </>
+      )}
+      <div className="flex justify-between text-slate-600">
+        <span>Additional services total (USD)</span>
+        <b>{money(totals.additionalServicesTotalUsd || 0)}</b>
+      </div>
+      <div className="flex justify-between text-slate-900 text-base pt-2 border-t border-slate-200">
+        <span className="font-bold">Customer pays now (USD)</span>
+        <b>{validRate ? money(totals.totalDueUsd) : "—"}</b>
       </div>
       <p className="text-[11px] text-slate-400">
-        Goods + China shipping + service fee. International freight is billed
-        later from CBM/weight at Inbound.
+        Goods + China shipping + service fee + additional services.
+        International freight is billed later from CBM/weight at Inbound.
       </p>
     </div>
   );
@@ -35010,6 +35090,10 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
   const [domShip, setDomShip] = useState("");
   const [rate, setRate] = useState("");
   const [feePct, setFeePct] = useState("0");
+  const [pricingMode, setPricingMode] = useState("cny");
+  const [priceUsd, setPriceUsd] = useState("");
+  const [domShipUsd, setDomShipUsd] = useState("");
+  const [additionalServices, setAdditionalServices] = useState([]);
   const [paidNow, setPaidNow] = useState(false);
   const [method, setMethod] = useState(CN_PAYMENT_METHODS[0]);
   const [ref, setRef] = useState("");
@@ -35035,6 +35119,10 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
     setQty("");
     setPrice("");
     setDomShip("");
+    setPricingMode("cny");
+    setPriceUsd("");
+    setDomShipUsd("");
+    setAdditionalServices([]);
     // the last rate / fee % used are remembered so staff don't retype them
     setRate(String(lsRead("cb_cn_rate", "") || ""));
     setFeePct(String(lsRead("cb_cn_fee", "0") || "0"));
@@ -35054,15 +35142,21 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
     domesticShippingCny: domShip,
     cnyPerUsd: rate,
     serviceFeePct: feePct,
+    pricingMode,
+    unitPriceUsd: priceUsd,
+    domesticShippingUsd: domShipUsd,
+    additionalServices,
   });
 
   async function submit(e) {
     e.preventDefault();
     const paidEff = paidNow && !isDirect;
     const qn = isDirect && String(qty).trim() === "" ? 1 : Number(qty),
-      pn = Number(price),
+      pn = pricingMode === "cny" ? Number(price) : 0,
+      pu = priceUsd === "" ? 0 : Number(priceUsd),
       rn = Number(rate),
       dn = domShip === "" ? 0 : Number(domShip),
+      dsu = domShipUsd === "" ? 0 : Number(domShipUsd),
       fn = feePct === "" ? 0 : Number(feePct);
     if (!supabase) return setError("Supabase is not connected.");
     if (!customer) return setError("Please select a Customer.");
@@ -35070,14 +35164,36 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
       return setError("Enter a product name or a product link.");
     if (!Number.isInteger(qn) || qn <= 0)
       return setError("Quantity must be a whole number above 0.");
-    if (!isDirect && (!Number.isFinite(pn) || pn <= 0))
+    if (!isDirect && pricingMode === "cny" && (!Number.isFinite(pn) || pn <= 0))
       return setError("Unit price (CNY) must be above 0.");
-    if (!isDirect && (!Number.isFinite(dn) || dn < 0))
+    if (!isDirect && pricingMode === "usd" && (!Number.isFinite(pu) || pu <= 0))
+      return setError("Unit price (USD) must be above 0.");
+    if (!isDirect && pricingMode === "cny" && (!Number.isFinite(dn) || dn < 0))
       return setError("China shipping must be 0 or more.");
-    if (!isDirect && (!Number.isFinite(rn) || rn <= 0))
+    if (
+      !isDirect &&
+      pricingMode === "usd" &&
+      (!Number.isFinite(dsu) || dsu < 0)
+    )
+      return setError("China shipping (USD) must be 0 or more.");
+    if (!isDirect && pricingMode === "cny" && (!Number.isFinite(rn) || rn <= 0))
       return setError("Exchange rate (CNY per 1 USD) is required.");
     if (!isDirect && (!Number.isFinite(fn) || fn < 0 || fn > 100))
       return setError("Service fee % must be between 0 and 100.");
+    if (
+      !isDirect &&
+      additionalServices.some(
+        (item) =>
+          !String(item.name || "").trim() ||
+          !Number.isFinite(Number(item.quantity)) ||
+          Number(item.quantity) <= 0 ||
+          !Number.isFinite(Number(item.unit_price_usd)) ||
+          Number(item.unit_price_usd) < 0,
+      )
+    )
+      return setError(
+        "Each additional service needs a name, quantity above 0, and a valid USD unit price.",
+      );
     setBusy(true);
     setError("");
     try {
@@ -35092,13 +35208,20 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
         product_url: cnNz(url),
         variant: cnNz(variant),
         quantity: qn,
-        unit_price_cny: pn,
-        cny_per_usd: rn,
-        product_total_cny: totals.productTotalCny,
-        domestic_shipping_cny: dn,
+        unit_price_cny: pricingMode === "cny" ? pn : 0,
+        cny_per_usd: pricingMode === "cny" ? rn : 1,
+        product_total_cny: pricingMode === "cny" ? totals.productTotalCny : 0,
+        domestic_shipping_cny: pricingMode === "cny" ? dn : 0,
         service_fee_pct: fn,
         service_fee_usd: totals.serviceFeeUsd,
         total_due_usd: totals.totalDueUsd,
+        pricing_mode: pricingMode,
+        unit_price_usd: pricingMode === "usd" ? pu : 0,
+        domestic_shipping_usd: pricingMode === "usd" ? dsu : 0,
+        goods_subtotal_usd: totals.goodsSubtotalUsd,
+        china_shipping_usd: totals.chinaShippingUsd,
+        additional_services: totals.additionalServices,
+        additional_services_total_usd: totals.additionalServicesTotalUsd,
         payment_status: paidEff ? "Paid" : "Unpaid",
         amount_paid_usd: paidEff ? totals.totalDueUsd : 0,
         payment_method: paidEff ? method : null,
@@ -35123,6 +35246,13 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
           service_fee_pct: 0,
           service_fee_usd: 0,
           total_due_usd: 0,
+          pricing_mode: "cny",
+          unit_price_usd: 0,
+          domestic_shipping_usd: 0,
+          goods_subtotal_usd: 0,
+          china_shipping_usd: 0,
+          additional_services: [],
+          additional_services_total_usd: 0,
           payment_status: "Unpaid",
           amount_paid_usd: 0,
           payment_method: null,
@@ -35365,6 +35495,31 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
       </div>
       <CnImagePicker files={imgFiles} setFiles={setImgFiles} />
 
+      {!isDirect && (
+        <div className="space-y-3 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+          <label className={LABEL_CLS}>Pricing Mode</label>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setPricingMode("usd")}
+              className={`rounded-xl border px-3 py-2.5 text-sm font-bold transition ${pricingMode === "usd" ? "border-blue-600 bg-blue-600 text-white shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-blue-300"}`}
+            >
+              USD Direct ($)
+            </button>
+            <button
+              type="button"
+              onClick={() => setPricingMode("cny")}
+              className={`rounded-xl border px-3 py-2.5 text-sm font-bold transition ${pricingMode === "cny" ? "border-blue-600 bg-blue-600 text-white shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-blue-300"}`}
+            >
+              CNY Exchange → USD
+            </button>
+          </div>
+          <p className="text-xs text-slate-500">
+            USD Direct uses your selling price. CNY Exchange converts the China
+            purchase price using the saved exchange rate.
+          </p>
+        </div>
+      )}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <div>
           <label className={LABEL_CLS}>Quantity {isDirect ? "" : "*"}</label>
@@ -35377,7 +35532,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
             onChange={(e) => setQty(e.target.value)}
           />
         </div>
-        <div className={isDirect ? "hidden" : ""}>
+        <div className={isDirect || pricingMode !== "cny" ? "hidden" : ""}>
           <label className={LABEL_CLS}>Unit Price (CNY) *</label>
           <input
             type="number"
@@ -35388,7 +35543,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
             onChange={(e) => setPrice(e.target.value)}
           />
         </div>
-        <div className={isDirect ? "hidden" : ""}>
+        <div className={isDirect || pricingMode !== "cny" ? "hidden" : ""}>
           <label className={LABEL_CLS}>China Shipping (CNY)</label>
           <input
             type="number"
@@ -35399,7 +35554,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
             onChange={(e) => setDomShip(e.target.value)}
           />
         </div>
-        <div className={isDirect ? "hidden" : ""}>
+        <div className={isDirect || pricingMode !== "cny" ? "hidden" : ""}>
           <label className={LABEL_CLS}>CNY per 1 USD *</label>
           <input
             type="number"
@@ -35409,6 +35564,30 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
             value={rate}
             onChange={(e) => setRate(e.target.value)}
             placeholder="e.g. 7.20"
+          />
+        </div>
+        <div className={isDirect || pricingMode !== "usd" ? "hidden" : ""}>
+          <label className={LABEL_CLS}>Unit Price (USD) *</label>
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            className={INPUT_CLS}
+            value={priceUsd}
+            onChange={(e) => setPriceUsd(e.target.value)}
+            placeholder="e.g. 25.00"
+          />
+        </div>
+        <div className={isDirect || pricingMode !== "usd" ? "hidden" : ""}>
+          <label className={LABEL_CLS}>China Shipping (USD)</label>
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            className={INPUT_CLS}
+            value={domShipUsd}
+            onChange={(e) => setDomShipUsd(e.target.value)}
+            placeholder="0.00"
           />
         </div>
         <div className={isDirect ? "hidden" : ""}>
@@ -35427,7 +35606,133 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
 
       {!isDirect && (
         <>
-          <CnTotalsBox totals={totals} rate={rate} />
+          <section className="rounded-xl border border-slate-200 p-3 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h4 className="text-sm font-bold text-slate-800">
+                  Additional Services
+                </h4>
+                <p className="text-xs text-slate-500">
+                  Optional extra charges in USD.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setAdditionalServices((items) => [
+                    ...items,
+                    {
+                      name: "",
+                      description: "",
+                      quantity: 1,
+                      unit_price_usd: "",
+                    },
+                  ])
+                }
+                className="shrink-0 rounded-lg bg-blue-600 px-3 py-2 text-xs font-bold text-white hover:bg-blue-700"
+              >
+                + Add Service
+              </button>
+            </div>
+            {additionalServices.length === 0 ? (
+              <p className="rounded-lg bg-slate-50 px-3 py-3 text-xs text-slate-400">
+                No additional services added.
+              </p>
+            ) : (
+              additionalServices.map((item, index) => (
+                <div
+                  key={index}
+                  className="grid grid-cols-1 sm:grid-cols-12 gap-2 rounded-lg bg-slate-50 p-2.5"
+                >
+                  <div className="sm:col-span-5">
+                    <label className={LABEL_CLS}>Service Name *</label>
+                    <input
+                      className={INPUT_CLS}
+                      value={item.name}
+                      onChange={(e) =>
+                        setAdditionalServices((items) =>
+                          items.map((x, i) =>
+                            i === index ? { ...x, name: e.target.value } : x,
+                          ),
+                        )
+                      }
+                      placeholder="e.g. Special Packaging"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className={LABEL_CLS}>Qty *</label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      className={INPUT_CLS}
+                      value={item.quantity}
+                      onChange={(e) =>
+                        setAdditionalServices((items) =>
+                          items.map((x, i) =>
+                            i === index
+                              ? { ...x, quantity: e.target.value }
+                              : x,
+                          ),
+                        )
+                      }
+                    />
+                  </div>
+                  <div className="sm:col-span-3">
+                    <label className={LABEL_CLS}>Unit Price (USD) *</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      className={INPUT_CLS}
+                      value={item.unit_price_usd}
+                      onChange={(e) =>
+                        setAdditionalServices((items) =>
+                          items.map((x, i) =>
+                            i === index
+                              ? { ...x, unit_price_usd: e.target.value }
+                              : x,
+                          ),
+                        )
+                      }
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="sm:col-span-2 flex items-end">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAdditionalServices((items) =>
+                          items.filter((_, i) => i !== index),
+                        )
+                      }
+                      className="w-full rounded-lg border border-red-200 px-2 py-2 text-xs font-semibold text-red-600 hover:bg-red-50"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  <div className="sm:col-span-12">
+                    <label className={LABEL_CLS}>Description (optional)</label>
+                    <input
+                      className={INPUT_CLS}
+                      value={item.description || ""}
+                      onChange={(e) =>
+                        setAdditionalServices((items) =>
+                          items.map((x, i) =>
+                            i === index
+                              ? { ...x, description: e.target.value }
+                              : x,
+                          ),
+                        )
+                      }
+                      placeholder="Optional service details"
+                    />
+                  </div>
+                </div>
+              ))
+            )}
+          </section>
+          <CnTotalsBox totals={totals} rate={rate} pricingMode={pricingMode} />
 
           <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
             <input
@@ -36859,16 +37164,77 @@ function CnOrderDetailPage() {
               <h2 className="font-bold text-sm mb-4">Payment</h2>
               <InfoGrid
                 items={[
-                  { label: "Goods (CNY)", value: cnCny(row.product_total_cny) },
                   {
-                    label: "China shipping",
-                    value: cnCny(row.domestic_shipping_cny),
+                    label: "Pricing mode",
+                    value:
+                      row.pricing_mode === "usd"
+                        ? "USD Direct"
+                        : "CNY Exchange to USD",
                   },
-                  { label: "Rate (CNY/USD)", value: row.cny_per_usd ?? "—" },
+                  ...(row.pricing_mode === "usd"
+                    ? [
+                        {
+                          label: "Unit price (USD)",
+                          value: money(row.unit_price_usd),
+                        },
+                        {
+                          label: "Goods subtotal (USD)",
+                          value: money(
+                            row.goods_subtotal_usd ??
+                              Number(row.unit_price_usd || 0) *
+                                Number(row.quantity || 0),
+                          ),
+                        },
+                        {
+                          label: "China shipping (USD)",
+                          value: money(
+                            row.domestic_shipping_usd ??
+                              row.china_shipping_usd ??
+                              0,
+                          ),
+                        },
+                      ]
+                    : [
+                        {
+                          label: "Goods (CNY)",
+                          value: cnCny(row.product_total_cny),
+                        },
+                        {
+                          label: "China shipping (CNY)",
+                          value: cnCny(row.domestic_shipping_cny),
+                        },
+                        {
+                          label: "Rate (CNY/USD)",
+                          value: row.cny_per_usd ?? "—",
+                        },
+                        {
+                          label: "Goods subtotal (USD)",
+                          value: money(row.goods_subtotal_usd ?? 0),
+                        },
+                        {
+                          label: "China shipping (USD)",
+                          value: money(row.china_shipping_usd ?? 0),
+                        },
+                      ]),
                   {
                     label: `Service fee ${row.service_fee_pct ?? 0}%`,
                     value: money(row.service_fee_usd),
                   },
+                  {
+                    label: "Additional services",
+                    value: money(row.additional_services_total_usd ?? 0),
+                  },
+                  ...(Array.isArray(row.additional_services)
+                    ? row.additional_services.map((service, index) => ({
+                        label:
+                          service.name || `Additional service ${index + 1}`,
+                        value: money(
+                          service.line_total_usd ??
+                            Number(service.quantity || 0) *
+                              Number(service.unit_price_usd || 0),
+                        ),
+                      }))
+                    : []),
                   { label: "Total due", value: money(due) },
                   { label: "Paid", value: money(paid) },
                   { label: "Remaining", value: money(Math.max(0, due - paid)) },
