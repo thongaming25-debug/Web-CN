@@ -27474,8 +27474,14 @@ const CustomerApp = (() => {
         .eq("customer_id", me.id)
         .order("created_at", { ascending: false })
         .limit(200);
-      if (!error) setRows(data || []);
-      else setRows([]);
+      if (!error) {
+        const list = data || [];
+        setRows(list);
+        attachCnCovers(list).then(
+          (withCovers) => setRows(withCovers),
+          () => {},
+        );
+      } else setRows([]);
       setLoading(false);
     }, [me?.id]);
 
@@ -27544,8 +27550,15 @@ const CustomerApp = (() => {
                   }
                   className="p-4 cursor-pointer active:bg-slate-50"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
+                  <div className="flex items-start gap-3">
+                    <AirImg
+                      src={r.cover_url}
+                      alt={r.product_name || r.order_id}
+                      className="w-14 h-14 rounded-xl"
+                      fallbackSize={22}
+                      FallbackIcon={Icons.ShoppingCart}
+                    />
+                    <div className="min-w-0 flex-1">
                       <p className="font-bold text-slate-900">{r.order_id}</p>
                       <p className="text-sm text-slate-600 truncate mt-1">
                         {r.product_name ||
@@ -27588,6 +27601,8 @@ const CustomerApp = (() => {
     const [row, setRow] = useState(null);
     const [history, setHistory] = useState([]);
     const [parcels, setParcels] = useState([]);
+    const [cnImages, setCnImages] = useState([]);
+    const [cnImagesLoading, setCnImagesLoading] = useState(true);
     const [loading, setLoading] = useState(true);
 
     const load = React.useCallback(async () => {
@@ -27607,6 +27622,11 @@ const CustomerApp = (() => {
       setRow(data || null);
 
       if (data?.id) {
+        setCnImagesLoading(true);
+        loadCnImages(data.id).then((imgs) => {
+          setCnImages(imgs);
+          setCnImagesLoading(false);
+        });
         const { data: h } = await supabase
           .from("cn_order_history")
           .select("event,status,created_at")
@@ -27744,6 +27764,14 @@ const CustomerApp = (() => {
               />
             </div>
           </Card>
+
+          <CnProductInfoCard
+            row={row}
+            images={cnImages}
+            loading={cnImagesLoading}
+            tr={tr}
+            Card={Card}
+          />
 
           {parcels.length > 0 && (
             <Card className="p-4">
@@ -31598,7 +31626,14 @@ async function makeAirImagePrimary(images, img, user) {
 }
 
 // Image with skeleton while loading and a graceful fallback (no broken icon).
-function AirImg({ src, alt = "", className = "", onClick, fallbackSize = 22 }) {
+function AirImg({
+  src,
+  alt = "",
+  className = "",
+  onClick,
+  fallbackSize = 22,
+  FallbackIcon = null,
+}) {
   const initial = (u) =>
     !u ? "empty" : AIR_IMG_LOADED.has(u) ? "ok" : "loading";
   const [state, setState] = useState(initial(src));
@@ -31617,7 +31652,11 @@ function AirImg({ src, alt = "", className = "", onClick, fallbackSize = 22 }) {
       )}
       {showFallback ? (
         <div className="absolute inset-0 grid place-items-center text-blue-400 bg-blue-50">
-          <Icons.Plane size={fallbackSize} />
+          {FallbackIcon ? (
+            <FallbackIcon size={fallbackSize} />
+          ) : (
+            <Icons.Plane size={fallbackSize} />
+          )}
         </div>
       ) : (
         <img
@@ -34204,6 +34243,507 @@ function CnTotalsBox({ totals, rate }) {
 // ------------------------------------------------------------
 // Create
 // ------------------------------------------------------------
+// ============================================================
+// CN Purchase Order product / package images
+// Private bucket "cn-order-images" ; rows in public.cn_order_images
+// (see supabase/cn_order_images.sql)
+// ============================================================
+const CN_IMG_BUCKET = "cn-order-images";
+const CN_IMG_MAX_COUNT = 5;
+const CN_IMG_MAX_BYTES = 5 * 1024 * 1024;
+const CN_IMG_TYPES = ["image/jpeg", "image/png", "image/webp"];
+
+function validateCnImage(file) {
+  if (!file) return "No file selected.";
+  if (!CN_IMG_TYPES.includes(file.type))
+    return "Only JPG, PNG or WEBP images are allowed.";
+  if (file.size > CN_IMG_MAX_BYTES) return "Image is larger than 5 MB.";
+  return "";
+}
+
+// Returns { ok, failed:[messages] }. Never throws for a single bad file.
+async function uploadCnImages(cnOrderId, files, user, startOrder = 0) {
+  let ok = 0;
+  const failed = [];
+  let order = startOrder;
+  for (const file of files) {
+    const bad = validateCnImage(file);
+    if (bad) {
+      failed.push(`${file.name}: ${bad}`);
+      continue;
+    }
+    let path = "";
+    try {
+      const dataUrl = await compressImage(file, 1280, 0.78);
+      const blob = await (await fetch(dataUrl)).blob();
+      path = `${cnOrderId}/${makeId()}.jpg`;
+      const { error: upErr } = await supabase.storage
+        .from(CN_IMG_BUCKET)
+        .upload(path, blob, { contentType: "image/jpeg" });
+      if (upErr) throw upErr;
+      const { error } = await supabase.from("cn_order_images").insert({
+        cn_order_id: cnOrderId,
+        storage_path: path,
+        sort_order: order++,
+        created_by: user?.name || user?.email || "Admin",
+      });
+      if (error) {
+        await supabase.storage.from(CN_IMG_BUCKET).remove([path]);
+        throw error;
+      }
+      ok++;
+    } catch (err) {
+      failed.push(`${file.name}: ${err.message || "upload failed"}`);
+    }
+  }
+  return { ok, failed };
+}
+
+// Same look as the AIR create screen: full-width dashed "+ Upload Image"
+// box, helper text, thumbnails with a remove (x) button.
+function CnImagePicker({ files, setFiles }) {
+  const [previews, setPreviews] = useState([]);
+  const inputRef = useRef(null);
+  useEffect(() => {
+    const urls = files.map((f) => URL.createObjectURL(f));
+    setPreviews(urls);
+    return () => urls.forEach((u) => URL.revokeObjectURL(u));
+  }, [files]);
+  function add(list) {
+    const next = [...files];
+    for (const f of Array.from(list || [])) {
+      const bad = validateCnImage(f);
+      if (bad) {
+        emitCBToast("err", "Invalid image", `${f.name}: ${bad}`);
+        continue;
+      }
+      if (next.length >= CN_IMG_MAX_COUNT) {
+        emitCBToast("err", "Too many images", `Maximum ${CN_IMG_MAX_COUNT}.`);
+        break;
+      }
+      next.push(f);
+    }
+    setFiles(next);
+    if (inputRef.current) inputRef.current.value = "";
+  }
+  return (
+    <div>
+      <label className={LABEL_CLS}>Product / Package Image</label>
+      {files.length < CN_IMG_MAX_COUNT && (
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          className="w-full h-20 rounded-xl border-2 border-dashed border-blue-200 bg-blue-50/40 text-blue-600 grid place-items-center hover:border-blue-400 hover:bg-blue-50 transition-colors"
+        >
+          <span className="flex flex-col items-center gap-1 text-xs font-semibold">
+            <Icons.Image size={20} />+ Upload Image
+          </span>
+        </button>
+      )}
+      <p className="text-[11px] text-slate-400 mt-1.5">
+        Supported: JPG, PNG, WEBP · Max 5MB each · up to {CN_IMG_MAX_COUNT}{" "}
+        images
+      </p>
+      {previews.length > 0 && (
+        <div className="flex flex-wrap gap-2 mt-2">
+          {previews.map((u, k) => (
+            <div key={u} className="relative w-16 h-16">
+              <img
+                src={u}
+                alt=""
+                className="w-full h-full object-cover rounded-xl border border-slate-200"
+              />
+              <button
+                type="button"
+                aria-label="Remove image"
+                onClick={() => setFiles(files.filter((_, j) => j !== k))}
+                className="absolute -right-1.5 -top-1.5 w-5 h-5 rounded-full bg-slate-900 text-white grid place-items-center"
+              >
+                <Icons.X size={11} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        accept="image/jpeg,image/png,image/webp"
+        className="hidden"
+        onChange={(e) => add(e.target.files)}
+      />
+    </div>
+  );
+}
+
+// ---- read side: signed URLs, covers, gallery helpers ----
+const CN_URL_CACHE = new Map(); // storage_path -> { url, at }
+async function signCnImagePaths(paths) {
+  const out = {};
+  if (!supabase || !paths.length) return out;
+  const now = Date.now();
+  const missing = [];
+  paths.forEach((p) => {
+    const c = CN_URL_CACHE.get(p);
+    if (c && now - c.at < 23 * 60 * 60 * 1000) out[p] = c.url;
+    else missing.push(p);
+  });
+  if (!missing.length) return out;
+  try {
+    const { data } = await supabase.storage
+      .from(CN_IMG_BUCKET)
+      .createSignedUrls(missing, 24 * 60 * 60);
+    (data || []).forEach((r) => {
+      if (r.signedUrl && r.path) {
+        out[r.path] = r.signedUrl;
+        CN_URL_CACHE.set(r.path, { url: r.signedUrl, at: now });
+      }
+    });
+  } catch {
+    /* images are optional — never break the page */
+  }
+  return out;
+}
+
+// All images of one CN order (sorted). Never throws.
+async function loadCnImages(cnOrderId) {
+  if (!supabase || !cnOrderId) return [];
+  try {
+    const { data, error } = await supabase
+      .from("cn_order_images")
+      .select("id,cn_order_id,storage_path,sort_order,created_at")
+      .eq("cn_order_id", cnOrderId)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (error || !data?.length) return [];
+    const urls = await signCnImagePaths(data.map((r) => r.storage_path));
+    return data.map((r) => ({ ...r, url: urls[r.storage_path] || "" }));
+  } catch {
+    return [];
+  }
+}
+
+// Adds cover_url + image_count to the first `limit` rows (2 small queries).
+async function attachCnCovers(rows, limit = 300) {
+  if (!supabase || !rows?.length) return rows;
+  try {
+    const target = rows.slice(0, limit);
+    const cover = {};
+    const count = {};
+    for (let i = 0; i < target.length; i += 100) {
+      const ids = target.slice(i, i + 100).map((r) => r.id);
+      const { data, error } = await supabase
+        .from("cn_order_images")
+        .select("cn_order_id,storage_path,sort_order,created_at")
+        .in("cn_order_id", ids)
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true });
+      if (error) continue;
+      (data || []).forEach((r) => {
+        count[r.cn_order_id] = (count[r.cn_order_id] || 0) + 1;
+        if (!cover[r.cn_order_id]) cover[r.cn_order_id] = r.storage_path;
+      });
+    }
+    const urls = await signCnImagePaths(Object.values(cover));
+    return rows.map((r) =>
+      cover[r.id]
+        ? {
+            ...r,
+            cover_url: urls[cover[r.id]] || "",
+            image_count: count[r.id] || 0,
+          }
+        : r,
+    );
+  } catch {
+    return rows;
+  }
+}
+
+async function deleteCnImage(img, user) {
+  requirePermission(user, "cn_order.edit");
+  const { error } = await supabase
+    .from("cn_order_images")
+    .delete()
+    .eq("id", img.id);
+  if (error) throw error;
+  await supabase.storage
+    .from(CN_IMG_BUCKET)
+    .remove([img.storage_path])
+    .catch(() => {});
+}
+
+async function makeCnImagePrimary(images, img, user) {
+  requirePermission(user, "cn_order.edit");
+  const ordered = [img, ...images.filter((x) => x.id !== img.id)];
+  for (let i = 0; i < ordered.length; i++) {
+    if (ordered[i].sort_order === i) continue;
+    const { error } = await supabase
+      .from("cn_order_images")
+      .update({ sort_order: i, updated_at: new Date().toISOString() })
+      .eq("id", ordered[i].id);
+    if (error) throw error;
+  }
+}
+
+// Customer card (same look as AIR "Product Information"): image(s) +
+// name / variant / qty / total. View only.
+function CnProductInfoCard({ row, images, loading, tr, Card }) {
+  const [idx, setIdx] = useState(0);
+  const [viewer, setViewer] = useState(false);
+  const touchX = useRef(null);
+  const n = images.length;
+  const cur = images[Math.min(idx, Math.max(n - 1, 0))];
+  const qty = Number(row.quantity);
+  const total = Number(row.total_due_usd);
+  const showTotal =
+    row.order_type !== "direct" && Number.isFinite(total) && total > 0;
+  return (
+    <Card className="p-5">
+      <h2 className="font-bold mb-4">
+        {tr("Product Information", "ព័ត៌មានផលិតផល")}
+      </h2>
+      <div className="flex gap-4">
+        <div className="shrink-0">
+          {loading ? (
+            <div className="w-28 h-28 rounded-2xl bg-slate-200/70 animate-pulse" />
+          ) : (
+            <div
+              onTouchStart={(e) => (touchX.current = e.touches[0].clientX)}
+              onTouchEnd={(e) => {
+                if (touchX.current == null || n < 2) return;
+                const dx = e.changedTouches[0].clientX - touchX.current;
+                touchX.current = null;
+                if (Math.abs(dx) > 40)
+                  setIdx((v) => (v + (dx < 0 ? 1 : -1) + n) % n);
+              }}
+            >
+              <AirImg
+                src={cur?.url}
+                alt={row.product_name || "Product"}
+                onClick={n ? () => setViewer(true) : undefined}
+                className="w-28 h-28 rounded-2xl"
+                fallbackSize={30}
+                FallbackIcon={Icons.ShoppingCart}
+              />
+            </div>
+          )}
+          {n > 1 && (
+            <div className="flex justify-center gap-1.5 mt-2">
+              {images.map((im, k) => (
+                <button
+                  key={im.id}
+                  type="button"
+                  aria-label={`Image ${k + 1}`}
+                  onClick={() => setIdx(k)}
+                  className={`h-1.5 rounded-full transition-all ${k === idx ? "w-4 bg-blue-600" : "w-1.5 bg-slate-300"}`}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="flex-1 min-w-0 flex flex-col">
+          <p className="font-bold text-[15px] leading-snug break-words">
+            {row.product_name || row.product_url || "—"}
+          </p>
+          {(row.variant || qty > 0) && (
+            <p className="text-[13px] text-slate-500 mt-1 break-words">
+              {[row.variant, qty > 0 ? `${qty}pcs` : ""]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+          )}
+          {showTotal && (
+            <p className="font-bold text-[15px] mt-2">{money(total)}</p>
+          )}
+          {n > 0 && (
+            <button
+              type="button"
+              onClick={() => setViewer(true)}
+              className="mt-auto self-start h-8 px-3 rounded-full bg-blue-600 text-white text-xs font-bold inline-flex items-center gap-1"
+            >
+              {tr("View All", "មើលទាំងអស់")} ({n})
+              <Icons.ArrowRight size={13} />
+            </button>
+          )}
+        </div>
+      </div>
+      {viewer && (
+        <AirImageViewerFull
+          images={images}
+          start={idx}
+          onClose={() => setViewer(false)}
+        />
+      )}
+    </Card>
+  );
+}
+
+// Staff: add / delete / set-primary images of an existing CN order.
+// Every change is saved immediately.
+function CnImagesModal({ open, row, onClose }) {
+  const { user } = useAuth();
+  const [images, setImages] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef(null);
+  const refresh = React.useCallback(async () => {
+    if (row?.id) setImages(await loadCnImages(row.id));
+  }, [row?.id]);
+  useEffect(() => {
+    if (open && row) refresh();
+  }, [open, row, refresh]);
+  if (!open || !row) return null;
+  async function addFiles(list) {
+    const files = Array.from(list || []);
+    if (fileRef.current) fileRef.current.value = "";
+    if (!files.length) return;
+    if (images.length + files.length > CN_IMG_MAX_COUNT)
+      return emitCBToast(
+        "err",
+        "Too many images",
+        `Maximum ${CN_IMG_MAX_COUNT} images per order.`,
+      );
+    setBusy(true);
+    try {
+      requirePermission(user, "cn_order.edit");
+      const start =
+        Math.max(-1, ...images.map((i) => Number(i.sort_order) || 0)) + 1;
+      const { ok, failed } = await uploadCnImages(row.id, files, user, start);
+      if (ok) emitCBToast("ok", "Image uploaded", `${ok} image(s) saved.`);
+      if (failed.length) emitCBToast("err", "Upload failed", failed[0]);
+      await refresh();
+    } catch (err) {
+      emitCBToast("err", "Upload failed", err.message || "Not allowed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function remove(img) {
+    const ok = await confirmDialog({
+      title: "Delete image?",
+      message: "This image will be removed from the order.",
+      confirmText: "Delete",
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await deleteCnImage(img, user);
+      emitCBToast("ok", "Image deleted", "The image was removed.");
+      await refresh();
+    } catch (err) {
+      emitCBToast("err", "Delete failed", err.message || "Not allowed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function primary(img) {
+    setBusy(true);
+    try {
+      await makeCnImagePrimary(images, img, user);
+      await refresh();
+    } catch (err) {
+      emitCBToast("err", "Update failed", err.message || "Not allowed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-lg rounded-2xl bg-white shadow-2xl overflow-hidden"
+      >
+        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <div>
+            <h3 className="font-bold text-lg">Product / Package Images</h3>
+            <p className="text-xs text-slate-500 mt-0.5">{row.order_id}</p>
+          </div>
+          <button type="button" onClick={onClose}>
+            <Icons.X size={18} />
+          </button>
+        </div>
+        <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
+          {images.length < CN_IMG_MAX_COUNT && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => fileRef.current?.click()}
+              className="w-full h-20 rounded-xl border-2 border-dashed border-blue-200 bg-blue-50/40 text-blue-600 grid place-items-center hover:border-blue-400 hover:bg-blue-50 transition-colors disabled:opacity-50"
+            >
+              {busy ? (
+                <Loader2 size={20} className="animate-spin" />
+              ) : (
+                <span className="flex flex-col items-center gap-1 text-xs font-semibold">
+                  <Icons.Image size={20} />+ Upload Image
+                </span>
+              )}
+            </button>
+          )}
+          <p className="text-[11px] text-slate-400">
+            Supported: JPG, PNG, WEBP · Max 5MB each · up to {CN_IMG_MAX_COUNT}{" "}
+            images. Changes are saved immediately.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            {images.map((im, k) => (
+              <div key={im.id} className="relative w-24 h-24">
+                <AirImg
+                  src={im.url}
+                  className="w-24 h-24 rounded-xl border border-slate-200"
+                  fallbackSize={18}
+                  FallbackIcon={Icons.ShoppingCart}
+                />
+                {k === 0 ? (
+                  <span className="absolute left-1 bottom-1 text-[9px] font-bold bg-blue-600 text-white rounded px-1">
+                    Primary
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => primary(im)}
+                    className="absolute left-1 bottom-1 text-[9px] font-bold bg-white/90 text-slate-700 rounded px-1"
+                  >
+                    Set primary
+                  </button>
+                )}
+                <button
+                  type="button"
+                  aria-label="Delete image"
+                  disabled={busy}
+                  onClick={() => remove(im)}
+                  className="absolute -right-1.5 -top-1.5 w-5 h-5 rounded-full bg-red-600 text-white grid place-items-center"
+                >
+                  <Icons.Trash2 size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            accept="image/jpeg,image/png,image/webp"
+            className="hidden"
+            onChange={(e) => addFiles(e.target.files)}
+          />
+        </div>
+        <div className="px-5 py-4 border-t border-slate-200 flex justify-end">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-10 px-4 rounded-xl border border-slate-200 text-sm font-semibold"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CnOrderCreateModal({ open, onClose, onSaved }) {
   const { user } = useAuth();
   const [query, setQuery] = useState("");
@@ -34224,6 +34764,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
   const [method, setMethod] = useState(CN_PAYMENT_METHODS[0]);
   const [ref, setRef] = useState("");
   const [note, setNote] = useState("");
+  const [imgFiles, setImgFiles] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const { results: customerResults, loading: customerLoading } =
@@ -34251,6 +34792,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
     setMethod(CN_PAYMENT_METHODS[0]);
     setRef("");
     setNote("");
+    setImgFiles([]);
     setBusy(false);
     setError("");
   }, [open]);
@@ -34363,6 +34905,21 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
           note: `Payment received ${money(totals.totalDueUsd)} via ${method}${cnNz(ref) ? ` · ${ref.trim()}` : ""}`,
         });
       await supabase.from("cn_order_history").insert(hist);
+      if (imgFiles.length) {
+        // The order is already saved; an image problem never undoes it.
+        try {
+          const { ok, failed } = await uploadCnImages(data.id, imgFiles, user);
+          if (ok) emitCBToast("ok", "Image uploaded", `${ok} image(s) saved.`);
+          if (failed.length)
+            emitCBToast("err", "Image upload failed", failed[0]);
+        } catch (imgErr) {
+          emitCBToast(
+            "err",
+            "Image upload failed",
+            imgErr.message || "Not allowed.",
+          );
+        }
+      }
       if (isDirect) {
         const tracks = [
           ...new Set(
@@ -34556,6 +35113,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
           onChange={(e) => setVariant(e.target.value)}
         />
       </div>
+      <CnImagePicker files={imgFiles} setFiles={setImgFiles} />
 
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <div>
@@ -35401,8 +35959,13 @@ function CnOrdersPage() {
       .select("*")
       .order("created_at", { ascending: false })
       .limit(5000);
-    setRows(data || []);
+    const list = data || [];
+    setRows(list);
     setLoading(false);
+    attachCnCovers(list).then(
+      (withCovers) => setRows(withCovers),
+      () => {},
+    );
   }, []);
   useEffect(() => {
     load();
@@ -35598,12 +36161,25 @@ function CnOrdersPage() {
                       {r.customer || "—"}
                     </td>
                     <td className="px-4 py-3 text-slate-600">
-                      <span className="block truncate max-w-[260px]">
-                        {r.product_name || r.product_url || "—"}
-                      </span>
-                      <span className="text-xs text-slate-400">
-                        {[r.platform, r.shop_name].filter(Boolean).join(" · ")}
-                      </span>
+                      <div className="flex items-center gap-3">
+                        <AirImg
+                          src={r.cover_url}
+                          alt={r.product_name || r.order_id}
+                          className="w-11 h-11 rounded-lg border border-slate-200"
+                          fallbackSize={16}
+                          FallbackIcon={Icons.ShoppingCart}
+                        />
+                        <div className="min-w-0">
+                          <span className="block truncate max-w-[220px]">
+                            {r.product_name || r.product_url || "—"}
+                          </span>
+                          <span className="text-xs text-slate-400">
+                            {[r.platform, r.shop_name]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </span>
+                        </div>
+                      </div>
                     </td>
                     <td className="px-4 py-3 font-semibold text-slate-900">
                       {money(r.total_due_usd)}
@@ -35652,6 +36228,10 @@ function CnOrderDetailPage() {
   const [refundOpen, setRefundOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [newTrack, setNewTrack] = useState("");
+  const [cnImages, setCnImages] = useState([]);
+  const [cnViewer, setCnViewer] = useState(-1);
+  const [cnImgOpen, setCnImgOpen] = useState(false);
+  const [cnMenuOpen, setCnMenuOpen] = useState(false);
   const canPay = hasPermission(user, "cn_order.payment"),
     canPurchase = hasPermission(user, "cn_order.purchase"),
     canRefund = hasPermission(user, "cn_order.refund"),
@@ -35704,6 +36284,12 @@ function CnOrderDetailPage() {
   useEffect(() => {
     load();
   }, [load]);
+  const reloadCnImages = React.useCallback(async (orderRowId) => {
+    setCnImages(await loadCnImages(orderRowId));
+  }, []);
+  useEffect(() => {
+    if (row?.id) reloadCnImages(row.id);
+  }, [row?.id, reloadCnImages]);
 
   // Live refresh when the order or one of its TKs changes (Supabase stays
   // the source of truth; this only re-reads it).
@@ -35857,31 +36443,88 @@ function CnOrderDetailPage() {
               {next}
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => setHistoryOpen(true)}
-            className="h-10 px-3 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50"
-          >
-            History
-          </button>
-          {canRefund && !terminal && cnCanRefund(row.status) && (
+          <div className="relative">
             <button
               type="button"
-              onClick={() => setRefundOpen(true)}
-              className="h-10 px-3 rounded-xl bg-red-600 text-white text-sm font-bold"
+              onClick={() => setCnMenuOpen((v) => !v)}
+              aria-haspopup="menu"
+              aria-expanded={cnMenuOpen}
+              className="h-10 px-3 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50 inline-flex items-center gap-1.5"
             >
-              Refund Order
+              Actions{" "}
+              <Icons.ChevronDown
+                size={15}
+                className={`transition-transform duration-200 ${cnMenuOpen ? "rotate-180" : ""}`}
+              />
             </button>
-          )}
-          {canDelete && (
-            <button
-              type="button"
-              onClick={handleDelete}
-              className="h-10 px-3 rounded-xl border border-red-200 text-red-600 text-sm font-semibold hover:bg-red-50 inline-flex items-center gap-1.5"
-            >
-              <Icons.Trash2 size={15} /> Delete
-            </button>
-          )}
+            {cnMenuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-30"
+                  onClick={() => setCnMenuOpen(false)}
+                />
+                <div
+                  role="menu"
+                  className="absolute right-0 top-11 z-40 w-52 rounded-xl border border-slate-200 bg-white p-1 shadow-lg"
+                >
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setCnMenuOpen(false);
+                      setHistoryOpen(true);
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    <Icons.History size={15} /> History
+                  </button>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setCnMenuOpen(false);
+                        setCnImgOpen(true);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      <Icons.Image size={15} /> Product Images
+                    </button>
+                  )}
+                  {((canRefund && !terminal && cnCanRefund(row.status)) ||
+                    canDelete) && (
+                    <div className="my-1 border-t border-slate-100" />
+                  )}
+                  {canRefund && !terminal && cnCanRefund(row.status) && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setCnMenuOpen(false);
+                        setRefundOpen(true);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-red-600 hover:bg-red-50"
+                    >
+                      <Icons.RotateCcw size={15} /> Refund Order
+                    </button>
+                  )}
+                  {canDelete && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setCnMenuOpen(false);
+                        handleDelete();
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-red-600 hover:bg-red-50"
+                    >
+                      <Icons.Trash2 size={15} /> Delete Order
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -35996,6 +36639,41 @@ function CnOrderDetailPage() {
               />
             </div>
           )}
+          {(cnImages.length > 0 || canEdit) && (
+            <div className="cb-surface p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="font-bold text-sm">
+                  Product / Package Images
+                  {cnImages.length > 0 ? ` (${cnImages.length})` : ""}
+                </h2>
+                {canEdit && (
+                  <button
+                    type="button"
+                    onClick={() => setCnImgOpen(true)}
+                    className="h-8 px-3 rounded-lg border border-slate-200 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-50 inline-flex items-center gap-1.5"
+                  >
+                    <Icons.Image size={13} />
+                    {cnImages.length ? "Manage" : "Add"}
+                  </button>
+                )}
+              </div>
+              {cnImages.length > 0 ? (
+                <div className="flex flex-wrap gap-3">
+                  {cnImages.map((im, k) => (
+                    <AirImg
+                      key={im.id}
+                      src={im.url}
+                      onClick={() => setCnViewer(k)}
+                      className="w-24 h-24 rounded-xl border border-slate-200"
+                      FallbackIcon={Icons.ShoppingCart}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400">No images yet.</p>
+              )}
+            </div>
+          )}
           <div className="cb-surface p-5">
             <h2 className="font-bold text-sm mb-4">Order Information</h2>
             <InfoGrid
@@ -36060,6 +36738,23 @@ function CnOrderDetailPage() {
         </div>
       </div>
 
+      {cnViewer >= 0 && (
+        <AirImageViewer
+          images={cnImages}
+          start={cnViewer}
+          onClose={() => setCnViewer(-1)}
+        />
+      )}
+      {cnImgOpen && (
+        <CnImagesModal
+          open
+          row={row}
+          onClose={() => {
+            setCnImgOpen(false);
+            reloadCnImages(row.id);
+          }}
+        />
+      )}
       <CnPaymentModal
         open={payOpen}
         row={row}
