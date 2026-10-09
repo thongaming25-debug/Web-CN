@@ -23986,6 +23986,43 @@ const CustomerApp = (() => {
       "ការបញ្ជាទិញផ្លូវអាកាសត្រូវបានសងប្រាក់វិញ",
     ],
   };
+  // CN Purchase Order (Buy for Me · China) status changes.
+  const CN_ORDER_NOTIF = {
+    "Order Processing": [
+      "Your CN order is being processed",
+      "ការបញ្ជាទិញពីចិនកំពុងដំណើរការ",
+    ],
+    Purchased: [
+      "Your CN order has been purchased",
+      "ទំនិញរបស់អ្នកត្រូវបានទិញរួចហើយ",
+    ],
+    "Shipping to China WH": [
+      "Your goods are being sent to the China warehouse",
+      "ទំនិញកំពុងដឹកទៅឃ្លាំងចិន",
+    ],
+    Inbound: [
+      "Your goods arrived at the China warehouse",
+      "ទំនិញចូលឃ្លាំងចិនហើយ",
+    ],
+    Outbound: ["Your goods left the China warehouse", "ទំនិញចេញពីឃ្លាំងចិនហើយ"],
+    Arrived: ["Your goods arrived in Cambodia", "ទំនិញមកដល់កម្ពុជាហើយ"],
+    "Shipping to Branch": [
+      "Your goods are on the way to the branch",
+      "ទំនិញកំពុងដឹកទៅសាខា",
+    ],
+    "Inbound Warehouse": [
+      "Goods arrived at the branch · ready for pickup",
+      "ទំនិញចូលឃ្លាំងសាខា · ត្រៀមយក",
+    ],
+    "Complete Order": [
+      "Your CN order is completed",
+      "ការបញ្ជាទិញពីចិនបានបញ្ចប់",
+    ],
+    "Refund Order": [
+      "Your CN order was refunded",
+      "ការបញ្ជាទិញពីចិនត្រូវបានសងប្រាក់វិញ",
+    ],
+  };
   const fmtDateTime = (iso) =>
     iso
       ? new Date(iso).toLocaleString(dateLoc(), {
@@ -24042,8 +24079,11 @@ const CustomerApp = (() => {
     const tr = (en, km) => (lang === "km" ? km : en);
     const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
     const [me, setMe] = useState(null);
+    const meIdRef = useRef(null);
+    meIdRef.current = me?.id || null;
     const [ships, setShips] = useState([]);
     const [airShips, setAirShips] = useState([]);
+    const [cnOrders, setCnOrders] = useState([]);
     const [addrs, setAddrs] = useState([]);
     const [branches, setBranches] = useState([]); // Active Cambodia receiving branches
     const [branchErr, setBranchErr] = useState("");
@@ -24102,6 +24142,40 @@ const CustomerApp = (() => {
       }
     };
 
+    // CN Purchase Orders follow the same refresh cycle as shipments, so the
+    // dashboard, the list and the notifications always agree.
+    const loadCnOrders = async (cid) => {
+      const customerId = cid || meIdRef.current;
+      if (!supabase || !customerId) {
+        setCnOrders([]);
+        return;
+      }
+      const { data, error } = await supabase
+        .from("cn_orders")
+        .select(
+          "id,order_id,customer_id,order_type,product_name,product_url,shop_name,platform,variant,quantity,total_due_usd,payment_status,status,created_at,updated_at",
+        )
+        .eq("customer_id", customerId)
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (error) return;
+      const list = data || [];
+      // keep already-loaded covers while the fresh rows arrive (no flicker)
+      setCnOrders((prev) => {
+        const old = new Map(prev.map((r) => [r.id, r]));
+        return list.map((r) => {
+          const o = old.get(r.id);
+          return o?.cover_url
+            ? { ...r, cover_url: o.cover_url, image_count: o.image_count }
+            : r;
+        });
+      });
+      attachCnCovers(list).then(
+        (withCovers) => setCnOrders(withCovers),
+        () => {},
+      );
+    };
+
     const loadShips = async () => {
       const [{ data: pkgs }, { data: ords }, { data: feeRows }] =
         await Promise.all([
@@ -24156,7 +24230,7 @@ const CustomerApp = (() => {
       });
     };
     const refreshMoney = () =>
-      Promise.all([loadShips(), loadAirShips(), loadWallet()]);
+      Promise.all([loadShips(), loadAirShips(), loadCnOrders(), loadWallet()]);
     const payShipping = async (tk) => {
       const { error } = await supabase.rpc("pay_shipping_fee", {
         p_tk: tk,
@@ -24227,6 +24301,7 @@ const CustomerApp = (() => {
       if (!session) {
         setMe(null);
         setShips([]);
+        setCnOrders([]);
         setAddrs([]);
         setLoading(false);
         return;
@@ -24238,6 +24313,7 @@ const CustomerApp = (() => {
           await Promise.all([
             loadShips(),
             loadAirShips(),
+            loadCnOrders(m.id),
             loadWallet(),
             loadAddrs(),
             loadBranches(),
@@ -24616,6 +24692,54 @@ const CustomerApp = (() => {
             });
           });
         }
+        if (cnOrders.length) {
+          const byId = Object.fromEntries(cnOrders.map((o) => [o.id, o]));
+          let hist = [];
+          if (supabase) {
+            const { data } = await supabase
+              .from("cn_order_history")
+              .select("cn_order_id, event, status, created_at")
+              .in(
+                "cn_order_id",
+                cnOrders.map((o) => o.id),
+              );
+            hist = data || [];
+          }
+          const covered = new Set();
+          hist.forEach((h) => {
+            const o = byId[h.cn_order_id];
+            const st = cnNormalizeStatus(h.status);
+            if (
+              !o ||
+              !h.created_at ||
+              (h.event && h.event !== "status") ||
+              !CN_ORDER_NOTIF[st]
+            )
+              return;
+            covered.add(o.id);
+            events.push({
+              id: `cnord-${o.id}-${st}-${h.created_at}`,
+              kind: "cnorder",
+              to: P(`/cn-orders/${encodeURIComponent(o.order_id)}`),
+              title: CN_ORDER_NOTIF[st],
+              text: `${o.order_id}${o.product_name ? ` · ${o.product_name}` : ""}`,
+              at: h.created_at,
+            });
+          });
+          // Orders with no history rows: fall back to their current status.
+          cnOrders.forEach((o) => {
+            const st = cnNormalizeStatus(o.status);
+            if (covered.has(o.id) || !CN_ORDER_NOTIF[st]) return;
+            events.push({
+              id: `cnord-${o.id}-${st}`,
+              kind: "cnorder",
+              to: P(`/cn-orders/${encodeURIComponent(o.order_id)}`),
+              title: CN_ORDER_NOTIF[st],
+              text: `${o.order_id}${o.product_name ? ` · ${o.product_name}` : ""}`,
+              at: o.updated_at || o.created_at,
+            });
+          });
+        }
         events.sort((a, b) => new Date(b.at) - new Date(a.at));
         if (!alive) return;
         const list = events.slice(0, 100);
@@ -24630,13 +24754,14 @@ const CustomerApp = (() => {
         alive = false;
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [ships, airShips]);
+    }, [ships, airShips, cnOrders]);
     // Pick up new statuses without a manual refresh (every minute).
     useEffect(() => {
       if (!supabase || !session) return undefined;
       const t = setInterval(() => {
         loadShips();
         loadAirShips();
+        loadCnOrders();
       }, 60000);
       return () => clearInterval(t);
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -24673,6 +24798,7 @@ const CustomerApp = (() => {
       removeAvatar,
       ships,
       airShips,
+      cnOrders,
       notifs,
       unread,
       seenAt,
@@ -25428,6 +25554,40 @@ const CustomerApp = (() => {
     );
   }
 
+  // ---------- CN Purchase Order row (Home feed) ----------
+  function CnRow({ s }) {
+    const nav = useNavigate();
+    const { tr } = useApp();
+    return (
+      <Card
+        onClick={() => nav(P("/cn-orders/" + encodeURIComponent(s.order_id)))}
+        className="p-3.5 flex items-center gap-3 cursor-pointer active:bg-slate-50"
+      >
+        <AirImg
+          src={s.cover_url}
+          alt={s.product_name || s.order_id}
+          className="w-14 h-14 rounded-xl"
+          fallbackSize={22}
+          FallbackIcon={Icons.ShoppingCart}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <b className="text-[15px] truncate">{s.order_id}</b>
+            <CnStatusBadge status={s.status} />
+          </div>
+          <p className="text-[13px] text-slate-500 truncate">
+            {tr("CN Order", "ការបញ្ជាទិញពីចិន")} ·{" "}
+            {s.product_name || s.shop_name || s.product_url || "—"}
+          </p>
+          <p className="text-xs text-slate-400">
+            {tr("Created", "បង្កើតនៅ")}: {fmtDate(s.created_at)}
+          </p>
+        </div>
+        <ChevronRight size={18} className="text-slate-300" />
+      </Card>
+    );
+  }
+
   function Row({ s }) {
     const nav = useNavigate();
     const { tr } = useApp();
@@ -25456,7 +25616,7 @@ const CustomerApp = (() => {
 
   // ---------- Home ----------
   function HomePage() {
-    const { me, ships, airShips, wallet, unread, tr } = useApp();
+    const { me, ships, airShips, cnOrders, wallet, unread, tr } = useApp();
     // Company name + logo come from Admin → Settings → Company Profile.
     const brand = useSystemSettings()?.company;
     const brandName = brand?.name || "Cargo Bridge";
@@ -25474,39 +25634,56 @@ const CustomerApp = (() => {
       airShips.filter((s) =>
         f(airStatusIndex(s.status), canonicalAirStatus(s.status)),
       ).length;
+    // CN Purchase Orders map onto the same dashboard cards.
+    const cnCnt = (names) =>
+      cnOrders.filter((o) => names.includes(cnNormalizeStatus(o.status)))
+        .length;
     const stats = [
       [
         "Total",
         "សរុប",
-        ships.length + airShips.length,
+        ships.length + airShips.length + cnOrders.length,
         "bg-slate-100 text-slate-700",
         Package,
       ],
       [
         "In Transit",
         "កំពុងដឹក",
-        cnt((n) => n >= 0 && n <= 1) + airCnt((i) => i >= 0 && i <= 3),
+        cnt((n) => n >= 0 && n <= 1) +
+          airCnt((i) => i >= 0 && i <= 3) +
+          cnCnt([
+            "Order Processing",
+            "Purchased",
+            "Shipping to China WH",
+            "Inbound",
+            "Outbound",
+          ]),
         "bg-blue-50 text-blue-600",
         Ship,
       ],
       [
         "Arrived",
         "មកដល់",
-        cnt((n) => n === 2 || n === 3),
+        cnt((n) => n === 2 || n === 3) +
+          cnCnt(["Arrived", "Shipping to Branch"]),
         "bg-green-50 text-green-600",
         Check,
       ],
       [
         "Ready for Pickup",
         "ត្រៀមយក",
-        cnt((n) => n === 4) + airCnt((i) => i === 4),
+        cnt((n) => n === 4) +
+          airCnt((i) => i === 4) +
+          cnCnt(["Inbound Warehouse"]),
         "bg-orange-50 text-orange-500",
         Warehouse,
       ],
       [
         "Completed",
         "បញ្ចប់",
-        cnt((n) => n === 5) + airCnt((i) => i === 5),
+        cnt((n) => n === 5) +
+          airCnt((i) => i === 5) +
+          cnCnt(["Complete Order"]),
         "bg-violet-50 text-violet-600",
         ShieldCheck,
       ],
@@ -25529,6 +25706,12 @@ const CustomerApp = (() => {
         t: ts(s.updated_at || s.created_at),
         s,
       })),
+      ...(feat("tab_cn_orders") ? cnOrders : []).map((s) => ({
+        kind: "cn",
+        key: "c-" + s.id,
+        t: ts(s.updated_at || s.created_at),
+        s,
+      })),
     ].sort((a, b) => b.t - a.t);
     const needle = q.trim().toLowerCase();
     const hit =
@@ -25545,7 +25728,13 @@ const CustomerApp = (() => {
             ),
       );
     const renderItem = ({ kind, key, s }) =>
-      kind === "sea" ? <Row key={key} s={s} /> : <AirRow key={key} s={s} />;
+      kind === "sea" ? (
+        <Row key={key} s={s} />
+      ) : kind === "cn" ? (
+        <CnRow key={key} s={s} />
+      ) : (
+        <AirRow key={key} s={s} />
+      );
     return (
       <>
         <header className="bg-blue-600 text-white px-5 pt-6 pb-16 rounded-b-3xl">
@@ -26051,7 +26240,12 @@ const CustomerApp = (() => {
           ) : notifs.length ? (
             notifs.map((n) => {
               const fresh = new Date(n.at).getTime() > seenOnOpen;
-              const IconC = n.kind === "air" ? Icons.Plane : Package;
+              const IconC =
+                n.kind === "air"
+                  ? Icons.Plane
+                  : n.kind === "cnorder"
+                    ? Icons.ShoppingCart
+                    : Package;
               return (
                 <Card
                   key={n.id}
@@ -26061,7 +26255,7 @@ const CustomerApp = (() => {
                   <Icon
                     i={IconC}
                     c={
-                      n.kind === "air"
+                      n.kind === "air" || n.kind === "cnorder"
                         ? "bg-blue-50 text-blue-600"
                         : "bg-emerald-50 text-emerald-600"
                     }
@@ -26079,7 +26273,9 @@ const CustomerApp = (() => {
                     <p className="text-[11px] text-slate-400 mt-1">
                       {n.kind === "air"
                         ? tr("AIR · ", "ផ្លូវអាកាស · ")
-                        : tr("China · ", "ចិន · ")}
+                        : n.kind === "cnorder"
+                          ? tr("CN Order · ", "ការបញ្ជាទិញពីចិន · ")
+                          : tr("China · ", "ចិន · ")}
                       {fmtDateTime(n.at)}
                     </p>
                   </div>
@@ -27453,11 +27649,34 @@ const CustomerApp = (() => {
 
   // ---------- CN Purchase Orders for Customer ----------
   // Customer-safe view: only rows belonging to the signed-in customer.
+  // Status filter chips for the CN Purchase Orders list (same style as
+  // "My Shipments"). [key, English, Khmer, statuses | null = all]
+  const CN_TABS = [
+    ["All", "All", "ទាំងអស់", null],
+    [
+      "Processing",
+      "Processing",
+      "កំពុងរៀបចំ",
+      ["Order Processing", "Purchased"],
+    ],
+    [
+      "In Transit",
+      "In Transit",
+      "កំពុងដឹក",
+      ["Shipping to China WH", "Inbound", "Outbound"],
+    ],
+    ["Arrived", "Arrived", "មកដល់", ["Arrived", "Shipping to Branch"]],
+    ["Ready", "Ready", "ត្រៀមយក", ["Inbound Warehouse"]],
+    ["Completed", "Completed", "បានបញ្ចប់", ["Complete Order"]],
+    ["Refund", "Refund", "សងប្រាក់វិញ", ["Refund Order"]],
+  ];
+
   function CustomerCnOrders() {
     const { me, tr } = useApp();
     const nav = useNavigate();
     const [rows, setRows] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [tab, setTab] = useState("All");
 
     const load = React.useCallback(async () => {
       if (!supabase || !me?.id) {
@@ -27492,6 +27711,10 @@ const CustomerApp = (() => {
     const active = rows.filter(
       (r) => !CN_ORDER_TERMINAL_STATUSES.has(cnNormalizeStatus(r.status)),
     ).length;
+    const inTab = (r, names) =>
+      !names || names.includes(cnNormalizeStatus(r.status));
+    const curTab = CN_TABS.find((x) => x[0] === tab) || CN_TABS[0];
+    const list = rows.filter((r) => inTab(r, curTab[3]));
 
     return (
       <div className="min-h-screen bg-slate-50 px-4 pt-5 pb-8">
@@ -27514,6 +27737,25 @@ const CustomerApp = (() => {
               </p>
             </div>
           </div>
+
+          {rows.length > 0 && (
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {CN_TABS.map(([k, en, km, names]) => {
+                const n = rows.filter((r) => inTab(r, names)).length;
+                return (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setTab(k)}
+                    className={`px-4 h-9 rounded-full text-[13px] font-semibold whitespace-nowrap ${tab === k ? "bg-blue-600 text-white" : "bg-white text-slate-600"}`}
+                  >
+                    {tr(en, km)}
+                    {k !== "All" && n > 0 ? ` (${n})` : ""}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {loading ? (
             <div className="space-y-3">
@@ -27542,7 +27784,15 @@ const CustomerApp = (() => {
             </Card>
           ) : (
             <div className="space-y-3">
-              {rows.map((r) => (
+              {!list.length && (
+                <p className="text-center text-sm text-slate-400 py-10">
+                  {tr(
+                    "No orders in this status.",
+                    "គ្មានការបញ្ជាទិញក្នុងស្ថានភាពនេះទេ។",
+                  )}
+                </p>
+              )}
+              {list.map((r) => (
                 <Card
                   key={r.id}
                   onClick={() =>
