@@ -26646,7 +26646,7 @@ const CustomerApp = (() => {
           {feat("pay_shipping") && s.step >= 4 && s.fee?.total > 0 && (
             <Card className="p-5">
               <h2 className="font-bold mb-3 flex items-center gap-2">
-                <Wallet size={18} className="text-blue-600" />{" "}
+                <Icons.Wallet size={18} className="text-blue-600" />{" "}
                 {tr("Shipping Payment", "ការបង់ថ្លៃដឹក")}
               </h2>
               <div className="flex justify-between text-sm py-1">
@@ -27932,6 +27932,9 @@ const CustomerApp = (() => {
       ? "Waiting Order Payment"
       : cnNormalizeStatus(row?.status);
 
+  // Each chip is an exact customer-facing status filter. Waiting for payment
+  // is a payment-derived list status only; it never changes cn_orders.status
+  // or inserts a status into the Order Detail timeline.
   const CN_TABS = [
     ["All", "All", "ទាំងអស់", null],
     [
@@ -27941,21 +27944,35 @@ const CustomerApp = (() => {
       "__WAITING_PAYMENT__",
     ],
     [
-      "Processing",
-      "Processing",
+      "Order Processing",
+      "Order Processing",
       "កំពុងរៀបចំ",
-      ["Order Processing", "Purchased"],
+      ["Order Processing"],
+    ],
+    ["Purchased", "Purchased", "បានទិញហើយ", ["Purchased"]],
+    [
+      "Shipping to China WH",
+      "Shipping to China WH",
+      "កំពុងដឹកទៅឃ្លាំងចិន",
+      ["Shipping to China WH"],
+    ],
+    ["Inbound", "Inbound", "ចូលឃ្លាំងចិន", ["Inbound"]],
+    ["Outbound", "Outbound", "ចេញពីឃ្លាំងចិន", ["Outbound"]],
+    ["Arrived", "Arrived", "មកដល់កម្ពុជា", ["Arrived"]],
+    [
+      "Shipping to Branch",
+      "Shipping to Branch",
+      "កំពុងដឹកទៅសាខា",
+      ["Shipping to Branch"],
     ],
     [
-      "In Transit",
-      "In Transit",
-      "កំពុងដឹក",
-      ["Shipping to China WH", "Inbound", "Outbound"],
+      "Inbound Warehouse",
+      "Inbound Warehouse",
+      "ចូលឃ្លាំងកម្ពុជា",
+      ["Inbound Warehouse"],
     ],
-    ["Arrived", "Arrived", "មកដល់", ["Arrived", "Shipping to Branch"]],
-    ["Ready", "Ready", "ត្រៀមយក", ["Inbound Warehouse"]],
-    ["Completed", "Completed", "បានបញ្ចប់", ["Complete Order"]],
-    ["Refund", "Refund", "សងប្រាក់វិញ", ["Refund Order"]],
+    ["Completed", "Complete Order", "បានបញ្ចប់", ["Complete Order"]],
+    ["Refund", "Refund Order", "សងប្រាក់វិញ", ["Refund Order"]],
   ];
 
   function CustomerCnOrders() {
@@ -27964,6 +27981,7 @@ const CustomerApp = (() => {
     const [rows, setRows] = useState([]);
     const [loading, setLoading] = useState(true);
     const [tab, setTab] = useState("All");
+    const cnTabsScroller = React.useRef(null);
 
     const load = React.useCallback(async () => {
       if (!supabase || !me?.id) {
@@ -27995,6 +28013,32 @@ const CustomerApp = (() => {
       load();
     }, [load]);
 
+    // Keep the selected customer status chip completely visible in the
+    // horizontal list. This prevents the start of "Waiting Order Payment"
+    // from being clipped after route restoration or a previous horizontal swipe.
+    useEffect(() => {
+      const container = cnTabsScroller.current;
+      const selected = container?.querySelector(
+        '[data-cn-customer-tab="selected"]',
+      );
+      if (!container || !selected) return;
+      const containerRect = container.getBoundingClientRect();
+      const selectedRect = selected.getBoundingClientRect();
+      const left =
+        selectedRect.left - containerRect.left + container.scrollLeft;
+      const right = left + selectedRect.width;
+      const visibleLeft = container.scrollLeft;
+      const visibleRight = visibleLeft + container.clientWidth;
+      if (left < visibleLeft) {
+        container.scrollTo({ left: Math.max(0, left - 4), behavior: "auto" });
+      } else if (right > visibleRight) {
+        container.scrollTo({
+          left: Math.max(0, right - container.clientWidth + 8),
+          behavior: "auto",
+        });
+      }
+    }, [tab, rows.length]);
+
     const active = rows.filter(
       (r) => !CN_ORDER_TERMINAL_STATUSES.has(cnNormalizeStatus(r.status)),
     ).length;
@@ -28002,12 +28046,9 @@ const CustomerApp = (() => {
       if (names === "__WAITING_PAYMENT__")
         return cnNeedsCustomerWalletPayment(r);
       if (!names) return true;
-      if (
-        Array.isArray(names) &&
-        names.includes("Order Processing") &&
-        cnNeedsCustomerWalletPayment(r)
-      )
-        return false;
+      // Any unpaid assisted order belongs only to Waiting Order Payment, not
+      // also to a physical order-status tab. Keep the stored order status intact.
+      if (cnNeedsCustomerWalletPayment(r)) return false;
       return (
         Array.isArray(names) && names.includes(cnNormalizeStatus(r.status))
       );
@@ -28038,15 +28079,20 @@ const CustomerApp = (() => {
           </div>
 
           {rows.length > 0 && (
-            <div className="flex gap-2 overflow-x-auto pb-1">
+            <div
+              ref={cnTabsScroller}
+              className="flex gap-2 overflow-x-auto overflow-y-hidden pb-1 scroll-smooth"
+            >
               {CN_TABS.map(([k, en, km, names]) => {
                 const n = rows.filter((r) => inTab(r, names)).length;
                 return (
                   <button
                     key={k}
                     type="button"
+                    aria-pressed={tab === k}
+                    data-cn-customer-tab={tab === k ? "selected" : undefined}
                     onClick={() => setTab(k)}
-                    className={`px-4 h-9 rounded-full text-[13px] font-semibold whitespace-nowrap ${tab === k ? "bg-blue-600 text-white" : "bg-white text-slate-600"}`}
+                    className={`shrink-0 px-4 h-9 rounded-full text-[13px] font-semibold whitespace-nowrap ${tab === k ? "bg-blue-600 text-white" : "bg-white text-slate-600"}`}
                   >
                     {tr(en, km)}
                     {k !== "All" && n > 0 ? ` (${n})` : ""}
@@ -28339,6 +28385,8 @@ const CustomerApp = (() => {
             </div>
           </div>
 
+          {/* Keep payment waiting state in the CN Orders list only. The order
+              workflow timeline becomes visible after the customer has paid. */}
           {!waitingPayment && (
             <Card className="p-5">
               <h2 className="font-bold mb-4">
@@ -28348,7 +28396,7 @@ const CustomerApp = (() => {
                 <CnStatusBadge status={cnNormalizeStatus(row.status)} />
               </div>
               <CnStatusTimeline
-                status={row.status}
+                row={row}
                 orderType={row.order_type}
                 history={history}
               />
@@ -28424,23 +28472,25 @@ const CustomerApp = (() => {
           {row.order_type !== "direct" && (
             <Card className="p-5">
               <h2 className="font-bold mb-3 flex items-center gap-2">
-                <Wallet size={18} className="text-blue-600" />
+                <Icons.Wallet size={18} className="text-blue-600" />
                 {tr("Order Payment", "ការបង់ប្រាក់ Order")}
               </h2>
-              <div className="mb-3">
-                {waitingPayment ? (
-                  <CnStatusBadge status="Waiting Order Payment" />
-                ) : String(row.payment_status || "").toLowerCase() ===
+              {!waitingPayment && (
+                <div className="mb-3">
+                  {String(row.payment_status || "").toLowerCase() ===
                     "refunded" ||
                   cnNormalizeStatus(row.status) === "Refund Order" ? (
-                  <CnPaymentBadge status="Refunded" />
-                ) : String(row.payment_status || "").toLowerCase() === "paid" ||
-                  (Number(row.total_due_usd) > 0 && cnOutstanding <= 0.005) ? (
-                  <CnPaymentBadge status="Paid" />
-                ) : (
-                  <CnPaymentBadge status={row.payment_status || "Unpaid"} />
-                )}
-              </div>
+                    <CnPaymentBadge status="Refunded" />
+                  ) : String(row.payment_status || "").toLowerCase() ===
+                      "paid" ||
+                    (Number(row.total_due_usd) > 0 &&
+                      cnOutstanding <= 0.005) ? (
+                    <CnPaymentBadge status="Paid" />
+                  ) : (
+                    <CnPaymentBadge status={row.payment_status || "Unpaid"} />
+                  )}
+                </div>
+              )}
               <div className="space-y-1.5 text-sm">
                 <div className="flex justify-between gap-3 py-1">
                   <span className="text-slate-500">
@@ -37340,11 +37390,15 @@ function CnHistoryModal({ history, onClose }) {
 // Timeline
 // ------------------------------------------------------------
 function CnStatusTimeline({ row: rowProp, status, history = [], orderType }) {
-  // Admin passes `row`; the customer portal passes only `status`.
+  // This timeline represents the operational CN/TK workflow only.
+  // Waiting Order Payment is a list/filter state; customer detail shows this
+  // timeline only after payment succeeds. The payment panel remains separate.
   const row = rowProp || { status };
-  const refunded = row.status === CN_ORDER_TERMINAL;
-  const cur = cnStatusIndex(row.status);
+  const normalizedStatus = cnNormalizeStatus(row.status);
+  const refunded = normalizedStatus === CN_ORDER_TERMINAL;
   const isDirect = (orderType ?? row.order_type) === "direct";
+  const flowIndex = cnStatusIndex(normalizedStatus);
+  const isComplete = normalizedStatus === "Complete Order";
   const timeOf = (s) =>
     history.find(
       (h) => h.event === "status" && cnNormalizeStatus(h.status) === s,
@@ -37352,20 +37406,26 @@ function CnStatusTimeline({ row: rowProp, status, history = [], orderType }) {
   const refundEntry = history.find(
     (h) => h.event === "status" && h.status === CN_ORDER_TERMINAL,
   );
+
+  const timelineSteps = CN_ORDER_STATUS_FLOW.map((s, i) => ({
+    status: s,
+    flowIndex: i,
+  })).filter(({ status: s, flowIndex: i }) => {
+    // Direct purchases can bypass purchasing milestones when no timestamp
+    // exists, preserving the existing direct-order workflow behavior.
+    if (isDirect && i < 2 && !timeOf(s)) return false;
+    return true;
+  });
+
   return (
     <div>
-      {CN_ORDER_STATUS_FLOW.map((s, i) => {
-        // Customer Direct orders start at "Shipping to China WH": nothing
-        // to purchase, so the two purchasing steps are not shown.
-        if (isDirect && i < 2 && !timeOf(s)) return null;
-        const done = refunded
-          ? !!timeOf(s)
-          : i < cur || cnNormalizeStatus(row.status) === "Complete Order";
-        const active =
-          !refunded &&
-          i === cur &&
-          cnNormalizeStatus(row.status) !== "Complete Order";
-        const t = timeOf(s);
+      {timelineSteps.map(({ status: s, flowIndex: i }, displayIndex) => {
+        const t =
+          timeOf(s) || (s === "Order Processing" ? row.created_at : null);
+        const done = refunded ? !!timeOf(s) : i < flowIndex || isComplete;
+        const active = !refunded && !isComplete && i === flowIndex;
+        const isLastVisible =
+          displayIndex === timelineSteps.length - 1 && !refunded;
         return (
           <div key={s} className="flex gap-3">
             <div className="flex flex-col items-center">
@@ -37378,9 +37438,9 @@ function CnStatusTimeline({ row: rowProp, status, history = [], orderType }) {
                       : "bg-slate-200"
                 }`}
               >
-                {done ? <Icons.Check size={13} /> : i + 1}
+                {done ? <Icons.Check size={13} /> : displayIndex + 1}
               </span>
-              {(i < CN_ORDER_STATUS_FLOW.length - 1 || refunded) && (
+              {(!isLastVisible || refunded) && (
                 <span
                   className={`w-0.5 flex-1 min-h-6 ${done ? "bg-emerald-300" : "bg-slate-200"}`}
                 />
