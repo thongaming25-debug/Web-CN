@@ -4127,19 +4127,52 @@ function PackageTrackingProvider({ children }) {
         if (error) throw error;
         saved = data;
       } else {
-        const { data, error } = await supabase
+        const inserted = await supabase
           .from("packages")
           .insert({ ...fields, tk })
           .select("*")
           .single();
-        if (error) {
-          throw new Error(
-            error.code === "23505"
-              ? `TK "${tk}" មានរួចហើយក្នុងប្រព័ន្ធ`
-              : error.message,
-          );
+        if (!inserted.error) {
+          saved = inserted.data;
+        } else if (
+          inserted.error.code === "23505" ||
+          inserted.error.status === 409
+        ) {
+          // React state can be stale (e.g. filtered/partially loaded TK list).
+          // If the database already contains this TK, update that exact row
+          // instead of failing with a duplicate-key error. Never create a copy.
+          let existingDb = null;
+          const exact = await supabase
+            .from("packages")
+            .select("id, tk")
+            .eq("tk", tk)
+            .maybeSingle();
+          existingDb = exact.data || null;
+          if (!existingDb) {
+            const insensitive = await supabase
+              .from("packages")
+              .select("id, tk")
+              .ilike("tk", tk)
+              .limit(1)
+              .maybeSingle();
+            existingDb = insensitive.data || null;
+          }
+          if (!existingDb?.id) {
+            throw new Error(
+              inserted.error.message || `TK "${tk}" មានរួចហើយក្នុងប្រព័ន្ធ`,
+            );
+          }
+          const retry = await supabase
+            .from("packages")
+            .update(fields)
+            .eq("id", existingDb.id)
+            .select("*")
+            .single();
+          if (retry.error) throw retry.error;
+          saved = retry.data;
+        } else {
+          throw inserted.error;
         }
-        saved = data;
       }
       setPackages((prev) => {
         const idx = prev.findIndex((p) => p.id === saved.id);
@@ -23512,6 +23545,13 @@ const CUSTOMER_FEATURES = [
     desc: "Shipping Payment card / Pay button on a shipment detail page.",
   },
   {
+    group: "Wallet & Payment",
+    key: "pay_cn_order",
+    label: "Pay pending CN order from wallet",
+    kh: "បង់ប្រាក់ CN Order ដែលកំពុងរង់ចាំពីកាបូប",
+    desc: "Order Payment card and Pay from Wallet action on a pending CN Purchase Order.",
+  },
+  {
     group: "Warehouse & Notifications",
     key: "warehouse",
     label: "My China Warehouse",
@@ -24256,7 +24296,7 @@ const CustomerApp = (() => {
       const { data, error } = await supabase
         .from("cn_orders")
         .select(
-          "id,order_id,customer_id,order_type,product_name,product_url,shop_name,platform,variant,quantity,total_due_usd,payment_status,status,created_at,updated_at,cn_order_items,pricing_mode,unit_price_cny,unit_price_usd,cny_per_usd",
+          "id,order_id,customer_id,order_type,product_name,product_url,shop_name,platform,variant,quantity,total_due_usd,amount_paid_usd,payment_status,payment_method,status,created_at,updated_at,cn_order_items,pricing_mode,unit_price_cny,unit_price_usd,cny_per_usd",
         )
         .eq("customer_id", customerId)
         .order("created_at", { ascending: false })
@@ -24346,6 +24386,40 @@ const CustomerApp = (() => {
               "សមតុល្យកាបូបមិនគ្រប់គ្រាន់ទេ។",
             )
           : error.message || tr("Payment failed.", "ការបង់ប្រាក់បរាជ័យ។");
+      await refreshMoney();
+      return null;
+    };
+    // Customer CN Order payments are processed by one SECURITY DEFINER RPC.
+    // The server locks the order + wallet, prevents duplicate charges, checks
+    // ownership and balance, writes the ledger, and marks the order paid.
+    const payCnOrder = async (orderId) => {
+      if (!supabase)
+        return tr(
+          "Payment service is unavailable.",
+          "សេវាបង់ប្រាក់មិនអាចប្រើបានទេ។",
+        );
+      const { error } = await supabase.rpc("pay_cn_order_from_wallet", {
+        p_order_id: orderId,
+      });
+      if (error)
+        return /function .*pay_cn_order_from_wallet|does not exist|schema cache/i.test(
+          error.message || "",
+        )
+          ? tr(
+              "Wallet payment is not enabled yet. Please contact staff to finish setup.",
+              "មុខងារបង់ប្រាក់តាម Wallet មិនទាន់បើកប្រើទេ។ សូមទាក់ទងបុគ្គលិកដើម្បីបញ្ចប់ការដំឡើង។",
+            )
+          : /insufficient/i.test(error.message || "")
+            ? tr(
+                "Your wallet balance is not enough. Please contact staff to top up.",
+                "សមតុល្យកាបូបមិនគ្រប់គ្រាន់ទេ។ សូមទាក់ទងបុគ្គលិកដើម្បីបញ្ចូលប្រាក់។",
+              )
+            : /not awaiting payment|order status/i.test(error.message || "")
+              ? tr(
+                  "This order is no longer awaiting payment. Refresh the page and try again.",
+                  "Order នេះមិនមែនកំពុងរង់ចាំបង់ប្រាក់ទៀតទេ។ សូម Refresh ហើយព្យាយាមម្ដងទៀត។",
+                )
+              : error.message || tr("Payment failed.", "ការបង់ប្រាក់បរាជ័យ។");
       await refreshMoney();
       return null;
     };
@@ -24909,6 +24983,7 @@ const CustomerApp = (() => {
       wallet,
       refreshMoney,
       payShipping,
+      payCnOrder,
       addrs,
       branches,
       branchErr,
@@ -25750,7 +25825,7 @@ const CustomerApp = (() => {
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
             <b className="text-[15px] truncate">{s.order_id}</b>
-            <CnStatusBadge status={s.status} />
+            <CnStatusBadge status={cnCustomerDisplayStatus(s)} />
           </div>
           <p className="text-[13px] text-slate-500 truncate">
             {tr("CN Order", "ការបញ្ជាទិញពីចិន")} ·{" "}
@@ -25813,8 +25888,11 @@ const CustomerApp = (() => {
       ).length;
     // CN Purchase Orders map onto the same dashboard cards.
     const cnCnt = (names) =>
-      cnOrders.filter((o) => names.includes(cnNormalizeStatus(o.status)))
-        .length;
+      cnOrders.filter(
+        (o) =>
+          !cnNeedsCustomerWalletPayment(o) &&
+          names.includes(cnNormalizeStatus(o.status)),
+      ).length;
     const stats = [
       [
         "Total",
@@ -26843,6 +26921,10 @@ const CustomerApp = (() => {
       ),
       shipping_payment_wallet: tr("Shipping payment", "ការបង់ថ្លៃដឹក"),
       cn_order_payment: tr("CN order payment", "ការបង់ប្រាក់ CN Order"),
+      cn_order_payment_wallet: tr(
+        "CN order payment from Wallet",
+        "បានបង់ CN Order ពី Wallet",
+      ),
       cn_order_refund: tr("CN order refund", "សងប្រាក់ CN Order វិញ"),
       cn_order_payment_cash: tr(
         "CN order paid (cash)",
@@ -27832,8 +27914,32 @@ const CustomerApp = (() => {
   // Customer-safe view: only rows belonging to the signed-in customer.
   // Status filter chips for the CN Purchase Orders list (same style as
   // "My Shipments"). [key, English, Khmer, statuses | null = all]
+  const cnNeedsCustomerWalletPayment = (row) => {
+    if (!row || row.order_type === "direct") return false;
+    const status = cnNormalizeStatus(row.status);
+    if (status === "Complete Order" || status === "Refund Order") return false;
+    const paymentStatus = String(row.payment_status || "Unpaid");
+    const total = Number(row.total_due_usd) || 0;
+    const paid = Number(row.amount_paid_usd) || 0;
+    return (
+      paymentStatus !== "Paid" &&
+      paymentStatus !== "Refunded" &&
+      total - paid > 0.005
+    );
+  };
+  const cnCustomerDisplayStatus = (row) =>
+    cnNeedsCustomerWalletPayment(row)
+      ? "Waiting Order Payment"
+      : cnNormalizeStatus(row?.status);
+
   const CN_TABS = [
     ["All", "All", "ទាំងអស់", null],
+    [
+      "WaitingPayment",
+      "Waiting Order Payment",
+      "រង់ចាំបង់ប្រាក់ Order",
+      "__WAITING_PAYMENT__",
+    ],
     [
       "Processing",
       "Processing",
@@ -27869,7 +27975,7 @@ const CustomerApp = (() => {
       const { data, error } = await supabase
         .from("cn_orders")
         .select(
-          "id,order_id,customer_id,order_type,product_name,product_url,shop_name,platform,quantity,total_due_usd,payment_status,status,created_at,updated_at",
+          "id,order_id,customer_id,order_type,product_name,product_url,shop_name,platform,quantity,total_due_usd,amount_paid_usd,payment_status,payment_method,status,created_at,updated_at,cn_order_items",
         )
         .eq("customer_id", me.id)
         .order("created_at", { ascending: false })
@@ -27892,8 +27998,20 @@ const CustomerApp = (() => {
     const active = rows.filter(
       (r) => !CN_ORDER_TERMINAL_STATUSES.has(cnNormalizeStatus(r.status)),
     ).length;
-    const inTab = (r, names) =>
-      !names || names.includes(cnNormalizeStatus(r.status));
+    const inTab = (r, names) => {
+      if (names === "__WAITING_PAYMENT__")
+        return cnNeedsCustomerWalletPayment(r);
+      if (!names) return true;
+      if (
+        Array.isArray(names) &&
+        names.includes("Order Processing") &&
+        cnNeedsCustomerWalletPayment(r)
+      )
+        return false;
+      return (
+        Array.isArray(names) && names.includes(cnNormalizeStatus(r.status))
+      );
+    };
     const curTab = CN_TABS.find((x) => x[0] === tab) || CN_TABS[0];
     const list = rows.filter((r) => inTab(r, curTab[3]));
 
@@ -28013,7 +28131,7 @@ const CustomerApp = (() => {
                     />
                   </div>
                   <div className="flex items-center justify-between gap-2 mt-3">
-                    <CnStatusBadge status={r.status} />
+                    <CnStatusBadge status={cnCustomerDisplayStatus(r)} />
                     {r.order_type !== "direct" && (
                       <span className="text-sm font-bold text-slate-900">
                         {money(r.total_due_usd)}
@@ -28031,10 +28149,15 @@ const CustomerApp = (() => {
 
   function CustomerCnOrderDetail() {
     const { id } = useParams();
-    const { me, tr } = useApp();
+    const { me, tr, wallet, payCnOrder } = useApp();
     const nav = useNavigate();
+    const customerFeatureOn = useCustomerFeatures();
+    const canPayCnOrder = customerFeatureOn("pay_cn_order");
     const [row, setRow] = useState(null);
     const [history, setHistory] = useState([]);
+    const [walletPayConfirm, setWalletPayConfirm] = useState(false);
+    const [walletPayBusy, setWalletPayBusy] = useState(false);
+    const [walletPayError, setWalletPayError] = useState("");
     const [parcels, setParcels] = useState([]);
     const [cnImages, setCnImages] = useState([]);
     const [cnImagesLoading, setCnImagesLoading] = useState(true);
@@ -28049,7 +28172,7 @@ const CustomerApp = (() => {
       const { data } = await supabase
         .from("cn_orders")
         .select(
-          "id,order_id,order_type,product_name,product_url,shop_name,platform,variant,quantity,total_due_usd,payment_status,status,created_at,updated_at,cn_order_items,pricing_mode,unit_price_cny,unit_price_usd,cny_per_usd",
+          "id,order_id,order_type,product_name,product_url,shop_name,platform,variant,quantity,total_due_usd,amount_paid_usd,payment_status,payment_method,paid_at,status,created_at,updated_at,cn_order_items,pricing_mode,unit_price_cny,unit_price_usd,cny_per_usd",
         )
         .eq("customer_id", me.id)
         .eq("order_id", id)
@@ -28133,6 +28256,38 @@ const CustomerApp = (() => {
       };
     }, [row?.id, load]);
 
+    const waitingPayment = cnNeedsCustomerWalletPayment(row);
+    const cnOutstanding = Math.max(
+      0,
+      (Number(row?.total_due_usd) || 0) - (Number(row?.amount_paid_usd) || 0),
+    );
+    const walletCanPay = Number(wallet?.balance || 0) + 0.005 >= cnOutstanding;
+
+    async function confirmCnWalletPayment() {
+      if (!row?.id || !waitingPayment || walletPayBusy) return;
+      if (!walletCanPay) {
+        const message = tr(
+          "Your wallet balance is not enough. Please contact staff to top up.",
+          "សមតុល្យ Wallet មិនគ្រប់គ្រាន់ទេ។ សូមទាក់ទងបុគ្គលិកដើម្បីបញ្ចូលប្រាក់។",
+        );
+        setWalletPayError(message);
+        throw new Error(message);
+      }
+      setWalletPayBusy(true);
+      setWalletPayError("");
+      try {
+        const error = await payCnOrder(row.id);
+        if (error) {
+          setWalletPayError(error);
+          throw new Error(error);
+        }
+        setWalletPayConfirm(false);
+        await load();
+      } finally {
+        setWalletPayBusy(false);
+      }
+    }
+
     if (loading) {
       return (
         <div className="min-h-screen bg-slate-50 p-4">
@@ -28184,21 +28339,21 @@ const CustomerApp = (() => {
             </div>
           </div>
 
-          <Card className="p-4">
-            <div className="flex items-center justify-between gap-3">
-              <span className="font-semibold">
+          {!waitingPayment && (
+            <Card className="p-5">
+              <h2 className="font-bold mb-4">
                 {tr("Order status", "ស្ថានភាពការបញ្ជាទិញ")}
-              </span>
-              <CnStatusBadge status={row.status} />
-            </div>
-            <div className="mt-4">
+              </h2>
+              <div className="mb-4">
+                <CnStatusBadge status={cnNormalizeStatus(row.status)} />
+              </div>
               <CnStatusTimeline
                 status={row.status}
                 orderType={row.order_type}
                 history={history}
               />
-            </div>
-          </Card>
+            </Card>
+          )}
 
           <CnProductInfoCard
             row={row}
@@ -28266,6 +28421,184 @@ const CustomerApp = (() => {
               )}
             </div>
           </Card>
+          {row.order_type !== "direct" && (
+            <Card className="p-5">
+              <h2 className="font-bold mb-3 flex items-center gap-2">
+                <Wallet size={18} className="text-blue-600" />
+                {tr("Order Payment", "ការបង់ប្រាក់ Order")}
+              </h2>
+              <div className="mb-3">
+                {waitingPayment ? (
+                  <CnStatusBadge status="Waiting Order Payment" />
+                ) : String(row.payment_status || "").toLowerCase() ===
+                    "refunded" ||
+                  cnNormalizeStatus(row.status) === "Refund Order" ? (
+                  <CnPaymentBadge status="Refunded" />
+                ) : String(row.payment_status || "").toLowerCase() === "paid" ||
+                  (Number(row.total_due_usd) > 0 && cnOutstanding <= 0.005) ? (
+                  <CnPaymentBadge status="Paid" />
+                ) : (
+                  <CnPaymentBadge status={row.payment_status || "Unpaid"} />
+                )}
+              </div>
+              <div className="space-y-1.5 text-sm">
+                <div className="flex justify-between gap-3 py-1">
+                  <span className="text-slate-500">
+                    {tr("Order total", "ប្រាក់សរុប Order")}
+                  </span>
+                  <b>{money(row.total_due_usd)}</b>
+                </div>
+                <div className="flex justify-between gap-3 py-1">
+                  <span className="text-slate-500">{tr("Paid", "បានបង់")}</span>
+                  <b>{money(row.amount_paid_usd || 0)}</b>
+                </div>
+                {waitingPayment && (
+                  <>
+                    <div className="flex justify-between gap-3 py-1">
+                      <span className="text-slate-500">
+                        {tr("Amount due", "ទឹកប្រាក់ត្រូវបង់")}
+                      </span>
+                      <b className="text-red-600">{money(cnOutstanding)}</b>
+                    </div>
+                    <div className="flex justify-between gap-3 py-1">
+                      <span className="text-slate-500">
+                        {tr("My wallet", "កាបូបរបស់ខ្ញុំ")}
+                      </span>
+                      <b
+                        className={
+                          Number(wallet?.balance || 0) < cnOutstanding
+                            ? "text-red-600"
+                            : "text-slate-900"
+                        }
+                      >
+                        {money(wallet?.balance || 0)}
+                      </b>
+                    </div>
+                  </>
+                )}
+                {!waitingPayment &&
+                  Number(row.amount_paid_usd || 0) > 0 &&
+                  row.paid_at && (
+                    <div className="flex justify-between gap-3 border-t border-slate-100 pt-2 mt-2">
+                      <span className="text-slate-500">
+                        {tr("Paid on", "បានបង់នៅ")}
+                      </span>
+                      <span>{formatDbTimestamp(row.paid_at)}</span>
+                    </div>
+                  )}
+                {!waitingPayment && row.payment_method && (
+                  <div className="flex justify-between gap-3 py-1">
+                    <span className="text-slate-500">
+                      {tr("Method", "វិធីបង់ប្រាក់")}
+                    </span>
+                    <span>{row.payment_method}</span>
+                  </div>
+                )}
+              </div>
+
+              {waitingPayment && canPayCnOrder && (
+                <>
+                  {!walletCanPay && (
+                    <p className="mt-3 rounded-xl bg-amber-50 text-amber-700 text-xs px-3 py-2.5">
+                      {tr(
+                        `Your wallet balance is not enough. You need ${money(cnOutstanding - Number(wallet?.balance || 0))} more — please top up your wallet with our staff, then come back to pay.`,
+                        `សមតុល្យកាបូបរបស់អ្នកមិនគ្រប់គ្រាន់ទេ។ អ្នកត្រូវការបន្ថែម ${money(cnOutstanding - Number(wallet?.balance || 0))} — សូមបញ្ចូលទឹកប្រាក់ក្នុងកាបូបជាមួយបុគ្គលិក រួចត្រឡប់មកបង់ម្តងទៀត។`,
+                      )}
+                    </p>
+                  )}
+                  {walletPayConfirm ? (
+                    <div className="mt-3 space-y-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+                      <p className="text-sm text-slate-600">
+                        {tr(
+                          `${money(cnOutstanding)} will be deducted from your wallet.`,
+                          `${money(cnOutstanding)} នឹងត្រូវកាត់ចេញពីកាបូបរបស់អ្នក។`,
+                        )}
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <Btn
+                          ghost
+                          disabled={walletPayBusy}
+                          onClick={() => setWalletPayConfirm(false)}
+                        >
+                          {tr("Cancel", "បោះបង់")}
+                        </Btn>
+                        <Btn
+                          disabled={walletPayBusy || !walletCanPay}
+                          loading={walletPayBusy}
+                          onClick={async () => {
+                            try {
+                              await confirmCnWalletPayment();
+                            } catch (e) {
+                              setWalletPayError(
+                                e?.message ||
+                                  tr(
+                                    "Payment failed. Please try again.",
+                                    "ការបង់ប្រាក់មិនបានជោគជ័យទេ។ សូមព្យាយាមម្តងទៀត។",
+                                  ),
+                              );
+                            }
+                          }}
+                        >
+                          {walletPayBusy
+                            ? tr("Paying…", "កំពុងបង់…")
+                            : tr("Confirm", "បញ្ជាក់")}
+                        </Btn>
+                      </div>
+                    </div>
+                  ) : (
+                    <Btn
+                      className="mt-3"
+                      disabled={walletPayBusy || !walletCanPay}
+                      onClick={() => {
+                        setWalletPayError("");
+                        setWalletPayConfirm(true);
+                      }}
+                    >
+                      {tr(
+                        `Pay ${money(cnOutstanding)} from Wallet`,
+                        `បង់ ${money(cnOutstanding)} ពីកាបូប`,
+                      )}
+                    </Btn>
+                  )}
+                  {walletPayError && (
+                    <p
+                      role="alert"
+                      className="mt-2 text-xs font-semibold text-red-600"
+                    >
+                      {walletPayError}
+                    </p>
+                  )}
+                </>
+              )}
+              {waitingPayment && !canPayCnOrder && (
+                <p className="mt-3 rounded-xl bg-slate-50 text-slate-600 text-xs px-3 py-2.5">
+                  {tr(
+                    "Wallet payment for CN orders is currently disabled. Please contact staff for assistance.",
+                    "ការបង់ប្រាក់ CN Order ពី Wallet ត្រូវបានបិទ។ សូមទាក់ទងបុគ្គលិកសម្រាប់ជំនួយ។",
+                  )}
+                </p>
+              )}
+
+              {!waitingPayment &&
+                String(row.payment_status || "").toLowerCase() === "paid" && (
+                  <p className="mt-3 rounded-xl bg-green-50 text-green-700 text-sm font-semibold px-3 py-2.5 flex items-center gap-2">
+                    <Check size={16} />
+                    {tr("Paid — payment completed", "បានបង់ប្រាក់រួចរាល់")}
+                  </p>
+                )}
+              {!waitingPayment &&
+                (String(row.payment_status || "").toLowerCase() ===
+                  "refunded" ||
+                  cnNormalizeStatus(row.status) === "Refund Order") && (
+                  <p className="mt-3 rounded-xl bg-red-50 text-red-700 text-sm font-semibold px-3 py-2.5">
+                    {tr(
+                      "This order has been refunded.",
+                      "Order នេះត្រូវបានសងប្រាក់វិញហើយ។",
+                    )}
+                  </p>
+                )}
+            </Card>
+          )}
         </div>
       </div>
     );
@@ -34471,6 +34804,10 @@ function cnStatusTone(status) {
   switch (cnNormalizeStatus(status)) {
     case "Order Processing":
       return "bg-slate-100 text-slate-700";
+    case "Waiting Payment":
+    case "Waiting Order Payment":
+      // Match the customer-facing Pending Shipping Payment badge.
+      return "bg-red-50 text-red-600";
     case "Purchased":
       return "bg-sky-50 text-sky-700";
     case "Shipping to China WH":
@@ -47335,7 +47672,20 @@ function useDeliveries() {
       setRows([]);
     } else {
       setRows(
-        (data || []).map((d) => ({ ...d, items: d.delivery_items || [] })),
+        (data || []).map((d) => ({
+          ...d,
+          // Normalize both the legacy schema fields and the delivery UI fields.
+          // This keeps older delivery rows readable after the compatibility migration.
+          customer_name: d.customer_name || d.customer || "—",
+          customer_code: d.customer_code || "—",
+          customer_phone: d.customer_phone || d.phone || "",
+          address_text: d.address_text || d.address || "",
+          kh_branch_code: d.kh_branch_code || d.branch_code || "",
+          delivery_fee: Number(d.delivery_fee ?? 0),
+          payment_type: d.payment_type || "wallet",
+          cash_to_collect: Number(d.cash_to_collect ?? 0),
+          items: d.delivery_items || [],
+        })),
       );
     }
     setLoading(false);
@@ -47347,11 +47697,37 @@ function useDeliveries() {
 
   const create = async (d, items) => {
     const deliveryNo = `DL${new Date().toISOString().slice(2, 10).replace(/-/g, "")}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    const requestedAt = new Date().toISOString();
+    const customerName = d.customer_name || d.customer || "";
+    const customerPhone = d.customer_phone || d.phone || "";
+    const addressText = d.address_text || d.address || "";
+    const branchCode = d.kh_branch_code || d.branch_code || "";
+    // Keep both modern fields used by this UI and legacy fields used by the
+    // existing database/other screens. The migration adds the modern columns.
     const row = {
       ...d,
       delivery_no: deliveryNo,
       status: "Pending",
-      requested_at: new Date().toISOString(),
+      requested_at: requestedAt,
+      customer_id: d.customer_id || null,
+      customer_name: customerName,
+      customer_code: d.customer_code || null,
+      customer_phone: customerPhone,
+      receiver_name: d.receiver_name || customerName,
+      receiver_phone: d.receiver_phone || customerPhone,
+      address_text: addressText,
+      kh_branch_code: branchCode,
+      delivery_fee: Number(d.delivery_fee) || 0,
+      payment_type: d.payment_type || "wallet",
+      cash_to_collect: Number(d.cash_to_collect) || 0,
+      requested_by: d.requested_by || d.created_by || null,
+      // Legacy aliases retained for existing screens and schema.
+      customer: customerName,
+      phone: customerPhone,
+      address: addressText,
+      branch_code: branchCode,
+      created_by: d.requested_by || d.created_by || null,
+      updated_by: d.requested_by || d.updated_by || null,
     };
     if (!supabase) {
       const local = {
@@ -47557,6 +47933,7 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
     try {
       await onSubmit(
         {
+          customer_id: found.customer.uuid || null,
           customer_code: found.customer.customer_code,
           customer_name: found.customer.name,
           customer_phone: found.customer.phone || "",
