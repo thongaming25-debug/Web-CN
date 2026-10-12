@@ -23986,7 +23986,11 @@ const CustomerApp = (() => {
     Arrived: ["Arrived", "មកដល់ហើយ"],
     Ready: ["Ready", "ត្រៀមយក"],
     "To Pay": ["To Pay", "ត្រូវបង់"],
-    Completed: ["Completed", "បានបញ្ចប់"],
+    "Inbound Origin": ["Inbound Origin", "ទទួលចូលនៅឃ្លាំងដើម"],
+    "Outbound Origin": ["Outbound Origin", "ចេញពីឃ្លាំងដើម"],
+    "Arrive Destination": ["Arrive Destination", "មកដល់ប្រទេសគោលដៅ"],
+    Delivery: ["Delivery", "កំពុងដឹកជញ្ជូនទៅប្រគល់"],
+    Completed: ["Completed", "បានប្រគល់រួចរាល់"],
     Processing: ["Processing", "កំពុងរៀបចំ"],
     Refund: ["Refund", "សងប្រាក់វិញ"],
   };
@@ -24004,6 +24008,15 @@ const CustomerApp = (() => {
   // Customer-facing Shipment timeline uses the same canonical labels as
   // CN Order Table. Internal TK statuses remain unchanged in Supabase/Staff.
   const STEPS = [
+    ["Inbound Origin", "ទទួលចូលនៅឃ្លាំងដើម"],
+    ["Outbound Origin", "ចេញពីឃ្លាំងដើម"],
+    ["Arrive Destination", "មកដល់ប្រទេសគោលដៅ"],
+    ["Delivery", "កំពុងដឹកជញ្ជូនទៅប្រគល់"],
+    ["Completed", "បានប្រគល់រួចរាល់"],
+  ];
+  // Canonical customer-facing shipment timeline aligned with CN Order Table.
+  // The internal TK stages remain unchanged; legacy stages map to these labels.
+  const CUSTOMER_TRACKING_STEPS = [
     ["Inbound Origin", "ទទួលចូលនៅឃ្លាំងដើម"],
     ["Outbound Origin", "ចេញពីឃ្លាំងដើម"],
     ["Arrive Destination", "មកដល់ប្រទេសគោលដៅ"],
@@ -24046,13 +24059,15 @@ const CustomerApp = (() => {
   const statusOf = (n) =>
     n < 0
       ? ["Processing", "bg-slate-100 text-slate-500"]
-      : n <= 1
-        ? ["In Transit", "bg-blue-50 text-blue-700"]
-        : n <= 3
-          ? ["Arrived", "bg-green-50 text-green-700"]
-          : n === 4
-            ? ["Ready for Pickup", "bg-orange-50 text-orange-600"]
-            : ["Completed", "bg-slate-100 text-slate-600"];
+      : n === 0
+        ? ["Inbound Origin", "bg-blue-50 text-blue-700"]
+        : n === 1
+          ? ["Outbound Origin", "bg-blue-50 text-blue-700"]
+          : n === 2
+            ? ["Arrive Destination", "bg-green-50 text-green-700"]
+            : n === 3
+              ? ["Delivery", "bg-orange-50 text-orange-600"]
+              : ["Completed", "bg-slate-100 text-slate-600"];
   const fmtDate = (iso) =>
     iso
       ? new Date(iso).toLocaleDateString(dateLoc(), {
@@ -25019,7 +25034,9 @@ const CustomerApp = (() => {
     );
   };
   const Badge = ({ n, fee }) => {
-    const owes = n === 4 && fee?.state === "due" && fee.total > 0;
+    // Only in-progress delivery shipments can be waiting for shipping payment.
+    // A completed TK must always display Completed, never Ready for Pickup/To Pay.
+    const owes = n === 3 && fee?.state === "due" && fee.total > 0;
     const [l, c] = owes
       ? ["Pending Shipping Payment", "bg-red-50 text-red-600"]
       : statusOf(n);
@@ -26177,13 +26194,16 @@ const CustomerApp = (() => {
   function Shipments() {
     const { ships, airShips, tr } = useApp();
     const [t, setT] = useState("All");
+    // Customer shipment filters use the same customer-facing status names as
+    // CN Order Table / TK tracking. The underlying numeric TK step stays intact.
     const tabs = {
       All: () => true,
-      "In Transit": (n) => n >= 0 && n <= 1,
-      Arrived: (n) => n === 2 || n === 3,
-      Ready: (n) => n === 4,
-      "To Pay": (n, s) => n === 4 && s.fee?.state === "due" && s.fee.total > 0,
-      Completed: (n) => n === 5,
+      "Inbound Origin": (n) => n === 0,
+      "Outbound Origin": (n) => n === 1,
+      "Arrive Destination": (n) => n === 2,
+      Delivery: (n) => n === 3,
+      "To Pay": (n, s) => n === 3 && s.fee?.state === "due" && s.fee.total > 0,
+      Completed: (n) => n === 4,
     };
     const list = ships.filter((s) => tabs[t](s.step, s));
     return (
@@ -26609,9 +26629,11 @@ const CustomerApp = (() => {
             <h2 className="font-bold mb-4">
               {tr("Tracking Status", "ស្ថានភាពតាមដាន")}
             </h2>
-            {STEPS.map(([en, km], i) => {
-              const done = i < s.step || s.step === STEPS.length - 1,
-                cur = i === s.step && s.step < STEPS.length - 1;
+            {CUSTOMER_TRACKING_STEPS.map(([en, km], i) => {
+              const done =
+                  i < s.step || s.step === CUSTOMER_TRACKING_STEPS.length - 1,
+                cur =
+                  i === s.step && s.step < CUSTOMER_TRACKING_STEPS.length - 1;
               return (
                 <div key={en} className="flex gap-3.5">
                   <div className="flex flex-col items-center">
@@ -26620,7 +26642,7 @@ const CustomerApp = (() => {
                     >
                       {done && <Check size={16} strokeWidth={3} />}
                     </span>
-                    {i < STEPS.length - 1 && (
+                    {i < CUSTOMER_TRACKING_STEPS.length - 1 && (
                       <span
                         className={`w-0.5 flex-1 min-h-[28px] ${done ? "bg-green-400" : "bg-slate-200"}`}
                       />
@@ -27935,18 +27957,9 @@ const CustomerApp = (() => {
   // or inserts a status into the Order Detail timeline.
   const CN_TABS = [
     ["All", "All", "ទាំងអស់", null],
-    [
-      "WaitingPayment",
-      "Waiting Order Payment",
-      "រង់ចាំបង់ប្រាក់ Order",
-      ["Waiting Order Payment"],
-    ],
-    [
-      "Approve Purchase",
-      "Approve Purchase",
-      "អនុម័តការទិញ",
-      ["Approve Purchase"],
-    ],
+    // Waiting Order Payment and Approve Purchase remain Staff/Admin workflow
+    // tabs only. Customer tabs begin at Purchased to match the customer-facing
+    // Shipment tracking vocabulary and avoid showing internal payment actions.
     ["Purchased", "Purchased", "បានទិញហើយ", ["Purchased"]],
     ["Intransit", "Intransit", "កំពុងដឹកជញ្ជូន", ["Intransit"]],
     ["Inbound Origin", "Inbound Origin", "ចូលឃ្លាំងដើម", ["Inbound Origin"]],
