@@ -24001,37 +24001,38 @@ const CustomerApp = (() => {
   };
 
   // ---------- constants & helpers ----------
+  // Customer-facing Shipment timeline uses the same canonical labels as
+  // CN Order Table. Internal TK statuses remain unchanged in Supabase/Staff.
   const STEPS = [
-    ["Inbound", "ចូលឃ្លាំងចិន"],
-    ["Outbound", "ចេញពីចិន"],
-    ["Arrived", "មកដល់កម្ពុជា"],
-    ["Shipping to Branch", "កំពុងដឹកទៅសាខា"],
-    ["Inbound Warehouse", "ចូលឃ្លាំងសាខា"],
-    ["Complete", "បញ្ចប់"],
+    ["Inbound Origin", "ទទួលចូលនៅឃ្លាំងដើម"],
+    ["Outbound Origin", "ចេញពីឃ្លាំងដើម"],
+    ["Arrive Destination", "មកដល់ប្រទេសគោលដៅ"],
+    ["Delivery", "កំពុងដឹកជញ្ជូនទៅប្រគល់"],
+    ["Completed", "បានប្រគល់រួចរាល់"],
   ];
   const STEP_OF_STATUS = {
-    Inbound: 0,
-    Outbound: 1,
-    Arrived: 2,
-    "Shipping to Branch": 3,
-    "Inbound Warehouse": 4,
-    Complete: 5,
+    "Inbound Origin": 0,
+    "Outbound Origin": 1,
+    "Arrive Destination": 2,
+    Delivery: 3,
+    Completed: 4,
   };
-  // The admin app stores statuses like "Outbound Origin" / "Arrived
-  // Destination"; the portal's 6 steps use short labels. Accept either, in
-  // any casing, so a status the DB view passes through unchanged still lands
-  // on the right step instead of falling back to "Processing".
+  // Normalize legacy/internal TK statuses to the canonical customer labels.
+  // This is display-only; no database or Staff status values are rewritten.
   const STATUS_ALIAS = {
-    "inbound origin": "Inbound",
-    "outbound origin": "Outbound",
-    "arrived destination": "Arrived",
-    arrived: "Arrived",
-    "shipping to branch": "Shipping to Branch",
-    "inbound warehouse": "Inbound Warehouse",
-    "pending shipping payment": "Inbound Warehouse",
-    "shipping paid": "Inbound Warehouse",
-    completed: "Complete",
-    complete: "Complete",
+    "inbound origin": "Inbound Origin",
+    inbound: "Inbound Origin",
+    "outbound origin": "Outbound Origin",
+    outbound: "Outbound Origin",
+    "arrive destination": "Arrive Destination",
+    "arrived destination": "Arrive Destination",
+    arrived: "Arrive Destination",
+    "shipping to branch": "Delivery",
+    "inbound warehouse": "Delivery",
+    "pending shipping payment": "Delivery",
+    "shipping paid": "Delivery",
+    completed: "Completed",
+    complete: "Completed",
   };
   const normStep = (status) => {
     const raw = String(status ?? "").trim();
@@ -26609,8 +26610,8 @@ const CustomerApp = (() => {
               {tr("Tracking Status", "ស្ថានភាពតាមដាន")}
             </h2>
             {STEPS.map(([en, km], i) => {
-              const done = i < s.step || s.step === 5,
-                cur = i === s.step && s.step < 5;
+              const done = i < s.step || s.step === STEPS.length - 1,
+                cur = i === s.step && s.step < STEPS.length - 1;
               return (
                 <div key={en} className="flex gap-3.5">
                   <div className="flex flex-col items-center">
@@ -26619,7 +26620,7 @@ const CustomerApp = (() => {
                     >
                       {done && <Check size={16} strokeWidth={3} />}
                     </span>
-                    {i < 5 && (
+                    {i < STEPS.length - 1 && (
                       <span
                         className={`w-0.5 flex-1 min-h-[28px] ${done ? "bg-green-400" : "bg-slate-200"}`}
                       />
@@ -26643,7 +26644,7 @@ const CustomerApp = (() => {
               );
             })}
           </Card>
-          {feat("pay_shipping") && s.step >= 4 && s.fee?.total > 0 && (
+          {feat("pay_shipping") && s.step >= 3 && s.fee?.total > 0 && (
             <Card className="p-5">
               <h2 className="font-bold mb-3 flex items-center gap-2">
                 <Icons.Wallet size={18} className="text-blue-600" />{" "}
@@ -27927,10 +27928,7 @@ const CustomerApp = (() => {
       total - paid > 0.005
     );
   };
-  const cnCustomerDisplayStatus = (row) =>
-    cnNeedsCustomerWalletPayment(row)
-      ? "Waiting Order Payment"
-      : cnNormalizeStatus(row?.status);
+  const cnCustomerDisplayStatus = (row) => cnOrderTableStatus(row);
 
   // Each chip is an exact customer-facing status filter. Waiting for payment
   // is a payment-derived list status only; it never changes cn_orders.status
@@ -27941,37 +27939,31 @@ const CustomerApp = (() => {
       "WaitingPayment",
       "Waiting Order Payment",
       "រង់ចាំបង់ប្រាក់ Order",
-      "__WAITING_PAYMENT__",
+      ["Waiting Order Payment"],
     ],
     [
-      "Order Processing",
-      "Order Processing",
-      "កំពុងរៀបចំ",
-      ["Order Processing"],
+      "Approve Purchase",
+      "Approve Purchase",
+      "អនុម័តការទិញ",
+      ["Approve Purchase"],
     ],
     ["Purchased", "Purchased", "បានទិញហើយ", ["Purchased"]],
+    ["Intransit", "Intransit", "កំពុងដឹកជញ្ជូន", ["Intransit"]],
+    ["Inbound Origin", "Inbound Origin", "ចូលឃ្លាំងដើម", ["Inbound Origin"]],
     [
-      "Shipping to China WH",
-      "Shipping to China WH",
-      "កំពុងដឹកទៅឃ្លាំងចិន",
-      ["Shipping to China WH"],
-    ],
-    ["Inbound", "Inbound", "ចូលឃ្លាំងចិន", ["Inbound"]],
-    ["Outbound", "Outbound", "ចេញពីឃ្លាំងចិន", ["Outbound"]],
-    ["Arrived", "Arrived", "មកដល់កម្ពុជា", ["Arrived"]],
-    [
-      "Shipping to Branch",
-      "Shipping to Branch",
-      "កំពុងដឹកទៅសាខា",
-      ["Shipping to Branch"],
+      "Outbound Origin",
+      "Outbound Origin",
+      "ចេញពីឃ្លាំងដើម",
+      ["Outbound Origin"],
     ],
     [
-      "Inbound Warehouse",
-      "Inbound Warehouse",
-      "ចូលឃ្លាំងកម្ពុជា",
-      ["Inbound Warehouse"],
+      "Arrive Destination",
+      "Arrive Destination",
+      "មកដល់គោលដៅ",
+      ["Arrive Destination"],
     ],
-    ["Completed", "Complete Order", "បានបញ្ចប់", ["Complete Order"]],
+    ["Delivery", "Delivery", "កំពុងប្រគល់ទំនិញ", ["Delivery"]],
+    ["Completed", "Completed", "បានបញ្ចប់", ["Completed"]],
     ["Refund", "Refund Order", "សងប្រាក់វិញ", ["Refund Order"]],
   ];
 
@@ -28043,15 +28035,9 @@ const CustomerApp = (() => {
       (r) => !CN_ORDER_TERMINAL_STATUSES.has(cnNormalizeStatus(r.status)),
     ).length;
     const inTab = (r, names) => {
-      if (names === "__WAITING_PAYMENT__")
-        return cnNeedsCustomerWalletPayment(r);
       if (!names) return true;
-      // Any unpaid assisted order belongs only to Waiting Order Payment, not
-      // also to a physical order-status tab. Keep the stored order status intact.
-      if (cnNeedsCustomerWalletPayment(r)) return false;
-      return (
-        Array.isArray(names) && names.includes(cnNormalizeStatus(r.status))
-      );
+      const tableStatus = cnOrderTableStatus(r);
+      return Array.isArray(names) && names.includes(tableStatus);
     };
     const curTab = CN_TABS.find((x) => x[0] === tab) || CN_TABS[0];
     const list = rows.filter((r) => inTab(r, curTab[3]));
@@ -28399,6 +28385,7 @@ const CustomerApp = (() => {
                 row={row}
                 orderType={row.order_type}
                 history={history}
+                customerView
               />
             </Card>
           )}
@@ -34746,6 +34733,50 @@ function AirShipmentDetailPage() {
 // Same style as airStatusTone / airNextStatus / airStatusCanAdvance.
 // ============================================================
 
+// Customer-facing CN Purchase Order table statuses. Kept separate from the
+// underlying cn_orders.status workflow and declared at module scope because
+// both the customer portal and staff/admin CN Orders page use this list.
+const CN_ORDER_TABLE_STATUS_FLOW = [
+  "Waiting Order Payment",
+  "Approve Purchase",
+  "Purchased",
+  "Intransit",
+  "Inbound Origin",
+  "Outbound Origin",
+  "Arrive Destination",
+  "Delivery",
+  "Completed",
+];
+
+// Shared display-only status mapper. Module scope is required because both the
+// customer portal and the Admin/Staff CN Orders page call this helper.
+const cnOrderTableStatus = (row) => {
+  if (!row) return "Waiting Order Payment";
+  const core = cnNormalizeStatus(row.status);
+  if (core === "Refund Order") return "Refund Order";
+  const paymentStatus = String(row.payment_status || "Unpaid");
+  const total = Number(row.total_due_usd) || 0;
+  const paid = Number(row.amount_paid_usd) || 0;
+  const needsPayment =
+    row.order_type !== "direct" &&
+    paymentStatus !== "Paid" &&
+    paymentStatus !== "Refunded" &&
+    total - paid > 0.005;
+  if (needsPayment) return "Waiting Order Payment";
+  if (core === "Order Processing") return "Approve Purchase";
+  if (core === "Purchased") return "Purchased";
+  if (core === "Shipping to China WH") return "Intransit";
+  if (core === "Inbound" || core === "Inbound Origin") return "Inbound Origin";
+  if (core === "Outbound" || core === "Outbound Origin")
+    return "Outbound Origin";
+  if (["Arrived", "Arrive WH-KH", "Arrived Destination"].includes(core))
+    return "Arrive Destination";
+  if (["Shipping to Branch", "Inbound Warehouse"].includes(core))
+    return "Delivery";
+  if (core === "Complete Order" || core === "Completed") return "Completed";
+  return core || "Waiting Order Payment";
+};
+
 const CN_ORDER_STATUS_FLOW = [
   "Order Processing",
   "Purchased",
@@ -34858,6 +34889,20 @@ function cnStatusTone(status) {
     case "Waiting Order Payment":
       // Match the customer-facing Pending Shipping Payment badge.
       return "bg-red-50 text-red-600";
+    case "Approve Purchase":
+      return "bg-indigo-50 text-indigo-700";
+    case "Intransit":
+      return "bg-blue-50 text-blue-700";
+    case "Inbound Origin":
+      return "bg-violet-50 text-violet-700";
+    case "Outbound Origin":
+      return "bg-amber-50 text-amber-700";
+    case "Arrive Destination":
+      return "bg-teal-50 text-teal-700";
+    case "Delivery":
+      return "bg-cyan-50 text-cyan-700";
+    case "Completed":
+      return "bg-emerald-50 text-emerald-700";
     case "Purchased":
       return "bg-sky-50 text-sky-700";
     case "Shipping to China WH":
@@ -37389,33 +37434,89 @@ function CnHistoryModal({ history, onClose }) {
 // ------------------------------------------------------------
 // Timeline
 // ------------------------------------------------------------
-function CnStatusTimeline({ row: rowProp, status, history = [], orderType }) {
-  // This timeline represents the operational CN/TK workflow only.
-  // Waiting Order Payment is a list/filter state; customer detail shows this
-  // timeline only after payment succeeds. The payment panel remains separate.
+function CnStatusTimeline({
+  row: rowProp,
+  status,
+  history = [],
+  orderType,
+  customerView = false,
+}) {
+  // Customer detail uses the simplified Order Table statuses after purchase;
+  // Admin/Staff keeps the original operational CN/TK workflow unchanged.
   const row = rowProp || { status };
   const normalizedStatus = cnNormalizeStatus(row.status);
   const refunded = normalizedStatus === CN_ORDER_TERMINAL;
   const isDirect = (orderType ?? row.order_type) === "direct";
-  const flowIndex = cnStatusIndex(normalizedStatus);
-  const isComplete = normalizedStatus === "Complete Order";
+  const customerFlow = [
+    "Order Processing",
+    "Purchased",
+    "Intransit",
+    "Inbound Origin",
+    "Outbound Origin",
+    "Arrive Destination",
+    "Delivery",
+    "Completed",
+  ];
+  const customerCurrent = cnOrderTableStatus(row);
+  const timelineCurrent = customerView
+    ? customerCurrent === "Approve Purchase"
+      ? "Order Processing"
+      : customerCurrent
+    : normalizedStatus;
+  const flow = customerView ? customerFlow : CN_ORDER_STATUS_FLOW;
+  const flowIndex = customerView
+    ? Math.max(0, customerFlow.indexOf(timelineCurrent))
+    : cnStatusIndex(normalizedStatus);
+  const isComplete = customerView
+    ? timelineCurrent === "Completed"
+    : normalizedStatus === "Complete Order";
+  const toCustomerStatus = (value) => {
+    const core = cnNormalizeStatus(value);
+    if (core === "Order Processing" || core === "Approve Purchase")
+      return "Order Processing";
+    if (core === "Purchased") return "Purchased";
+    if (core === "Shipping to China WH" || core === "Intransit")
+      return "Intransit";
+    if (core === "Inbound" || core === "Inbound Origin")
+      return "Inbound Origin";
+    if (core === "Outbound" || core === "Outbound Origin")
+      return "Outbound Origin";
+    if (
+      [
+        "Arrived",
+        "Arrive WH-KH",
+        "Arrived Destination",
+        "Arrive Destination",
+      ].includes(core)
+    )
+      return "Arrive Destination";
+    if (["Shipping to Branch", "Inbound Warehouse", "Delivery"].includes(core))
+      return "Delivery";
+    if (["Complete Order", "Completed"].includes(core)) return "Completed";
+    return core;
+  };
   const timeOf = (s) =>
-    history.find(
-      (h) => h.event === "status" && cnNormalizeStatus(h.status) === s,
-    )?.created_at;
+    history.find((h) => {
+      if (h.event !== "status") return false;
+      return customerView
+        ? toCustomerStatus(h.status) === s
+        : cnNormalizeStatus(h.status) === s;
+    })?.created_at;
   const refundEntry = history.find(
     (h) => h.event === "status" && h.status === CN_ORDER_TERMINAL,
   );
 
-  const timelineSteps = CN_ORDER_STATUS_FLOW.map((s, i) => ({
-    status: s,
-    flowIndex: i,
-  })).filter(({ status: s, flowIndex: i }) => {
-    // Direct purchases can bypass purchasing milestones when no timestamp
-    // exists, preserving the existing direct-order workflow behavior.
-    if (isDirect && i < 2 && !timeOf(s)) return false;
-    return true;
-  });
+  const timelineSteps = flow
+    .map((s, i) => ({
+      status: s,
+      flowIndex: i,
+    }))
+    .filter(({ status: s, flowIndex: i }) => {
+      // Direct purchases can bypass purchasing milestones when no timestamp
+      // exists, preserving the existing direct-order workflow behavior.
+      if (isDirect && i < 2 && !timeOf(s)) return false;
+      return true;
+    });
 
   return (
     <div>
@@ -37457,7 +37558,7 @@ function CnStatusTimeline({ row: rowProp, status, history = [], orderType }) {
                   {formatDbTimestamp(t)}
                 </p>
               )}
-              {active && CN_AUTO_STAGES.has(s) && (
+              {!customerView && active && CN_AUTO_STAGES.has(s) && (
                 <p className="text-xs text-blue-600 mt-0.5">
                   Updated automatically from the TK.
                 </p>
@@ -38227,7 +38328,7 @@ function CnOrdersPage() {
   const filtered = rows.filter(
     (r) =>
       (!q || searchableOrder(r).includes(q.toLowerCase())) &&
-      (!status || cnNormalizeStatus(r.status) === status) &&
+      (!status || cnOrderTableStatus(r) === status) &&
       (!pay || r.payment_status === pay),
   );
   const ordersById = new Map(rows.map((r) => [r.id, r]));
@@ -38373,7 +38474,7 @@ function CnOrdersPage() {
                 className={`${INPUT_CLS} w-auto min-w-[180px]`}
               >
                 <option value="">All Status</option>
-                {[...CN_ORDER_STATUS_FLOW, CN_ORDER_TERMINAL].map((x) => (
+                {[...CN_ORDER_TABLE_STATUS_FLOW, CN_ORDER_TERMINAL].map((x) => (
                   <option key={x} value={x}>
                     {x}
                   </option>
@@ -38524,7 +38625,7 @@ function CnOrdersPage() {
                         </td>
                         <td className="px-4 py-3">
                           <CnStatusBadge
-                            status={r.status}
+                            status={cnOrderTableStatus(r)}
                             partial={r.is_partial}
                           />
                         </td>
