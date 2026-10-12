@@ -37979,6 +37979,8 @@ function CnActualCostModal({ row, onClose, onSaved }) {
 }
 
 // ------------------------------------------------------------
+// CN Orders use JZEYYMMDD### IDs assigned by the Supabase trigger.
+// Keep ID generation in the database so simultaneous order creation cannot collide.
 // CN Orders / TK List / Purchase & Finance
 // ------------------------------------------------------------
 function CnOrdersPage() {
