@@ -816,6 +816,11 @@ const NAV_SECTIONS = [
         path: "/deleted-accounts",
       },
       {
+        label: "Customer Recovery",
+        icon: "ArchiveRestore",
+        path: "/customer-recovery",
+      },
+      {
         label: "Customer Features",
         icon: "ToggleRight",
         path: "/customer-features",
@@ -988,6 +993,10 @@ const PERMISSION_GROUPS = [
     perms: [
       ...crudPerms("customer", "Customer"),
       ["customer.reset_password", "Reset Customer Password"],
+      ["customer.recovery.view", "View Deleted Customers (Customer Recovery)"],
+      ["customer.restore", "Restore Archived Customer"],
+      ["customer.phone_change", "Change Customer Phone Number"],
+      ["customer.purge", "Permanently Remove Archived Customer"],
       ...crudPerms("customer_account", "Customer Account"),
       ...crudPerms("customer_address", "Customer Address"),
       ["customer_transfer.view", "View Customer ID Transfer"],
@@ -1078,6 +1087,7 @@ const PATH_VIEW = {
   "/customer-addresses": "customer_address.view",
   "/customer-transfer": "customer_transfer.view",
   "/deleted-accounts": "customer.view",
+  "/customer-recovery": "customer.recovery.view",
   "/orders": "order.view",
   "/cn-orders": "cn_order.view",
   "/warehouses": "warehouse.view",
@@ -11097,6 +11107,10 @@ function pathToTable(path) {
 // difference — and never fetch the raw uuid for display.
 const CUSTOMERS_DISPLAY_SELECT =
   "id:customer_code, name, email, phone, warehouse, status, created_at, avatar_url";
+// Archived / purged customers are hidden from the normal Customers list; they
+// live in Customer Recovery. (status NULL still counts as a normal customer.)
+const HIDE_ARCHIVED_CUSTOMERS =
+  "status.is.null,status.not.in.(archived,purged)";
 
 // Loads rows for a module from Supabase. If Supabase isn't configured, or
 // the table doesn't exist yet / errors out, it falls back to the mock rows
@@ -11115,9 +11129,11 @@ function useTableRows(path, fallbackRows) {
   const refetch = React.useCallback(async () => {
     if (!supabase) return;
     setLoading(true);
-    const { data, error } = await supabase
+    let listQuery = supabase
       .from(tableName)
-      .select(isCustomers ? CUSTOMERS_DISPLAY_SELECT : "*")
+      .select(isCustomers ? CUSTOMERS_DISPLAY_SELECT : "*");
+    if (isCustomers) listQuery = listQuery.or(HIDE_ARCHIVED_CUSTOMERS);
+    const { data, error } = await listQuery
       .order("created_at", { ascending: false })
       .limit(500);
     setLoading(false);
@@ -11180,7 +11196,33 @@ function useTableRows(path, fallbackRows) {
     return merged;
   }
 
-  async function deleteRow(row) {
+  async function deleteRow(row, reason) {
+    if (supabase && row?.id !== undefined && isCustomers) {
+      // Customers are never hard-deleted: archive keeps the identity, orders,
+      // wallet, addresses and history. Server enforces customer.delete.
+      const { data: found, error: findErr } = await supabase
+        .from("customers")
+        .select("id")
+        .eq("customer_code", row.id)
+        .maybeSingle();
+      if (findErr) throw findErr;
+      if (!found?.id) throw new Error("Customer not found.");
+      const { error: archErr } = await supabase.rpc("archive_customer", {
+        p_customer_id: found.id,
+        p_reason: reason || null,
+      });
+      if (archErr) {
+        if (archErr.code === "42501") throw new Error(NO_PERM_MSG);
+        throw archErr;
+      }
+      // Also block the Auth login itself (best effort; RLS + the login check
+      // already stop access even if this call fails).
+      callCustomerRecovery({ action: "lock", customer_code: row.id }).catch(
+        () => {},
+      );
+      setRows((prev) => prev.filter((r) => !sameRow(r, row)));
+      return;
+    }
     if (supabase && row?.id !== undefined) {
       const { data, error } = await supabase
         .from(tableName)
@@ -13033,9 +13075,16 @@ function CustomerResetPasswordModal({ row, onClose }) {
   );
 }
 
-function RowDeleteModal({ label, notice, onConfirm, onClose }) {
+function RowDeleteModal({
+  label,
+  notice,
+  onConfirm,
+  onClose,
+  archive = false,
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [reason, setReason] = useState("");
   if (!label) return null;
   return (
     <div
@@ -13048,13 +13097,35 @@ function RowDeleteModal({ label, notice, onConfirm, onClose }) {
       >
         <div className="px-5 py-4 border-b border-mist-200 flex items-center gap-2 text-signal-red">
           <TriangleAlert size={18} />
-          <h3 className="font-display font-bold text-lg">Delete</h3>
+          <h3 className="font-display font-bold text-lg">
+            {archive ? "Archive customer" : "Delete"}
+          </h3>
         </div>
         <div className="px-5 py-4 text-sm text-ink-700 space-y-2">
-          <p>
-            Are you sure you want to permanently delete <b>{label}</b>{" "}
-            ជាអចិន្ត្រៃយ៍មែនទេ? This action cannot be undone.
-          </p>
+          {archive ? (
+            <>
+              <p>
+                Archive <b>{label}</b>? គណនីនឹងត្រូវផ្អាក មិនអាចចូលប្រើបានទេ
+                ប៉ុន្តែ Orders, Wallet, Address និងប្រវត្តិទាំងអស់ត្រូវបានរក្សា
+                ហើយអាចស្តារឡើងវិញបានពី Customer Recovery។
+              </p>
+              <label className="block text-xs font-medium text-ink-700">
+                Reason (optional)
+                <textarea
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  maxLength={300}
+                  rows={2}
+                  className="mt-1 w-full border border-mist-200 rounded-md px-3 py-2 text-sm"
+                />
+              </label>
+            </>
+          ) : (
+            <p>
+              Are you sure you want to permanently delete <b>{label}</b>{" "}
+              ជាអចិន្ត្រៃយ៍មែនទេ? This action cannot be undone.
+            </p>
+          )}
           {notice && (
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
               {notice}
@@ -13077,17 +13148,26 @@ function RowDeleteModal({ label, notice, onConfirm, onClose }) {
               setBusy(true);
               setError("");
               try {
-                await onConfirm();
+                await onConfirm(reason.trim());
                 onClose();
               } catch (err) {
-                setError(err.message || "Unable to delete.");
+                setError(
+                  err.message ||
+                    (archive ? "Unable to archive." : "Unable to delete."),
+                );
               } finally {
                 setBusy(false);
               }
             }}
             className="bg-signal-red text-white text-sm font-medium px-4 py-2 rounded-md hover:bg-signal-red/90 disabled:opacity-50"
           >
-            {busy ? "Deleting..." : "Delete"}
+            {busy
+              ? archive
+                ? "Archiving..."
+                : "Deleting..."
+              : archive
+                ? "Archive"
+                : "Delete"}
           </button>
         </div>
       </div>
@@ -13998,12 +14078,13 @@ function ListPage({
                 ? deletingRow.tk
                 : String(deletingRow.id ?? deletingRow.name ?? "")
             }
+            archive={path === "/customers"}
             notice={
               path === "/customers" && deletingOrderCount?.total > 0
-                ? `Order សរុប ${deletingOrderCount.total} (China ${deletingOrderCount.tk} · Indo ${deletingOrderCount.air}) នឹងនៅដដែល ប៉ុន្តែគ្មានម្ចាស់ទៀតទេ ព្រោះគណនីត្រូវបានលុប។ (These orders are kept without an owner because the account is deleted.)`
+                ? `Order សរុប ${deletingOrderCount.total} (China ${deletingOrderCount.tk} · Indo ${deletingOrderCount.air}) នៅតែភ្ជាប់ជាមួយគណនីនេះ ហើយនឹងមិនបាត់ឡើយ។ (These orders stay linked to the archived account.)`
                 : null
             }
-            onConfirm={async () => {
+            onConfirm={async (reason) => {
               if (!canDeleteRows) throw new Error(NO_PERM_MSG);
               const delLabel = String(
                 isLinkedTk
@@ -14012,8 +14093,14 @@ function ListPage({
               );
               const res = await (isLinkedTk
                 ? deletePackage(deletingRow.tk)
-                : deleteRow(deletingRow));
-              emitCBToast("ok", "Deleted", `${delLabel} was deleted.`);
+                : deleteRow(deletingRow, reason));
+              emitCBToast(
+                "ok",
+                path === "/customers" ? "Archived" : "Deleted",
+                path === "/customers"
+                  ? `${delLabel} was archived. Restore it from Customer Recovery.`
+                  : `${delLabel} was deleted.`,
+              );
               return res;
             }}
             onClose={() => setDeletingRow(null)}
@@ -24502,6 +24589,13 @@ const CustomerApp = (() => {
       (async () => {
         setLoading(true);
         const m = await loadMe(session.user.id);
+        if (m && m.status === "archived") {
+          // Archived account: RLS already hides all data; also end the session.
+          await supabase.auth.signOut();
+          setMe(null);
+          setLoading(false);
+          return;
+        }
         if (m)
           await Promise.all([
             loadShips(),
@@ -24529,16 +24623,28 @@ const CustomerApp = (() => {
           "Please enter your phone number and password.",
           "សូមបញ្ចូលលេខទូរស័ព្ទ និងលេខសម្ងាត់។",
         );
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data: signed, error } = await supabase.auth.signInWithPassword({
         email: fakeEmailForPhone(phone),
         password: pw,
       });
-      return error
-        ? tr(
-            "Incorrect phone number or password.",
-            "លេខទូរស័ព្ទ ឬលេខសម្ងាត់មិនត្រឹមត្រូវ។",
-          )
-        : null;
+      if (error)
+        return tr(
+          "Incorrect phone number or password.",
+          "លេខទូរស័ព្ទ ឬលេខសម្ងាត់មិនត្រឹមត្រូវ។",
+        );
+      const { data: acct } = await supabase
+        .from("customers")
+        .select("status")
+        .eq("auth_user_id", signed?.user?.id)
+        .maybeSingle();
+      if (acct?.status === "archived") {
+        await supabase.auth.signOut();
+        return tr(
+          "This account is inactive. Please contact our team to recover it.",
+          "គណនីនេះត្រូវបានផ្អាក។ សូមទាក់ទងក្រុមការងារដើម្បីស្តារឡើងវិញ។",
+        );
+      }
+      return null;
     };
     const signup = async (name, phone, email, pw) => {
       if (!supabase)
@@ -49943,6 +50049,904 @@ function DeliveryPage() {
 }
 
 // ============================================================
+// pages/CustomerRecovery.jsx — Archived ("deleted") customers.
+// Archiving (archive_customer RPC) keeps the customer identity and every
+// order / wallet / address / TK record, and blocks login. Restore and Change
+// Phone run through the `customer-recovery` Edge Function (server-side
+// permission checks, identity attestation, OTP for new numbers).
+// ============================================================
+const CUSTOMER_RECOVERY_FUNCTION = "customer-recovery";
+// Privileged recovery actions run in the Edge Function (permission re-checked
+// server-side); the browser never touches the service-role key.
+async function callCustomerRecovery(body) {
+  if (!supabase) throw new Error("Supabase is not connected.");
+  const { data: session } = await supabase.auth.getSession();
+  const { data, error } = await supabase.functions.invoke(
+    CUSTOMER_RECOVERY_FUNCTION,
+    {
+      body,
+      headers: { Authorization: `Bearer ${session.session?.access_token}` },
+    },
+  );
+  if (error)
+    throw new Error(await edgeFnErrorMessage(error, "Request failed."));
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+const CR_NEW_NUMBER_CHECKS = [
+  ["called_new_number", "I called the new number and spoke to the customer"],
+  [
+    "customer_contacted_from_new_number",
+    "The customer contacted us from the new number",
+  ],
+  ["in_person", "The customer showed the new number in person"],
+];
+const CR_VERIFY_METHODS = [
+  ["id_document", "ID document checked"],
+  ["video_call", "Video call"],
+  ["known_account_details", "Account details confirmed"],
+  ["in_person", "In person"],
+];
+
+const CR_PAGE_SIZE = 20;
+const CR_FILTERS = [
+  ["archived", "Archived"],
+  ["restored", "Restored"],
+  ["active", "Active"],
+  ["purged", "Permanently Deleted"],
+];
+
+// Mirrors public.normalize_phone() in the database (Cambodia-first).
+function crNormalizePhone(raw) {
+  let d = String(raw || "").replace(/\D/g, "");
+  if (!d) return "";
+  if (d.startsWith("00")) d = d.slice(2);
+  if (d.startsWith("8550")) d = "855" + d.slice(4);
+  if (d.startsWith("855")) return d;
+  if (d.startsWith("0")) return "855" + d.slice(1);
+  if (d.length >= 8 && d.length <= 9) return "855" + d;
+  return d;
+}
+
+function CustomerRecoveryPage() {
+  const { user } = useAuth();
+  const canView = hasPermission(user, "customer.recovery.view");
+  const isSuper = user?.role === SUPER_ADMIN;
+  const [filter, setFilter] = useState("archived");
+  const [q, setQ] = useState("");
+  const [term, setTerm] = useState("");
+  const [page, setPage] = useState(0);
+  const [state, setState] = useState({
+    loading: true,
+    rows: [],
+    total: 0,
+    error: "",
+  });
+  const [detail, setDetail] = useState(null);
+  const [retention, setRetention] = useState({ loaded: false, days: null });
+  const [retentionDraft, setRetentionDraft] = useState("");
+  const [retentionMsg, setRetentionMsg] = useState("");
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setTerm(q.trim());
+      setPage(0);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q]);
+  useEffect(() => {
+    setPage(0);
+  }, [filter]);
+
+  useEffect(() => {
+    if (!supabase || !canView) return;
+    supabase
+      .from("customer_recovery_settings")
+      .select("retention_days")
+      .eq("id", 1)
+      .maybeSingle()
+      .then(({ data }) => {
+        setRetention({ loaded: true, days: data?.retention_days ?? null });
+        setRetentionDraft(
+          data?.retention_days == null ? "" : String(data.retention_days),
+        );
+      });
+  }, [canView]);
+
+  useEffect(() => {
+    let alive = true;
+    if (!supabase || !canView) {
+      setState({ loading: false, rows: [], total: 0, error: "" });
+      return;
+    }
+    setState((s) => ({ ...s, loading: true, error: "" }));
+    (async () => {
+      let query = supabase
+        .from("customers")
+        .select(
+          "id, customer_code, name, phone, email, status, created_at, archived_at, archived_by_name, archive_reason, status_before_archive, restored_at",
+          { count: "exact" },
+        );
+      if (filter === "archived") query = query.eq("status", "archived");
+      else if (filter === "purged") query = query.eq("status", "purged");
+      else if (filter === "restored")
+        query = query.not("restored_at", "is", null).neq("status", "archived");
+      else query = query.eq("status", "active");
+      const safe = term.replace(/[,()%*\\]/g, " ").trim();
+      if (safe) {
+        const parts = [
+          `name.ilike.%${safe}%`,
+          `customer_code.ilike.%${safe}%`,
+          `email.ilike.%${safe}%`,
+          `phone.ilike.%${safe}%`,
+        ];
+        const norm = crNormalizePhone(safe);
+        if (safe.replace(/\D/g, "").length >= 6 && norm)
+          parts.push(`phone_normalized.eq.${norm}`);
+        query = query.or(parts.join(","));
+      }
+      const from = page * CR_PAGE_SIZE;
+      const { data, error, count } = await query
+        .order(filter === "archived" ? "archived_at" : "created_at", {
+          ascending: false,
+        })
+        .range(from, from + CR_PAGE_SIZE - 1);
+      if (!alive) return;
+      setState({
+        loading: false,
+        rows: data || [],
+        total: count || 0,
+        error: error ? error.message || "Unable to load customers." : "",
+      });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [filter, term, page, canView, reloadKey]);
+
+  const saveRetention = async () => {
+    setRetentionMsg("");
+    const raw = retentionDraft.trim();
+    const days = raw === "" ? null : Number(raw);
+    if (days !== null && (!Number.isInteger(days) || days < 0)) {
+      setRetentionMsg(
+        "Enter a whole number of days, or leave empty to keep forever.",
+      );
+      return;
+    }
+    const { error } = await supabase
+      .from("customer_recovery_settings")
+      .update({
+        retention_days: days,
+        updated_by: user?.id || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", 1);
+    if (error) {
+      setRetentionMsg(error.message || "Unable to save.");
+      return;
+    }
+    setRetention({ loaded: true, days });
+    setRetentionMsg("Saved.");
+  };
+
+  if (!canView)
+    return (
+      <div className="mx-auto max-w-[900px] p-7 text-sm text-slate-600">
+        {NO_PERM_MSG}
+      </div>
+    );
+
+  const pages = Math.max(1, Math.ceil(state.total / CR_PAGE_SIZE));
+  const statusTone = (st) =>
+    st === "archived"
+      ? "bg-amber-50 text-amber-700 border-amber-200"
+      : st === "purged"
+        ? "bg-slate-100 text-slate-600 border-slate-200"
+        : "bg-emerald-50 text-emerald-700 border-emerald-200";
+
+  return (
+    <div className="mx-auto max-w-[1300px] space-y-5 p-5 md:p-7">
+      <div>
+        <h1 className="cb-page-title flex items-center gap-2 text-2xl font-bold text-slate-900">
+          <Icons.ArchiveRestore size={24} className="text-slate-500" /> Customer
+          Recovery
+        </h1>
+        <p className="mt-1 text-sm text-slate-500">
+          Archived customers keep their ID, orders, wallet, addresses and
+          history. They cannot log in until restored.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap gap-1">
+          {CR_FILTERS.map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setFilter(key)}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium border ${
+                filter === key
+                  ? "bg-slate-900 text-white border-slate-900"
+                  : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Search name, phone, customer ID or email"
+          className="min-w-[220px] flex-1 rounded-md border border-slate-200 px-3 py-2 text-sm"
+        />
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
+              <tr>
+                <th className="px-4 py-3">Customer</th>
+                <th className="px-4 py-3">ID</th>
+                <th className="px-4 py-3">Phone</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Archived</th>
+                <th className="px-4 py-3">Reason</th>
+                <th className="px-4 py-3">By</th>
+                <th className="px-4 py-3" />
+              </tr>
+            </thead>
+            <tbody>
+              {state.loading ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-6 text-slate-400">
+                    Loading...
+                  </td>
+                </tr>
+              ) : state.error ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-6 text-signal-red">
+                    {state.error}
+                  </td>
+                </tr>
+              ) : state.rows.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-6 text-slate-400">
+                    No customers found.
+                  </td>
+                </tr>
+              ) : (
+                state.rows.map((r) => (
+                  <tr key={r.id} className="border-t border-slate-100">
+                    <td className="px-4 py-3 font-semibold text-slate-800">
+                      {r.name || "—"}
+                    </td>
+                    <td className="px-4 py-3">{r.customer_code || "—"}</td>
+                    <td className="px-4 py-3">{r.phone || "—"}</td>
+                    <td className="px-4 py-3">
+                      <span
+                        className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${statusTone(r.status)}`}
+                      >
+                        {r.status || "—"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">{cdDate(r.archived_at)}</td>
+                    <td className="px-4 py-3 max-w-[220px] truncate">
+                      {r.archive_reason || "—"}
+                    </td>
+                    <td className="px-4 py-3">{r.archived_by_name || "—"}</td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setDetail(r)}
+                        className="text-xs font-medium text-blue-700 hover:underline"
+                      >
+                        View Details
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex items-center justify-between border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
+          <span>
+            {state.total} result{state.total === 1 ? "" : "s"} · page {page + 1}{" "}
+            / {pages}
+          </span>
+          <div className="flex gap-1">
+            <button
+              type="button"
+              disabled={page === 0}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              className="rounded-md border border-slate-200 px-3 py-1.5 disabled:opacity-40"
+            >
+              Prev
+            </button>
+            <button
+              type="button"
+              disabled={page + 1 >= pages}
+              onClick={() => setPage((p) => p + 1)}
+              className="rounded-md border border-slate-200 px-3 py-1.5 disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 text-sm shadow-sm">
+        <div className="font-semibold text-slate-800">Retention policy</div>
+        <p className="mt-1 text-xs text-slate-500">
+          How long archived accounts are kept before permanent removal can be
+          considered. Empty = keep forever. Permanent removal is never automatic
+          and needs its own permission.
+        </p>
+        {retention.loaded &&
+          (isSuper ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <input
+                value={retentionDraft}
+                onChange={(e) => setRetentionDraft(e.target.value)}
+                placeholder="days (empty = forever)"
+                className="w-48 rounded-md border border-slate-200 px-3 py-1.5 text-sm"
+              />
+              <button
+                type="button"
+                onClick={saveRetention}
+                className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white"
+              >
+                Save
+              </button>
+              {retentionMsg && (
+                <span className="text-xs text-slate-500">{retentionMsg}</span>
+              )}
+            </div>
+          ) : (
+            <div className="mt-2 text-xs text-slate-600">
+              Current:{" "}
+              {retention.days == null
+                ? "keep forever"
+                : `${retention.days} days`}
+            </div>
+          ))}
+      </div>
+
+      {detail && (
+        <CustomerRecoveryDetail
+          row={detail}
+          user={user}
+          onClose={() => setDetail(null)}
+          onChanged={() => {
+            setDetail(null);
+            setReloadKey((k) => k + 1);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CustomerRecoveryDetail({ row, user, onClose, onChanged }) {
+  const [counts, setCounts] = useState(null);
+  const [modal, setModal] = useState(null); // "restore" | "phone"
+  const [audit, setAudit] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const count = async (table) => {
+        const { count: n, error } = await supabase
+          .from(table)
+          .select("id", { count: "exact", head: true })
+          .eq("customer_id", row.id);
+        return error ? "—" : n;
+      };
+      const [tk, cn, wallet, addr] = await Promise.all([
+        count("packages"),
+        count("cn_orders"),
+        count("wallet_transactions"),
+        count("customer_addresses"),
+      ]);
+      const { data } = await supabase
+        .from("customer_recovery_audit")
+        .select("action, actor_name, reason, created_at")
+        .eq("customer_id", row.id)
+        .order("created_at", { ascending: false })
+        .limit(10);
+      if (!alive) return;
+      setCounts({ tk, cn, wallet, addr });
+      setAudit(data || []);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [row.id]);
+
+  const isArchived = row.status === "archived";
+  const isPurged = row.status === "purged";
+  const isSuperUser = user?.role === SUPER_ADMIN;
+  const canRestore = isArchived && hasPermission(user, "customer.restore");
+  const canPhone =
+    !isArchived && !isPurged && hasPermission(user, "customer.phone_change");
+
+  const Field = ({ label, children }) => (
+    <div>
+      <div className="text-[11px] uppercase text-slate-400">{label}</div>
+      <div className="text-sm text-slate-800">{children || "—"}</div>
+    </div>
+  );
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink-900/40 px-4"
+      onClick={onClose}
+    >
+      {modal === "restore" && (
+        <CustomerRestoreModal
+          row={row}
+          onClose={() => setModal(null)}
+          onDone={onChanged}
+        />
+      )}
+      {modal === "phone" && (
+        <CustomerPhoneChangeModal
+          row={row}
+          isSuper={isSuperUser}
+          onClose={() => setModal(null)}
+          onDone={onChanged}
+        />
+      )}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-md bg-white shadow-lg"
+      >
+        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+          <h3 className="font-display text-lg font-bold">{row.name || "—"}</h3>
+          <button type="button" onClick={onClose} className="text-slate-400">
+            ✕
+          </button>
+        </div>
+        <div className="space-y-4 px-5 py-4">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Customer ID">{row.customer_code}</Field>
+            <Field label="Status">{row.status}</Field>
+            <Field label="Phone">{row.phone}</Field>
+            <Field label="Email">{row.email}</Field>
+            <Field label="Archived on">{cdDate(row.archived_at)}</Field>
+            <Field label="Archived by">{row.archived_by_name}</Field>
+            <Field label="Reason">{row.archive_reason}</Field>
+            <Field label="Status before archive">
+              {row.status_before_archive}
+            </Field>
+          </div>
+          <div>
+            <div className="mb-1 text-[11px] uppercase text-slate-400">
+              Preserved records
+            </div>
+            <div className="grid grid-cols-4 gap-2 text-center text-xs">
+              {[
+                ["TK / Packages", counts?.tk],
+                ["CN Orders", counts?.cn],
+                ["Wallet tx", counts?.wallet],
+                ["Addresses", counts?.addr],
+              ].map(([label, v]) => (
+                <div
+                  key={label}
+                  className="rounded-md border border-slate-200 px-2 py-2"
+                >
+                  <div className="text-base font-semibold text-slate-800">
+                    {counts ? v : "…"}
+                  </div>
+                  <div className="text-slate-500">{label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          {audit.length > 0 && (
+            <div>
+              <div className="mb-1 text-[11px] uppercase text-slate-400">
+                Audit trail
+              </div>
+              <ul className="space-y-1 text-xs text-slate-600">
+                {audit.map((a, i) => (
+                  <li key={i}>
+                    {cdDate(a.created_at)} · <b>{a.action}</b>
+                    {a.actor_name ? ` · ${a.actor_name}` : ""}
+                    {a.reason ? ` · ${a.reason}` : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div>
+            <div className="flex flex-wrap gap-2">
+              {canRestore && (
+                <button
+                  type="button"
+                  onClick={() => setModal("restore")}
+                  className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white"
+                >
+                  Restore Account
+                </button>
+              )}
+              {canPhone && (
+                <button
+                  type="button"
+                  onClick={() => setModal("phone")}
+                  className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-800"
+                >
+                  Change Phone Number
+                </button>
+              )}
+            </div>
+            <p className="mt-2 text-[11px] text-slate-400">
+              {isArchived
+                ? "Restore the account first; then use Reset Password on the Customers page if the customer forgot it. Phone changes need an active account."
+                : `Password reset: use Reset Password on the Customers page. ${
+                    isSuperUser
+                      ? "As Super Admin you can change the phone number directly after verifying the customer."
+                      : "Changing the phone number needs an OTP sent to the new number."
+                  }`}
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Identity-verification block shared by Restore and Change Phone. The admin
+// attests the check; the attestation is stored in the audit trail.
+function CrVerifyFields({ v, setV }) {
+  return (
+    <div className="space-y-2 rounded-md border border-slate-200 p-3">
+      <div className="text-xs font-semibold text-slate-700">
+        Customer identity verification (required)
+      </div>
+      <select
+        value={v.method}
+        onChange={(e) => setV({ ...v, method: e.target.value })}
+        className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+      >
+        <option value="">How was the customer verified?</option>
+        {CR_VERIFY_METHODS.map(([k, label]) => (
+          <option key={k} value={k}>
+            {label}
+          </option>
+        ))}
+      </select>
+      <textarea
+        value={v.note}
+        onChange={(e) => setV({ ...v, note: e.target.value })}
+        rows={2}
+        maxLength={500}
+        placeholder="What did you check? (e.g. matched ID card, last order, address)"
+        className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+      />
+      <label className="flex items-start gap-2 text-xs text-slate-700">
+        <input
+          type="checkbox"
+          checked={v.confirmed}
+          onChange={(e) => setV({ ...v, confirmed: e.target.checked })}
+          className="mt-0.5"
+        />
+        I confirm this person is the owner of the account.
+      </label>
+    </div>
+  );
+}
+
+function CustomerRestoreModal({ row, onClose, onDone }) {
+  const [v, setV] = useState({ method: "", note: "", confirmed: false });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState(null);
+  const submit = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const res = await callCustomerRecovery({
+        action: "restore",
+        customer_code: row.customer_code,
+        verification: v,
+      });
+      setResult(res);
+      emitCBToast("ok", "Restored", `${row.customer_code} was restored.`);
+    } catch (err) {
+      setError(err.message || "Restore failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-ink-900/40 px-4"
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!busy) result ? onDone() : onClose();
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md space-y-3 rounded-md bg-white p-5 shadow-lg"
+      >
+        <h3 className="font-display text-lg font-bold">
+          Restore {row.customer_code}
+        </h3>
+        {result ? (
+          <>
+            <p className="text-sm text-slate-700">
+              Account restored. Orders, wallet and history are unchanged.
+            </p>
+            {result.needs_password_reset && (
+              <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                The login account had to be re-created. Set a new password with
+                Reset Password on the Customers page before the customer logs
+                in.
+              </p>
+            )}
+            <div className="text-right">
+              <button
+                type="button"
+                onClick={onDone}
+                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+              >
+                Done
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-slate-600">
+              Restores {row.name || "this customer"} with the original ID and
+              all records. Nothing is re-created or replayed.
+            </p>
+            <CrVerifyFields v={v} setV={setV} />
+            {error && <p className="text-xs text-signal-red">{error}</p>}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={busy}
+                className="px-4 py-2 text-sm text-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submit}
+                disabled={busy}
+                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {busy ? "Restoring..." : "Restore"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function CustomerPhoneChangeModal({ row, onClose, onDone, isSuper = false }) {
+  const [v, setV] = useState({ method: "", note: "", confirmed: false });
+  const [nc, setNc] = useState("");
+  const [newPhone, setNewPhone] = useState("");
+  const [challenge, setChallenge] = useState(null);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+  const run = async (fn) => {
+    setBusy(true);
+    setError("");
+    try {
+      await fn();
+    } catch (err) {
+      setError(err.message || "Request failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  // Super Admin only: no SMS code; the admin attests both checks (audited).
+  const direct = () =>
+    run(async () => {
+      await callCustomerRecovery({
+        action: "phone_direct",
+        customer_code: row.customer_code,
+        new_phone: newPhone.trim(),
+        verification: v,
+        new_number_check: nc,
+      });
+      setDone(true);
+      emitCBToast("ok", "Phone changed", `${row.customer_code} phone updated.`);
+    });
+  const request = () =>
+    run(async () => {
+      const res = await callCustomerRecovery({
+        action: "phone_request",
+        customer_code: row.customer_code,
+        new_phone: newPhone.trim(),
+        verification: v,
+      });
+      setChallenge(res);
+    });
+  const confirm = () =>
+    run(async () => {
+      await callCustomerRecovery({
+        action: "phone_confirm",
+        challenge_id: challenge.challenge_id,
+        code: code.trim(),
+      });
+      setDone(true);
+      emitCBToast("ok", "Phone changed", `${row.customer_code} phone updated.`);
+    });
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-ink-900/40 px-4"
+      onClick={(e) => {
+        e.stopPropagation();
+        if (!busy) done ? onDone() : onClose();
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md space-y-3 rounded-md bg-white p-5 shadow-lg"
+      >
+        <h3 className="font-display text-lg font-bold">
+          Change phone · {row.customer_code}
+        </h3>
+        {done ? (
+          <>
+            <p className="text-sm text-slate-700">
+              Phone number updated. The customer now logs in with the new number
+              and the same password.
+            </p>
+            <div className="text-right">
+              <button
+                type="button"
+                onClick={onDone}
+                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+              >
+                Done
+              </button>
+            </div>
+          </>
+        ) : isSuper ? (
+          <>
+            <div className="text-xs text-slate-500">
+              Current number: <b>{row.phone || "—"}</b>
+            </div>
+            <input
+              value={newPhone}
+              onChange={(e) => setNewPhone(e.target.value)}
+              placeholder="New phone number"
+              className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+            />
+            <CrVerifyFields v={v} setV={setV} />
+            <div className="space-y-2 rounded-md border border-slate-200 p-3">
+              <div className="text-xs font-semibold text-slate-700">
+                New number check (required)
+              </div>
+              <select
+                value={nc}
+                onChange={(e) => setNc(e.target.value)}
+                className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+              >
+                <option value="">How did you check the new number?</option>
+                {CR_NEW_NUMBER_CHECKS.map(([k, label]) => (
+                  <option key={k} value={k}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              Super Admin change: no SMS code is sent. The customer logs in with
+              the new number and the same password. Your name, both checks and
+              the masked numbers are saved in the audit trail.
+            </p>
+            {error && <p className="text-xs text-signal-red">{error}</p>}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={busy}
+                className="px-4 py-2 text-sm text-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={direct}
+                disabled={busy || !newPhone.trim() || !nc}
+                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {busy ? "Changing..." : "Change phone"}
+              </button>
+            </div>
+          </>
+        ) : !challenge ? (
+          <>
+            <div className="text-xs text-slate-500">
+              Current number: <b>{row.phone || "—"}</b>
+            </div>
+            <input
+              value={newPhone}
+              onChange={(e) => setNewPhone(e.target.value)}
+              placeholder="New phone number"
+              className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+            />
+            <CrVerifyFields v={v} setV={setV} />
+            <p className="text-[11px] text-slate-400">
+              A 6-digit code is sent to the new number. Enter it on the next
+              step to prove the customer controls that number.
+            </p>
+            {error && <p className="text-xs text-signal-red">{error}</p>}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={busy}
+                className="px-4 py-2 text-sm text-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={request}
+                disabled={busy || !newPhone.trim()}
+                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {busy ? "Sending..." : "Send code"}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-slate-600">
+              Code sent to <b>{challenge.sent_to}</b>. It expires in 10 minutes.
+            </p>
+            <input
+              value={code}
+              onChange={(e) =>
+                setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+              }
+              inputMode="numeric"
+              placeholder="6-digit code"
+              className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm tracking-widest"
+            />
+            {error && <p className="text-xs text-signal-red">{error}</p>}
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={busy}
+                className="px-4 py-2 text-sm text-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirm}
+                disabled={busy || code.length !== 6}
+                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+              >
+                {busy ? "Verifying..." : "Confirm change"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
 // pages/DeletedAccounts.jsx — Orders whose owner account was deleted.
 // The DB trigger `customers_before_delete` keeps every TK / AIR Order,
 // sets customer_id = null and customer = 'Deleted account'. Nothing else
@@ -50195,6 +51199,10 @@ function AdminApp() {
                 path="/deleted-accounts"
                 element={<DeletedAccountsPage />}
               />
+              <Route
+                path="/customer-recovery"
+                element={<CustomerRecoveryPage />}
+              />
               <Route path="/wallet-top-up" element={<WalletTopUpPage />} />
               <Route path="/reports/:key" element={<ReportsPage />} />
               <Route
@@ -50217,6 +51225,7 @@ function AdminApp() {
                     "/roles",
                     "/customer-features",
                     "/deleted-accounts", // custom page above
+                    "/customer-recovery", // custom page above
                     "/settings",
                     "/wallet-top-up",
                     "/delivery",
