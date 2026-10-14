@@ -24623,10 +24623,30 @@ const CustomerApp = (() => {
           "Please enter your phone number and password.",
           "សូមបញ្ចូលលេខទូរស័ព្ទ និងលេខសម្ងាត់។",
         );
-      const { data: signed, error } = await supabase.auth.signInWithPassword({
-        email: fakeEmailForPhone(phone),
-        password: pw,
-      });
+      // The login email is derived from the digits that were typed at signup,
+      // so 012 345 678, +855 12 345 678 and 85512345678 are the SAME customer
+      // but different emails. Try the equivalent forms (as typed first).
+      const typed = digitsOnly(phone);
+      const norm = crNormalizePhone(phone);
+      const forms = [typed];
+      if (norm && norm.startsWith("855") && norm.length >= 11) {
+        forms.push("0" + norm.slice(3), norm);
+      } else if (norm) {
+        forms.push(norm);
+      }
+      let signed = null;
+      let error = null;
+      for (const f of [...new Set(forms)]) {
+        const res = await supabase.auth.signInWithPassword({
+          email: fakeEmailForPhone(f),
+          password: pw,
+        });
+        signed = res.data;
+        error = res.error;
+        if (!error) break;
+        // only keep trying on wrong-credential errors (not rate limit / network)
+        if (error.code && error.code !== "invalid_credentials") break;
+      }
       if (error)
         return tr(
           "Incorrect phone number or password.",
@@ -24668,10 +24688,17 @@ const CustomerApp = (() => {
             "Password is too short or too weak (min 6 characters).",
             "លេខសម្ងាត់ខ្លី ឬខ្សោយពេក (យ៉ាងតិច ៦ តួ)។",
           );
-        if (/already|registered|exists/i.test(error.message))
+        // Duplicate numbers are refused server-side (Auth + database). The same
+        // generic answer is given for active, archived or unknown owners so
+        // signup cannot be used to discover who is a customer.
+        if (
+          /already|registered|exists|database error|phone_unavailable/i.test(
+            error.message || "",
+          )
+        )
           return tr(
-            "This phone number is already registered.",
-            "លេខទូរស័ព្ទនេះបានប្រើរួចហើយ។",
+            "This phone number can't be used to sign up. If you already have an account, please log in; otherwise contact our team.",
+            "លេខទូរស័ព្ទនេះមិនអាចប្រើសម្រាប់ចុះឈ្មោះបានទេ។ បើអ្នកមានគណនីរួចហើយ សូមចូលគណនី ឬទាក់ទងក្រុមការងារ។",
           );
         return (
           tr("Unable to create account: ", "មិនអាចបង្កើតគណនីបានទេ៖ ") +
@@ -24686,11 +24713,18 @@ const CustomerApp = (() => {
         email: email || null,
         status: "active",
       });
-      if (insErr)
-        return (
-          tr("Unable to save account: ", "មិនអាចរក្សាទុកគណនីបានទេ៖ ") +
-          insErr.message
-        );
+      if (insErr) {
+        await supabase.auth.signOut();
+        return /duplicate|unique|23505/i.test(
+          `${insErr.code || ""} ${insErr.message || ""}`,
+        )
+          ? tr(
+              "This phone number can't be used to sign up. If you already have an account, please log in; otherwise contact our team.",
+              "លេខទូរស័ព្ទនេះមិនអាចប្រើសម្រាប់ចុះឈ្មោះបានទេ។ បើអ្នកមានគណនីរួចហើយ សូមចូលគណនី ឬទាក់ទងក្រុមការងារ។",
+            )
+          : tr("Unable to save account: ", "មិនអាចរក្សាទុកគណនីបានទេ៖ ") +
+              insErr.message;
+      }
       await loadMe(data.user.id);
       await Promise.all([loadShips(), loadAddrs()]);
       return null;
