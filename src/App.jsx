@@ -1899,6 +1899,11 @@ const MODULES = {
       col("phone", "Phone"),
       col("warehouse", "Default Warehouse"),
       col("status", "Status", { status: true }),
+      col("created_at", "Registered", {
+        dateFilter: true,
+        render: (row) => <CreatedAtCell iso={row.created_at} />,
+        csv: (row) => formatIso(row.created_at),
+      }),
     ],
     rows: [], // live data only — loaded from the server
   },
@@ -2473,6 +2478,438 @@ const SHIPPING_FEE_COL = {
 
 function outboundStatusOf(p) {
   return p.status === "Inbound Origin" || !p.status ? "Not Shipped" : p.status;
+}
+
+// ------------------------------------------------------------
+// Date helpers: "Created" cell + date-range filter (local time zone)
+// ------------------------------------------------------------
+const EMPTY_DATE_RANGE = { preset: "", from: "", to: "" };
+const DATE_PRESETS = [
+  { key: "today", label: "Today" },
+  { key: "yesterday", label: "Yesterday" },
+  { key: "last7", label: "Last 7 days" },
+  { key: "last30", label: "Last 30 days" },
+  { key: "thisMonth", label: "This month" },
+  { key: "lastMonth", label: "Last month" },
+];
+
+// "YYYY-MM-DD" in the viewer's LOCAL time zone (slice(0,10) of an ISO string
+// is UTC, which would shift rows registered 12am-7am in Cambodia by a day).
+function localDayKey(input) {
+  const d = input instanceof Date ? input : new Date(input);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function resolveDateRange({ preset, from, to }) {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const d = now.getDate();
+  const day = (yy, mm, dd) => localDayKey(new Date(yy, mm, dd));
+  switch (preset) {
+    case "today":
+      return { from: day(y, m, d), to: day(y, m, d) };
+    case "yesterday":
+      return { from: day(y, m, d - 1), to: day(y, m, d - 1) };
+    case "last7":
+      return { from: day(y, m, d - 6), to: day(y, m, d) };
+    case "last30":
+      return { from: day(y, m, d - 29), to: day(y, m, d) };
+    case "thisMonth":
+      return { from: day(y, m, 1), to: day(y, m, d) };
+    case "lastMonth":
+      return { from: day(y, m - 1, 1), to: day(y, m, 0) };
+    default:
+      return { from: from || "", to: to || "" };
+  }
+}
+
+function dateInRange(iso, range) {
+  const { from, to } = resolveDateRange(range);
+  if (!from && !to) return true;
+  const key = localDayKey(iso);
+  if (!key) return false;
+  return (!from || key >= from) && (!to || key <= to);
+}
+
+function dateRangeLabel(range) {
+  const preset = DATE_PRESETS.find((p) => p.key === range.preset);
+  if (preset) return preset.label;
+  if (range.from || range.to)
+    return `${range.from || "…"} → ${range.to || "…"}`;
+  return "";
+}
+
+function agoShort(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const min = Math.max(0, Math.floor((Date.now() - d.getTime()) / 60000));
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const days = Math.floor(hr / 24);
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  return months < 12 ? `${months}mo ago` : `${Math.floor(months / 12)}y ago`;
+}
+
+// Two-line cell:  Oct 14, 2026  /  10:09 PM · 57m ago
+function CreatedAtCell({ iso }) {
+  if (!iso) return <span className="text-ink-600/40">—</span>;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return <span>{String(iso)}</span>;
+  const date = d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+  const time = d.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return (
+    <div className="leading-tight">
+      <div className="font-medium text-ink-900">{date}</div>
+      <div className="text-xs text-ink-600/55 mt-0.5">
+        {time}
+        <span className="mx-1">·</span>
+        <span className="text-signal-blue">{agoShort(iso)}</span>
+      </div>
+    </div>
+  );
+}
+
+function DateRangeFilter({ label = "Created At", value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    function onClickOutside(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+  const active = dateRangeLabel(value);
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-1.5 text-sm border px-3 py-2 rounded-md hover:bg-mist-50 ${
+          active
+            ? "border-signal-blue text-signal-blue bg-signal-blue/5"
+            : "border-mist-200 text-ink-700"
+        }`}
+      >
+        <Icons.CalendarDays size={14} />
+        {active ? `${label}: ${active}` : label}
+        {active ? (
+          <span
+            role="button"
+            title="Clear"
+            onClick={(e) => {
+              e.stopPropagation();
+              onChange(EMPTY_DATE_RANGE);
+            }}
+            className="ml-0.5 rounded-sm hover:bg-signal-blue/10"
+          >
+            <X size={13} />
+          </span>
+        ) : (
+          <Icons.ChevronDown size={14} />
+        )}
+      </button>
+      {open && (
+        <div className="absolute left-0 mt-1 w-64 bg-white border border-mist-200 rounded-md shadow-lg py-1 z-20">
+          {DATE_PRESETS.map((p) => (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => {
+                onChange({ preset: p.key, from: "", to: "" });
+                setOpen(false);
+              }}
+              className={`w-full text-left px-3 py-1.5 text-sm hover:bg-mist-50 ${
+                value.preset === p.key
+                  ? "text-signal-blue font-medium"
+                  : "text-ink-800"
+              }`}
+            >
+              {p.label}
+            </button>
+          ))}
+          <div className="border-t border-mist-200 mt-1 pt-2 px-3 pb-2 space-y-2">
+            <div className="text-[11px] uppercase tracking-wide text-ink-600/40 font-semibold">
+              Custom range
+            </div>
+            <div>
+              <label className={LABEL_CLS}>ចាប់ពីថ្ងៃ</label>
+              <input
+                type="date"
+                value={value.preset ? "" : value.from}
+                onChange={(e) =>
+                  onChange({
+                    preset: "",
+                    from: e.target.value,
+                    to: value.preset ? "" : value.to,
+                  })
+                }
+                className={INPUT_CLS}
+              />
+            </div>
+            <div>
+              <label className={LABEL_CLS}>ដល់ថ្ងៃ</label>
+              <input
+                type="date"
+                value={value.preset ? "" : value.to}
+                onChange={(e) =>
+                  onChange({
+                    preset: "",
+                    from: value.preset ? "" : value.from,
+                    to: e.target.value,
+                  })
+                }
+                className={INPUT_CLS}
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                onChange(EMPTY_DATE_RANGE);
+                setOpen(false);
+              }}
+              className="w-full text-sm text-ink-700 border border-mist-200 px-3 py-1.5 rounded-md hover:bg-mist-50"
+            >
+              Clear
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// Customers: Registration overview card + list tabs
+// ------------------------------------------------------------
+function ListTab({ active, label, count, onClick }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex items-center gap-2 px-3 py-3 text-sm border-b-2 -mb-px transition-colors ${
+        active
+          ? "border-signal-blue text-signal-blue font-medium"
+          : "border-transparent text-ink-600/60 hover:text-ink-900"
+      }`}
+    >
+      {label}
+      {count !== undefined && (
+        <span
+          className={`text-[11px] px-1.5 py-0.5 rounded-sm ${
+            active
+              ? "bg-signal-blue/10 text-signal-blue"
+              : "bg-mist-100 text-ink-600/60"
+          }`}
+        >
+          {count.toLocaleString("en-US")}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function RegistrationOverview({ rows }) {
+  const [open, setOpen] = useState(true);
+  const [period, setPeriod] = useState("thisMonth");
+
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const d = now.getDate();
+  const key = (yy, mm, dd) => localDayKey(new Date(yy, mm, dd));
+  const dim = (yy, mm) => new Date(yy, mm + 1, 0).getDate();
+  const mon = (yy, mm) =>
+    new Date(yy, mm, 1).toLocaleString("en-US", { month: "short" });
+
+  let cur = null;
+  let prev = null;
+  let curLabel = "All time";
+  let prevLabel = "";
+  let compareText = "";
+  let daysLeft = null;
+  if (period === "thisMonth") {
+    const pd = Math.min(d, dim(y, m - 1));
+    cur = { from: key(y, m, 1), to: key(y, m, d) };
+    prev = { from: key(y, m - 1, 1), to: key(y, m - 1, pd) };
+    curLabel = "This month";
+    prevLabel = `1–${pd} ${mon(y, m - 1)}`;
+    compareText = "vs same days last month";
+    daysLeft = dim(y, m) - d;
+  } else if (period === "lastMonth") {
+    cur = { from: key(y, m - 1, 1), to: key(y, m, 0) };
+    prev = { from: key(y, m - 2, 1), to: key(y, m - 1, 0) };
+    curLabel = mon(y, m - 1);
+    prevLabel = mon(y, m - 2);
+    compareText = "vs previous month";
+  }
+
+  const inRange = (r, range) =>
+    !range ||
+    dateInRange(r.created_at, { preset: "", from: range.from, to: range.to });
+  const isActive = (r) => !r.status || String(r.status) === "active";
+  const count = (range, pred) =>
+    rows.filter((r) => inRange(r, range) && (!pred || pred(r))).length;
+
+  const cards = [
+    {
+      label: "Registered",
+      pred: null,
+      invert: false,
+    },
+    {
+      label: "Active",
+      pred: isActive,
+      invert: false,
+    },
+    {
+      label: "Inactive",
+      pred: (r) => !isActive(r),
+      invert: true, // more inactive = worse
+    },
+  ].map((c) => ({
+    ...c,
+    now: count(cur, c.pred),
+    before: prev ? count(prev, c.pred) : null,
+  }));
+
+  return (
+    <div className="cb-surface cb-card">
+      <div className="flex items-center justify-between gap-3 px-4 lg:px-5 py-3.5 flex-wrap">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex items-center gap-2 text-sm font-medium text-ink-900"
+        >
+          {open ? (
+            <Icons.ChevronDown size={15} />
+          ) : (
+            <Icons.ChevronRight size={15} />
+          )}
+          Registration overview
+          {daysLeft !== null && (
+            <span className="font-normal text-ink-600/45">
+              · {daysLeft} days left
+            </span>
+          )}
+        </button>
+        <div className="inline-flex rounded-md border border-mist-200 bg-mist-50 p-0.5 text-sm">
+          {[
+            ["thisMonth", "This month"],
+            ["lastMonth", "Last month"],
+            ["all", "All time"],
+          ].map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setPeriod(k)}
+              className={`px-3 py-1 rounded-sm transition-colors ${
+                period === k
+                  ? "bg-white text-ink-900 shadow-sm font-medium"
+                  : "text-ink-600/60 hover:text-ink-900"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {open && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 px-4 lg:px-5 pb-4">
+          {cards.map((c) => {
+            const hasPrev = c.before !== null;
+            const diff = hasPrev ? c.now - c.before : 0;
+            const pct =
+              hasPrev && c.before > 0 ? (diff / c.before) * 100 : null;
+            const good = c.invert ? diff <= 0 : diff >= 0;
+            const max = Math.max(c.now, c.before ?? 0, 1);
+            return (
+              <div
+                key={c.label}
+                className="rounded-md border border-mist-200 px-4 py-3.5"
+              >
+                <div className="text-sm text-ink-600/60">{c.label}</div>
+                <div className="font-display font-bold text-2xl text-ink-900 mt-1">
+                  {c.now.toLocaleString("en-US")}
+                </div>
+                {hasPrev && (
+                  <div className="flex items-center gap-1.5 text-xs mt-1">
+                    {diff !== 0 &&
+                      (diff > 0 ? (
+                        <Icons.TrendingUp
+                          size={13}
+                          className={
+                            good ? "text-emerald-600" : "text-signal-red"
+                          }
+                        />
+                      ) : (
+                        <Icons.TrendingDown
+                          size={13}
+                          className={
+                            good ? "text-emerald-600" : "text-signal-red"
+                          }
+                        />
+                      ))}
+                    <span
+                      className={
+                        diff === 0
+                          ? "text-ink-600/50"
+                          : good
+                            ? "text-emerald-600 font-medium"
+                            : "text-signal-red font-medium"
+                      }
+                    >
+                      {pct !== null
+                        ? `${Math.abs(pct).toFixed(1)}%`
+                        : diff > 0
+                          ? "new"
+                          : "0%"}
+                    </span>
+                    <span className="text-ink-600/45">{compareText}</span>
+                  </div>
+                )}
+                {hasPrev && (
+                  <div className="mt-3 space-y-1.5 text-xs text-ink-600/60">
+                    {[
+                      [curLabel, c.now, "bg-signal-blue"],
+                      [prevLabel, c.before, "bg-signal-blue/25"],
+                    ].map(([lbl, val, bar]) => (
+                      <div key={lbl} className="flex items-center gap-2">
+                        <span className="w-14 shrink-0 truncate">{lbl}</span>
+                        <div className="flex-1 h-1.5 rounded-full bg-mist-100 overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${bar}`}
+                            style={{ width: `${(val / max) * 100}%` }}
+                          />
+                        </div>
+                        <span className="w-10 text-right tabular-nums text-ink-900">
+                          {val.toLocaleString("en-US")}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function formatIso(iso) {
@@ -11254,7 +11691,7 @@ function exportRowsToCSV(filename, columns, rows) {
   const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
   const header = columns.map((c) => esc(c.label)).join(",");
   const body = rows
-    .map((r) => columns.map((c) => esc(r[c.key])).join(","))
+    .map((r) => columns.map((c) => esc(c.csv ? c.csv(r) : r[c.key])).join(","))
     .join("\n");
   const blob = new Blob([`${header}\n${body}`], {
     type: "text/csv;charset=utf-8;",
@@ -13765,6 +14202,7 @@ function ListPage({
   const [formTk, setFormTk] = useState(""); // TK handed from the inline Inbound scanner
   const [adv, setAdv] = useState(EMPTY_ADV);
   const [showAdv, setShowAdv] = useState(false);
+  const [dateRange, setDateRange] = useState(EMPTY_DATE_RANGE);
   const filterRef = useRef(null);
 
   useEffect(() => {
@@ -13777,6 +14215,7 @@ function ListPage({
   }, []);
 
   const statusColumn = columns.find((c) => c.status);
+  const dateCol = columns.find((c) => c.dateFilter);
   const statusOptions = statusColumn
     ? [...new Set(displayRows.map((r) => r[statusColumn.key]).filter(Boolean))]
     : [];
@@ -13798,7 +14237,8 @@ function ListPage({
       );
     const matchesStatus =
       !statusFilter || row[statusColumn?.key] === statusFilter;
-    if (!isLinkedTk) return matchesSearch && matchesStatus;
+    const matchesDate = !dateCol || dateInRange(row[dateCol.key], dateRange);
+    if (!isLinkedTk) return matchesSearch && matchesStatus && matchesDate;
     const day = String(row.inbound_at || row.created_at || "").slice(0, 10);
     const matchesAdv =
       (!adv.inbound || row.inbound_status === adv.inbound) &&
@@ -13870,6 +14310,10 @@ function ListPage({
           </div>
         ))}
 
+      {path === "/customers" && !listLoading && (
+        <RegistrationOverview rows={displayRows} />
+      )}
+
       {path === "/inbound-origin" && canCreate && (
         <QuickInboundScan
           focusKey={scanFocusKey}
@@ -13889,6 +14333,32 @@ function ListPage({
       )}
 
       <div className="cb-surface cb-card">
+        {path === "/customers" && dateCol && (
+          <div className="flex items-center gap-1 px-3 lg:px-4 border-b border-mist-200 overflow-x-auto">
+            <ListTab
+              label="All"
+              count={displayRows.length}
+              active={!dateRangeLabel(dateRange)}
+              onClick={resetToFirstPage(() => setDateRange(EMPTY_DATE_RANGE))}
+            />
+            <ListTab
+              label="New this month"
+              count={
+                displayRows.filter((r) =>
+                  dateInRange(r[dateCol.key], {
+                    preset: "thisMonth",
+                    from: "",
+                    to: "",
+                  }),
+                ).length
+              }
+              active={dateRange.preset === "thisMonth"}
+              onClick={resetToFirstPage(() =>
+                setDateRange({ preset: "thisMonth", from: "", to: "" }),
+              )}
+            />
+          </div>
+        )}
         <div className="flex items-center gap-2 px-4 lg:px-5 py-3.5 border-b border-mist-200 flex-wrap">
           <div className="flex items-center gap-2 bg-mist-100 rounded-md px-3 py-2 flex-1 min-w-[180px] max-w-xs">
             <Search size={15} className="text-ink-600/40" />
@@ -13934,6 +14404,13 @@ function ListPage({
               </div>
             )}
           </div>
+
+          {dateCol && (
+            <DateRangeFilter
+              value={dateRange}
+              onChange={resetToFirstPage(setDateRange)}
+            />
+          )}
 
           {isLinkedTk && (
             <button
