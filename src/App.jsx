@@ -2912,6 +2912,63 @@ function RegistrationOverview({ rows }) {
   );
 }
 
+function PaginationBar({ page, pageCount, total, shown, onPage }) {
+  return (
+    <div className="flex items-center justify-between gap-2 flex-wrap px-4 lg:px-5 py-3 border-t border-mist-200 text-xs text-ink-600/50">
+      <span>
+        បង្ហាញ {shown} នៃ {total.toLocaleString("en-US")} លទ្ធផល
+      </span>
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onPage(Math.max(0, page - 1))}
+          disabled={page === 0}
+          className="px-2.5 py-1 rounded-sm border border-mist-200 hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Previous
+        </button>
+        <span className="px-2.5 py-1 rounded-sm bg-signal-blue text-white">
+          {page + 1} / {pageCount}
+        </span>
+        <button
+          type="button"
+          onClick={() => onPage(Math.min(pageCount - 1, page + 1))}
+          disabled={page >= pageCount - 1}
+          className="px-2.5 py-1 rounded-sm border border-mist-200 hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// "KH-000005 · thon mvp"  ->  avatar + name (links to the customer) + code
+function CnCustomerCell({ value }) {
+  const raw = String(value || "").trim();
+  if (!raw) return <span className="text-ink-600/40">—</span>;
+  const m = raw.match(/^([A-Za-z]{1,8}-\d+)\s*·\s*(.+)$/);
+  if (!m) return <span className="text-ink-800">{raw}</span>;
+  const code = m[1];
+  const name = m[2].trim();
+  return (
+    <div className="flex items-center gap-2.5 min-w-0">
+      <span className="w-8 h-8 shrink-0 rounded-full bg-signal-blue text-white text-xs font-bold grid place-items-center">
+        {name.charAt(0).toUpperCase()}
+      </span>
+      <div className="min-w-0 leading-tight">
+        <Link
+          to={`/customers/${encodeURIComponent(code)}`}
+          className="block font-medium text-ink-900 hover:text-signal-blue truncate max-w-[180px]"
+        >
+          {name}
+        </Link>
+        <span className="text-xs text-ink-600/55">{code}</span>
+      </div>
+    </div>
+  );
+}
+
 function formatIso(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -38714,6 +38771,29 @@ function CnActualCostModal({ row, onClose, onSaved }) {
 // Keep ID generation in the database so simultaneous order creation cannot collide.
 // CN Orders / TK List / Purchase & Finance
 // ------------------------------------------------------------
+const CN_ORDERS_LIMIT = 5000;
+const CN_STAT_ICONS = {
+  "Total Orders": "ShoppingCart",
+  "Need Payment": "Wallet",
+  "Ready to Purchase": "PackageCheck",
+  "In China": "Globe",
+  "To Cambodia": "Truck",
+  "Linked TKs": "Package",
+  "Inbound Warehouse": "Warehouse",
+  Completed: "CheckCircle2",
+  "Other Status": "CircleDot",
+  "Linked Orders": "Link2",
+  "Customer Charges (Gross)": "Receipt",
+  "Customer Paid": "BadgeDollarSign",
+  "Customer Outstanding": "Clock",
+  "Recorded Actual Costs (Known)": "Calculator",
+  "Pre-Freight Profit (complete costs)": "TrendingUp",
+  "Pre-Freight Loss (known minimum)": "TrendingDown",
+  "Net Pre-Freight Margin": "Scale",
+  "Margin Incomplete": "AlertTriangle",
+};
+const CN_PAGE_SIZE = 20;
+
 function CnOrdersPage() {
   const { user } = useAuth();
   const canCreate = hasPermission(user, "cn_order.create");
@@ -38732,14 +38812,33 @@ function CnOrdersPage() {
   const [tkStatus, setTkStatus] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [actualCostOrder, setActualCostOrder] = useState(null);
+  const [loadError, setLoadError] = useState("");
+  const [dateRange, setDateRange] = useState(EMPTY_DATE_RANGE);
+  const [page, setPage] = useState(0);
+  const [quick, setQuick] = useState(""); // clickable stat / quick-tab filter
+  const navigate = useNavigate();
+  // Whole row opens the order, but clicks on links/buttons keep their own
+  // behaviour and selecting text inside a row does not navigate away.
+  const openRow = (e, to) => {
+    if (e.target.closest("a,button,input,select,textarea,label")) return;
+    if (window.getSelection && String(window.getSelection())) return;
+    navigate(to);
+  };
   const load = React.useCallback(async () => {
     if (!supabase) return setLoading(false);
     setLoading(true);
-    const { data } = await supabase
+    setLoadError("");
+    const { data, error } = await supabase
       .from("cn_orders")
       .select("*")
       .order("created_at", { ascending: false })
-      .limit(5000);
+      .limit(CN_ORDERS_LIMIT);
+    if (error) {
+      // Never show "No orders found" when the query actually failed.
+      setLoadError(error.message || "Unable to load CN orders.");
+      setLoading(false);
+      return;
+    }
     const list = data || [];
     setRows(list);
     setLoading(false);
@@ -38772,61 +38871,100 @@ function CnOrdersPage() {
   useEffect(() => {
     if (activeTab === "tks" || activeTab === "orders") loadTks();
   }, [activeTab, loadTks]);
+  useEffect(() => {
+    setPage(0);
+  }, [q, status, pay, tkStatus, dateRange, activeTab, quick]);
 
   const active = (r) =>
     !CN_ORDER_TERMINAL_STATUSES.has(cnNormalizeStatus(r.status));
-  const orderStats = [
-    ["Total Orders", rows.length, "text-slate-900"],
-    [
-      "Need Payment",
-      rows.filter(
-        (r) =>
-          active(r) &&
-          cnNormalizeStatus(r.status) === "Order Processing" &&
-          r.payment_status !== "Paid",
-      ).length,
-      "text-red-700",
-    ],
-    [
-      "Ready to Purchase",
-      rows.filter(
-        (r) =>
-          cnNormalizeStatus(r.status) === "Order Processing" &&
-          r.payment_status === "Paid",
-      ).length,
-      "text-sky-700",
-    ],
-    [
-      "In China",
-      rows.filter((r) =>
+  // One definition per quick filter, shared by the stat cards, the quick tabs
+  // and the table filter so their numbers can never disagree.
+  const quickDefs = [
+    {
+      key: "need_payment",
+      label: "Need Payment",
+      color: "text-red-700",
+      test: (r) =>
+        active(r) &&
+        cnNormalizeStatus(r.status) === "Order Processing" &&
+        r.payment_status !== "Paid",
+    },
+    {
+      key: "ready",
+      label: "Ready to Purchase",
+      color: "text-sky-700",
+      test: (r) =>
+        cnNormalizeStatus(r.status) === "Order Processing" &&
+        r.payment_status === "Paid",
+    },
+    {
+      key: "in_china",
+      label: "In China",
+      color: "text-violet-700",
+      test: (r) =>
         ["Purchased", "Shipping to China WH", "Inbound"].includes(
           cnNormalizeStatus(r.status),
         ),
-      ).length,
-      "text-violet-700",
-    ],
-    [
-      "To Cambodia",
-      rows.filter((r) =>
+    },
+    {
+      key: "to_cambodia",
+      label: "To Cambodia",
+      color: "text-emerald-700",
+      test: (r) =>
         [
           "Outbound",
           "Arrived",
           "Shipping to Branch",
           "Inbound Warehouse",
         ].includes(cnNormalizeStatus(r.status)),
-      ).length,
-      "text-emerald-700",
-    ],
+    },
   ];
-  const totalOrderValue = rows.reduce(
+  const quickCounts = Object.fromEntries(
+    quickDefs.map((d) => [d.key, rows.filter(d.test).length]),
+  );
+  const quickTest = quickDefs.find((d) => d.key === quick)?.test;
+  const orderStats = [
+    ["Total Orders", rows.length, "text-ink-900", ""],
+    ...quickDefs.map((d) => [d.label, quickCounts[d.key], d.color, d.key]),
+  ];
+  const searchableOrder = (r) =>
+    [
+      r.order_id,
+      r.customer,
+      r.shop_name,
+      r.product_name,
+      r.supplier_order_no,
+      r.status,
+      ...(Array.isArray(r.cn_order_items)
+        ? r.cn_order_items.flatMap((it) => [
+            it.product_name,
+            it.product_url,
+            it.variant,
+          ])
+        : []),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+  const filtered = rows.filter(
+    (r) =>
+      (!q || searchableOrder(r).includes(q.toLowerCase())) &&
+      (!status || cnOrderTableStatus(r) === status) &&
+      (!pay || r.payment_status === pay) &&
+      (!quickTest || quickTest(r)) &&
+      dateInRange(r.created_at, dateRange),
+  );
+  // Finance totals follow the active filters (e.g. a date range = monthly P&L).
+  const finRows = activeTab === "finance" ? filtered : rows;
+  const totalOrderValue = finRows.reduce(
     (sum, r) => sum + (Number(r.total_due_usd) || 0),
     0,
   );
-  const totalPaid = rows.reduce(
+  const totalPaid = finRows.reduce(
     (sum, r) => sum + Math.max(0, Number(r.amount_paid_usd) || 0),
     0,
   );
-  const outstanding = rows.reduce(
+  const outstanding = finRows.reduce(
     (sum, r) =>
       sum +
       (r.payment_status === "Refunded"
@@ -38837,7 +38975,7 @@ function CnOrdersPage() {
           )),
     0,
   );
-  const financeBreakdowns = rows.map((r) => ({
+  const financeBreakdowns = finRows.map((r) => ({
     row: r,
     calc: cnPurchaseFinancials(r),
   }));
@@ -38876,7 +39014,7 @@ function CnOrdersPage() {
   const totalPreFreightNet = totalPreFreightProfit - totalPreFreightLoss;
   const anyMarginPending = marginPendingCount > 0;
   const tkStats = [
-    ["Linked TKs", tkRows.length, "text-slate-900"],
+    ["Linked TKs", tkRows.length, "text-ink-900"],
     [
       "Inbound Warehouse",
       tkRows.filter((p) => p.status === "Inbound Warehouse").length,
@@ -38897,11 +39035,11 @@ function CnOrdersPage() {
     [
       "Linked Orders",
       new Set(tkRows.map((p) => p.cn_order_id).filter(Boolean)).size,
-      "text-blue-700",
+      "text-signal-blue",
     ],
   ];
   const financeStats = [
-    ["Customer Charges (Gross)", money(totalOrderValue), "text-slate-900"],
+    ["Customer Charges (Gross)", money(totalOrderValue), "text-ink-900"],
     ["Customer Paid", money(totalPaid), "text-emerald-700"],
     ["Customer Outstanding", money(outstanding), "text-red-700"],
     [
@@ -38936,31 +39074,7 @@ function CnOrdersPage() {
       : activeTab === "finance"
         ? financeStats
         : orderStats;
-  const searchableOrder = (r) =>
-    [
-      r.order_id,
-      r.customer,
-      r.shop_name,
-      r.product_name,
-      r.supplier_order_no,
-      r.status,
-      ...(Array.isArray(r.cn_order_items)
-        ? r.cn_order_items.flatMap((it) => [
-            it.product_name,
-            it.product_url,
-            it.variant,
-          ])
-        : []),
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-  const filtered = rows.filter(
-    (r) =>
-      (!q || searchableOrder(r).includes(q.toLowerCase())) &&
-      (!status || cnOrderTableStatus(r) === status) &&
-      (!pay || r.payment_status === pay),
-  );
+
   const ordersById = new Map(rows.map((r) => [r.id, r]));
   const filteredTks = tkRows.filter((p) => {
     const order = ordersById.get(p.cn_order_id);
@@ -38986,9 +39100,116 @@ function CnOrdersPage() {
       .toLowerCase();
     return (
       (!q || hay.includes(q.toLowerCase())) &&
-      (!tkStatus || p.status === tkStatus)
+      (!tkStatus || p.status === tkStatus) &&
+      dateInRange(p.created_at, dateRange)
     );
   });
+
+  // Linked-TK count per order, computed once (not once per table row).
+  const linkedTkCount = new Map();
+  tkRows.forEach((p) =>
+    linkedTkCount.set(
+      p.cn_order_id,
+      (linkedTkCount.get(p.cn_order_id) || 0) + 1,
+    ),
+  );
+
+  // Pagination (orders + TK list)
+  const listTotal = activeTab === "tks" ? filteredTks.length : filtered.length;
+  const pageCount = Math.max(1, Math.ceil(listTotal / CN_PAGE_SIZE));
+  const curPage = Math.min(page, pageCount - 1);
+  const pageFrom = curPage * CN_PAGE_SIZE;
+  const pagedOrders = filtered.slice(pageFrom, pageFrom + CN_PAGE_SIZE);
+  const pagedTks = filteredTks.slice(pageFrom, pageFrom + CN_PAGE_SIZE);
+
+  const dateActive = !!(dateRange.preset || dateRange.from || dateRange.to);
+  const hasFilters = !!(
+    q ||
+    dateActive ||
+    (activeTab === "tks" ? tkStatus : status || pay || quick)
+  );
+  const clearFilters = () => {
+    setQ("");
+    setStatus("");
+    setPay("");
+    setTkStatus("");
+    setQuick("");
+    setDateRange(EMPTY_DATE_RANGE);
+  };
+  const refreshAll = () => {
+    load();
+    loadTks();
+  };
+  // Exports every row matching the current filters (not just the visible page).
+  const exportCurrent = () => {
+    const stamp = localDayKey(new Date());
+    if (activeTab === "tks") {
+      exportRowsToCSV(
+        `cn-linked-tks-${stamp}.csv`,
+        [
+          { label: "Tracking Number", key: "tk" },
+          {
+            label: "CN Order",
+            csv: (x) => ordersById.get(x.cn_order_id)?.order_id || "",
+          },
+          {
+            label: "Customer",
+            csv: (x) =>
+              ordersById.get(x.cn_order_id)?.customer ||
+              x.customer_name ||
+              x.customer_id ||
+              "",
+          },
+          { label: "Status", key: "status" },
+          {
+            label: "Origin Warehouse",
+            csv: (x) => x.origin_wh_code || x.warehouse || "",
+          },
+          { label: "Cambodia Branch", key: "dest_branch_code" },
+          { label: "Created", csv: (x) => formatIso(x.created_at) },
+          {
+            label: "Updated",
+            csv: (x) => formatIso(x.updated_at || x.created_at),
+          },
+        ],
+        filteredTks,
+      );
+      return;
+    }
+    const paidOf = (x) => Math.max(0, Number(x.amount_paid_usd) || 0);
+    exportRowsToCSV(
+      `cn-orders-${stamp}.csv`,
+      [
+        { label: "Order ID", key: "order_id" },
+        { label: "Customer", key: "customer" },
+        {
+          label: "Product",
+          csv: (x) =>
+            x.product_name || x.cn_order_items?.[0]?.product_name || "",
+        },
+        {
+          label: "Items",
+          csv: (x) =>
+            Array.isArray(x.cn_order_items) ? x.cn_order_items.length : "",
+        },
+        { label: "Linked TKs", csv: (x) => linkedTkCount.get(x.id) || 0 },
+        { label: "Total (USD)", csv: (x) => Number(x.total_due_usd) || 0 },
+        { label: "Paid (USD)", csv: (x) => paidOf(x) },
+        {
+          label: "Balance (USD)",
+          csv: (x) =>
+            x.payment_status === "Refunded"
+              ? 0
+              : Math.max(0, (Number(x.total_due_usd) || 0) - paidOf(x)),
+        },
+        { label: "Payment", key: "payment_status" },
+        { label: "Status", csv: (x) => cnOrderTableStatus(x) },
+        { label: "Created", csv: (x) => formatIso(x.created_at) },
+        { label: "Updated", csv: (x) => formatIso(x.updated_at) },
+      ],
+      filtered,
+    );
+  };
   const formatActualCost = (r, field) => {
     const val = r[field];
     const rate = Number(r.purchase_exchange_rate || r.cny_per_usd);
@@ -39028,18 +39249,78 @@ function CnOrdersPage() {
           Supabase is not connected — CN Purchase Orders need the database.
         </div>
       )}
+      {loadError && (
+        <div className="rounded-xl bg-red-50 text-red-700 px-3 py-2 text-sm flex items-center justify-between gap-3">
+          <span>មិនអាចផ្ទុកទិន្នន័យបានទេ៖ {loadError}</span>
+          <button
+            type="button"
+            onClick={load}
+            className="underline font-semibold shrink-0"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+      {!loadError && !loading && rows.length >= CN_ORDERS_LIMIT && (
+        <div className="rounded-xl bg-amber-50 text-amber-800 px-3 py-2 text-sm">
+          បង្ហាញត្រឹម {CN_ORDERS_LIMIT.toLocaleString("en-US")} Order
+          ចុងក្រោយប៉ុណ្ណោះ — Order ចាស់ៗអាចមិនបានបង្ហាញ ហើយតួលេខ stat
+          អាចមិនពេញលេញ។
+        </div>
+      )}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        {stats.map(([label, value, color]) => (
-          <div key={label} className="cb-surface p-4 min-w-0">
-            <p className="text-xs text-slate-500">{label}</p>
-            <p
-              className={`text-xl lg:text-2xl font-extrabold mt-1 break-words ${color}`}
+        {stats.map(([label, value, color, quickKey]) => {
+          const StatIcon = Icons[CN_STAT_ICONS[label]];
+          const body = (
+            <>
+              <div className="flex items-center gap-2.5">
+                {StatIcon && (
+                  <span
+                    className={`w-9 h-9 shrink-0 rounded-full bg-mist-100 grid place-items-center ${color}`}
+                  >
+                    <StatIcon size={16} />
+                  </span>
+                )}
+                <p className="text-xs text-ink-600/60 leading-tight">{label}</p>
+              </div>
+              <p
+                className={`text-xl lg:text-2xl font-extrabold mt-2.5 break-words ${color}`}
+              >
+                {value}
+              </p>
+            </>
+          );
+          if (activeTab !== "orders" || quickKey === undefined)
+            return (
+              <div key={label} className="cb-surface p-4 min-w-0">
+                {body}
+              </div>
+            );
+          const isOn = quickKey !== "" && quick === quickKey;
+          return (
+            <button
+              key={label}
+              type="button"
+              onClick={() => setQuick(isOn ? "" : quickKey)}
+              title={quickKey ? "Click to filter the table" : "Show all orders"}
+              className={`cb-surface p-4 min-w-0 text-left transition-shadow ${
+                isOn
+                  ? "ring-2 ring-signal-blue"
+                  : "hover:ring-1 hover:ring-mist-200"
+              }`}
             >
-              {value}
-            </p>
-          </div>
-        ))}
+              {body}
+            </button>
+          );
+        })}
       </div>
+      {activeTab === "finance" && filtered.length !== rows.length && (
+        <p className="text-xs text-ink-600/60 -mt-1">
+          តួលេខខាងលើគិតតែ {filtered.length.toLocaleString("en-US")} ក្នុងចំណោម{" "}
+          {rows.length.toLocaleString("en-US")} Order ដែលត្រូវនឹង filter
+          បច្ចុប្បន្ន។
+        </p>
+      )}
       <div
         className="cb-surface p-1.5 flex gap-1 overflow-x-auto"
         role="tablist"
@@ -39055,20 +39336,40 @@ function CnOrdersPage() {
               setActiveTab(tabId);
               setStatus("");
               setTkStatus("");
+              setQuick("");
             }}
-            className={`shrink-0 h-10 px-4 rounded-lg inline-flex items-center gap-2 text-sm font-bold transition-colors ${activeTab === tabId ? "bg-blue-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"}`}
+            className={`shrink-0 h-10 px-4 rounded-lg inline-flex items-center gap-2 text-sm font-bold transition-colors ${activeTab === tabId ? "bg-signal-blue text-white shadow-sm" : "text-ink-700 hover:bg-mist-50"}`}
           >
             <TabIcon size={16} />
             {label}
           </button>
         ))}
       </div>
-      <div className="cb-surface overflow-hidden">
+      <div className="cb-surface">
+        {activeTab === "orders" && (
+          <div className="flex items-center gap-1 px-3 lg:px-4 border-b border-mist-200 overflow-x-auto">
+            <ListTab
+              label="All"
+              count={rows.length}
+              active={!quick}
+              onClick={() => setQuick("")}
+            />
+            {quickDefs.map((d) => (
+              <ListTab
+                key={d.key}
+                label={d.label}
+                count={quickCounts[d.key]}
+                active={quick === d.key}
+                onClick={() => setQuick(d.key)}
+              />
+            ))}
+          </div>
+        )}
         <div className="p-4 border-b border-mist-200 flex flex-wrap gap-2">
           <div className="relative flex-1 min-w-[220px]">
             <Icons.Search
               size={15}
-              className="absolute left-3 top-3 text-slate-400"
+              className="absolute left-3 top-3 text-ink-600/40"
             />
             <input
               value={q}
@@ -39122,13 +39423,50 @@ function CnOrdersPage() {
               </select>
             </>
           )}
+          <DateRangeFilter value={dateRange} onChange={setDateRange} />
+          {hasFilters && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="inline-flex items-center gap-1.5 text-sm text-ink-700 border border-mist-200 px-3 py-2 rounded-md hover:bg-mist-50"
+            >
+              <X size={14} /> Clear filters
+            </button>
+          )}
+          <div className="flex items-center gap-2 ml-auto">
+            {activeTab !== "finance" && (
+              <button
+                type="button"
+                onClick={exportCurrent}
+                disabled={
+                  !(activeTab === "tks" ? filteredTks : filtered).length
+                }
+                className="inline-flex items-center gap-1.5 text-sm text-ink-700 border border-mist-200 px-3 py-2 rounded-md hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Download size={14} /> Download
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={refreshAll}
+              disabled={loading || tkLoading}
+              title="Refresh"
+              aria-label="Refresh"
+              className="inline-flex items-center justify-center h-[38px] w-[38px] border border-mist-200 rounded-md text-ink-700 hover:bg-mist-50 disabled:opacity-60"
+            >
+              <Icons.RefreshCw
+                size={15}
+                className={loading || tkLoading ? "animate-spin" : ""}
+              />
+            </button>
+          </div>
         </div>
 
         {activeTab === "orders" && (
           <div className="overflow-auto">
-            <table className="min-w-[1160px] w-full text-sm">
+            <table className="min-w-[1300px] w-full text-sm">
               <thead>
-                <tr className="bg-mist-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr className="bg-mist-50 text-left text-xs uppercase tracking-wide text-ink-600/60">
                   {[
                     "Order ID",
                     "Customer",
@@ -39138,6 +39476,7 @@ function CnOrdersPage() {
                     "Paid / Balance",
                     "Payment",
                     "Status",
+                    "Created",
                     "Updated",
                   ].map((x) => (
                     <th key={x} className="px-4 py-3 font-semibold">
@@ -39150,7 +39489,7 @@ function CnOrdersPage() {
                 {loading ? (
                   Array.from({ length: 6 }).map((_, i) => (
                     <tr key={`cn-sk-${i}`} aria-hidden="true">
-                      {Array.from({ length: 9 }).map((__, j) => (
+                      {Array.from({ length: 10 }).map((__, j) => (
                         <td key={j} className="px-4 py-3.5">
                           <Skeleton
                             className="h-3.5"
@@ -39164,14 +39503,16 @@ function CnOrdersPage() {
                 ) : !filtered.length ? (
                   <tr>
                     <td
-                      colSpan={9}
-                      className="px-4 py-10 text-center text-slate-400"
+                      colSpan={10}
+                      className="px-4 py-10 text-center text-ink-600/40"
                     >
-                      No CN purchase orders found.
+                      {loadError
+                        ? "Couldn't load CN purchase orders."
+                        : "No CN purchase orders found."}
                     </td>
                   </tr>
                 ) : (
-                  filtered.map((r) => {
+                  pagedOrders.map((r) => {
                     const its = Array.isArray(r.cn_order_items)
                       ? r.cn_order_items
                       : [];
@@ -39180,28 +39521,35 @@ function CnOrdersPage() {
                       r.payment_status === "Refunded"
                         ? 0
                         : Math.max(0, (Number(r.total_due_usd) || 0) - paidAmt);
-                    const linked = tkRows.filter(
-                      (p) => p.cn_order_id === r.id,
-                    ).length;
+                    const linked = linkedTkCount.get(r.id) || 0;
                     return (
-                      <tr key={r.id} className="hover:bg-slate-50/70">
-                        <td className="px-4 py-3 font-bold text-slate-900">
+                      <tr
+                        key={r.id}
+                        onClick={(e) =>
+                          openRow(
+                            e,
+                            `/cn-orders/${encodeURIComponent(r.order_id)}`,
+                          )
+                        }
+                        className="hover:bg-mist-50 cursor-pointer"
+                      >
+                        <td className="px-4 py-3 font-bold text-ink-900">
                           <Link
                             to={`/cn-orders/${encodeURIComponent(r.order_id)}`}
-                            className="hover:text-blue-600"
+                            className="hover:text-signal-blue"
                           >
                             {r.order_id}
                           </Link>
                         </td>
-                        <td className="px-4 py-3 text-slate-700">
-                          {r.customer || "—"}
+                        <td className="px-4 py-3">
+                          <CnCustomerCell value={r.customer} />
                         </td>
-                        <td className="px-4 py-3 text-slate-600">
+                        <td className="px-4 py-3 text-ink-700">
                           <div className="flex items-center gap-3">
                             <AirImg
                               src={r.cover_url}
                               alt={r.product_name || r.order_id}
-                              className="w-10 h-10 rounded-lg border border-slate-200"
+                              className="w-10 h-10 rounded-lg border border-mist-200"
                               fallbackSize={16}
                               FallbackIcon={Icons.ShoppingCart}
                             />
@@ -39212,7 +39560,7 @@ function CnOrdersPage() {
                                   r.product_url ||
                                   "—"}
                               </span>
-                              <span className="text-xs text-slate-400">
+                              <span className="text-xs text-ink-600/40">
                                 {its.length > 1
                                   ? `${its.length} items`
                                   : [r.platform, r.shop_name]
@@ -39229,17 +39577,18 @@ function CnOrdersPage() {
                               setActiveTab("tks");
                               setQ(r.order_id);
                               setTkStatus("");
+                              setDateRange(EMPTY_DATE_RANGE);
                             }}
-                            className="text-blue-700 hover:underline font-semibold"
+                            className="text-signal-blue hover:underline font-semibold"
                           >
                             {linked} TK{linked === 1 ? "" : "s"}
                           </button>
                         </td>
-                        <td className="px-4 py-3 font-semibold text-slate-900">
+                        <td className="px-4 py-3 font-semibold text-ink-900">
                           {money(r.total_due_usd)}
                         </td>
                         <td className="px-4 py-3 text-xs">
-                          <b className="block text-slate-700">
+                          <b className="block text-ink-800">
                             Paid {money(paidAmt)}
                           </b>
                           <span
@@ -39259,8 +39608,11 @@ function CnOrdersPage() {
                             partial={r.is_partial}
                           />
                         </td>
-                        <td className="px-4 py-3 text-slate-500">
-                          {r.updated_at ? formatDbTimestamp(r.updated_at) : "—"}
+                        <td className="px-4 py-3">
+                          <CreatedAtCell iso={r.created_at} />
+                        </td>
+                        <td className="px-4 py-3">
+                          <CreatedAtCell iso={r.updated_at} />
                         </td>
                       </tr>
                     );
@@ -39275,7 +39627,7 @@ function CnOrdersPage() {
           <div className="overflow-auto">
             <table className="min-w-[1120px] w-full text-sm">
               <thead>
-                <tr className="bg-mist-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr className="bg-mist-50 text-left text-xs uppercase tracking-wide text-ink-600/60">
                   {[
                     "Tracking Number",
                     "CN Order",
@@ -39284,6 +39636,7 @@ function CnOrdersPage() {
                     "Status",
                     "Origin Warehouse",
                     "Cambodia Branch",
+                    "Created",
                     "Updated",
                   ].map((x) => (
                     <th key={x} className="px-4 py-3 font-semibold">
@@ -39296,7 +39649,7 @@ function CnOrdersPage() {
                 {tkLoading ? (
                   Array.from({ length: 5 }).map((_, i) => (
                     <tr key={`tk-sk-${i}`}>
-                      {Array.from({ length: 8 }).map((__, j) => (
+                      {Array.from({ length: 9 }).map((__, j) => (
                         <td key={j} className="px-4 py-3.5">
                           <Skeleton
                             className="h-3.5"
@@ -39309,7 +39662,7 @@ function CnOrdersPage() {
                 ) : tkError ? (
                   <tr>
                     <td
-                      colSpan={8}
+                      colSpan={9}
                       className="px-4 py-8 text-center text-red-600"
                     >
                       {tkError}{" "}
@@ -39325,14 +39678,14 @@ function CnOrdersPage() {
                 ) : !filteredTks.length ? (
                   <tr>
                     <td
-                      colSpan={8}
-                      className="px-4 py-10 text-center text-slate-400"
+                      colSpan={9}
+                      className="px-4 py-10 text-center text-ink-600/40"
                     >
                       No TKs linked to CN Orders found.
                     </td>
                   </tr>
                 ) : (
-                  filteredTks.map((p) => {
+                  pagedTks.map((p) => {
                     const o = ordersById.get(p.cn_order_id);
                     const productLabel =
                       Array.isArray(o?.cn_order_items) &&
@@ -39342,11 +39695,11 @@ function CnOrdersPage() {
                           o?.cn_order_items?.[0]?.product_name ||
                           "—";
                     return (
-                      <tr key={p.id || p.tk} className="hover:bg-slate-50/70">
+                      <tr key={p.id || p.tk} className="hover:bg-mist-50">
                         <td className="px-4 py-3 font-bold">
                           <Link
                             to={`/packages/${encodeURIComponent(p.tk || "")}`}
-                            className="text-blue-700 hover:underline"
+                            className="text-signal-blue hover:underline"
                           >
                             {p.tk || "—"}
                           </Link>
@@ -39354,7 +39707,7 @@ function CnOrdersPage() {
                         <td className="px-4 py-3 font-semibold">
                           <Link
                             to={`/cn-orders/${encodeURIComponent(o?.order_id || "")}`}
-                            className="text-blue-700 hover:underline"
+                            className="text-signal-blue hover:underline"
                           >
                             {o?.order_id || "CN Order not found"}
                           </Link>
@@ -39365,28 +39718,27 @@ function CnOrdersPage() {
                             p.customer_id ||
                             "—"}
                         </td>
-                        <td className="px-4 py-3 text-slate-600 max-w-[200px] truncate">
+                        <td className="px-4 py-3 text-ink-700 max-w-[200px] truncate">
                           {productLabel}
                         </td>
                         <td className="px-4 py-3">
                           <span
-                            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${p.status === "Completed" ? "bg-emerald-50 text-emerald-700" : p.status === "Inbound Warehouse" ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-700"}`}
+                            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${p.status === "Completed" ? "bg-emerald-50 text-emerald-700" : p.status === "Inbound Warehouse" ? "bg-signal-blue/5 text-signal-blue" : "bg-mist-100 text-ink-800"}`}
                           >
                             {p.status || "Unknown"}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-slate-600">
+                        <td className="px-4 py-3 text-ink-700">
                           {p.origin_wh_code || p.warehouse || "—"}
                         </td>
-                        <td className="px-4 py-3 text-slate-600">
+                        <td className="px-4 py-3 text-ink-700">
                           {p.dest_branch_code || "—"}
                         </td>
-                        <td className="px-4 py-3 text-slate-500">
-                          {p.updated_at
-                            ? formatDbTimestamp(p.updated_at)
-                            : p.created_at
-                              ? formatDbTimestamp(p.created_at)
-                              : "—"}
+                        <td className="px-4 py-3">
+                          <CreatedAtCell iso={p.created_at} />
+                        </td>
+                        <td className="px-4 py-3">
+                          <CreatedAtCell iso={p.updated_at || p.created_at} />
                         </td>
                       </tr>
                     );
@@ -39397,9 +39749,21 @@ function CnOrdersPage() {
           </div>
         )}
 
+        {(activeTab === "orders" || activeTab === "tks") &&
+          !(activeTab === "orders" ? loading : tkLoading) &&
+          listTotal > 0 && (
+            <PaginationBar
+              page={curPage}
+              pageCount={pageCount}
+              total={listTotal}
+              shown={activeTab === "tks" ? pagedTks.length : pagedOrders.length}
+              onPage={setPage}
+            />
+          )}
+
         {activeTab === "finance" && (
           <>
-            <div className="px-4 py-3 border-b border-mist-100 bg-slate-50/70 text-xs leading-5 text-slate-600 space-y-1">
+            <div className="px-4 py-3 border-b border-mist-100 bg-mist-50 text-xs leading-5 text-ink-700 space-y-1">
               <p>
                 Customer charges come from New CN Purchase Order; Customer Paid
                 and Outstanding are tracked separately. Actual costs are
@@ -39420,7 +39784,7 @@ function CnOrdersPage() {
             <div className="overflow-auto">
               <table className="min-w-[1510px] w-full text-sm">
                 <thead>
-                  <tr className="bg-mist-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                  <tr className="bg-mist-50 text-left text-xs uppercase tracking-wide text-ink-600/60">
                     {[
                       "CN Order",
                       "Customer",
@@ -39458,13 +39822,13 @@ function CnOrdersPage() {
                     <tr>
                       <td
                         colSpan={11}
-                        className="px-4 py-10 text-center text-slate-400"
+                        className="px-4 py-10 text-center text-ink-600/40"
                       >
                         No finance records found.
                       </td>
                     </tr>
                   ) : (
-                    filtered.map((r) => {
+                    pagedOrders.map((r) => {
                       const calc = cnPurchaseFinancials(r);
                       const paidAmt = Math.max(
                         0,
@@ -39498,7 +39862,7 @@ function CnOrdersPage() {
                             ? "text-red-700"
                             : margin > 0.005
                               ? "text-emerald-700"
-                              : "text-slate-700";
+                              : "text-ink-800";
                       const marginNote =
                         margin != null && !calc.refunded
                           ? "Before international freight & other costs"
@@ -39506,19 +39870,30 @@ function CnOrdersPage() {
                             ? "Goods cost already exceeds charges; shipping not recorded, so final loss may be higher."
                             : null;
                       return (
-                        <tr key={r.id} className="hover:bg-slate-50/70">
+                        <tr
+                          key={r.id}
+                          onClick={(e) =>
+                            openRow(
+                              e,
+                              `/cn-orders/${encodeURIComponent(r.order_id)}`,
+                            )
+                          }
+                          className="hover:bg-mist-50 cursor-pointer"
+                        >
                           <td className="px-4 py-3 font-bold">
                             <Link
                               to={`/cn-orders/${encodeURIComponent(r.order_id)}`}
-                              className="text-blue-700 hover:underline"
+                              className="text-signal-blue hover:underline"
                             >
                               {r.order_id}
                             </Link>
-                            <span className="block text-xs font-normal text-slate-400">
+                            <span className="block text-xs font-normal text-ink-600/40">
                               {r.status}
                             </span>
                           </td>
-                          <td className="px-4 py-3">{r.customer || "—"}</td>
+                          <td className="px-4 py-3">
+                            <CnCustomerCell value={r.customer} />
+                          </td>
                           <td className="px-4 py-3 font-semibold">
                             {money(r.total_due_usd)}
                           </td>
@@ -39534,7 +39909,7 @@ function CnOrdersPage() {
                             {calc.goodsUsd != null ? (
                               <>
                                 <b>{money(calc.goodsUsd)}</b>
-                                <span className="block text-xs text-slate-400">
+                                <span className="block text-xs text-ink-600/40">
                                   {cnCny(r.actual_cost_cny)}
                                 </span>
                               </>
@@ -39548,7 +39923,7 @@ function CnOrdersPage() {
                             {calc.shippingUsd != null ? (
                               <>
                                 <b>{money(calc.shippingUsd)}</b>
-                                <span className="block text-xs text-slate-400">
+                                <span className="block text-xs text-ink-600/40">
                                   {cnCny(r.actual_domestic_shipping_cny)}
                                 </span>
                               </>
@@ -39564,7 +39939,7 @@ function CnOrdersPage() {
                             ) : (
                               <>
                                 <b>{money(calc.totalCostUsd)}</b>
-                                <span className="block text-xs text-slate-400">
+                                <span className="block text-xs text-ink-600/40">
                                   Rate{" "}
                                   {calc.rate.toLocaleString(undefined, {
                                     maximumFractionDigits: 4,
@@ -39576,7 +39951,7 @@ function CnOrdersPage() {
                           <td className={`px-4 py-3 font-bold ${marginColor}`}>
                             <span>{marginLabel}</span>
                             {marginNote && (
-                              <span className="block text-xs font-normal text-slate-400 max-w-[210px]">
+                              <span className="block text-xs font-normal text-ink-600/40 max-w-[210px]">
                                 {marginNote}
                               </span>
                             )}
@@ -39589,7 +39964,7 @@ function CnOrdersPage() {
                               <button
                                 type="button"
                                 onClick={() => setActualCostOrder(r)}
-                                className="h-8 px-3 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-xs font-bold hover:bg-blue-100"
+                                className="h-8 px-3 rounded-lg border border-signal-blue/30 bg-signal-blue/5 text-signal-blue text-xs font-bold hover:bg-signal-blue/10"
                               >
                                 {r.actual_cost_cny != null ||
                                 r.actual_domestic_shipping_cny != null
@@ -39597,7 +39972,7 @@ function CnOrdersPage() {
                                   : "Record Actual Cost"}
                               </button>
                             ) : (
-                              <span className="text-xs text-slate-400">
+                              <span className="text-xs text-ink-600/40">
                                 View only
                               </span>
                             )}
@@ -39609,6 +39984,15 @@ function CnOrdersPage() {
                 </tbody>
               </table>
             </div>
+            {!loading && filtered.length > 0 && (
+              <PaginationBar
+                page={curPage}
+                pageCount={pageCount}
+                total={filtered.length}
+                shown={pagedOrders.length}
+                onPage={setPage}
+              />
+            )}
           </>
         )}
       </div>
