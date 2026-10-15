@@ -1606,6 +1606,22 @@ const scanInCol = () =>
     csv: (row) => formatIso(row.inbound_at || row.created_at),
   });
 
+// Outbound scan time (`outboundAt`). Rows that never got one fall back to the
+// last update, which is when their status moved to Outbound Origin.
+const scanOutValue = (row) =>
+  normalizeLegacyStamp(row.outboundAt, row.updated_at || row.created_at) ||
+  row.updated_at ||
+  row.created_at;
+const scanOutCol = () =>
+  col("outboundAt", "Outbound At", {
+    dateFilter: true,
+    dateLabel: "Scan Out",
+    readOnly: true,
+    dateValue: scanOutValue,
+    render: (row) => <CreatedAtCell iso={scanOutValue(row)} />,
+    csv: (row) => formatIso(scanOutValue(row)),
+  });
+
 const createdCol = (label = "Created") =>
   col("created_at", label, {
     dateFilter: true,
@@ -1675,6 +1691,7 @@ const MODULES = {
       col("shipping_fee", "Shipping Fee", {
         render: (row) => <ShippingFeeCell row={row} />,
       }),
+      scanInCol(),
     ],
     rows: [], // live data only — loaded from the server
   },
@@ -1762,7 +1779,7 @@ const MODULES = {
       col("weight", "Weight"),
       col("cbm", "CBM"),
       col("method", "Shipping Method"),
-      col("outboundAt", "Outbound At"),
+      scanOutCol(),
       col("shipping_fee", "Shipping Fee", {
         render: (row) => <ShippingFeeCell row={row} />,
       }),
@@ -2525,6 +2542,13 @@ function localDayKey(input) {
   if (Number.isNaN(d.getTime())) return "";
   const p = (n) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+// Start of a local calendar day ("YYYY-MM-DD") as an ISO instant, optionally
+// shifted by whole days — used for server-side `>= start` / `< next day` ranges.
+function dayStartISO(key, plusDays = 0) {
+  const [y, m, d] = String(key).split("-").map(Number);
+  return new Date(y, m - 1, d + plusDays).toISOString();
 }
 
 function resolveDateRange({ preset, from, to }) {
@@ -9044,6 +9068,12 @@ function SortingPage() {
   const [message, setMessage] = useState("");
   const [filter, setFilter] = useState("pending");
   const [search, setSearch] = useState("");
+  const [dateRange, setDateRange] = useState(EMPTY_DATE_RANGE);
+  // The realtime subscription below is created once, so loadHistory reads the
+  // range through a ref instead of a stale closure.
+  const dateRangeRef = useRef(EMPTY_DATE_RANGE);
+  dateRangeRef.current = dateRange;
+  const [sortCounts, setSortCounts] = useState({ today: null, total: null });
   const scan = useScanFeedback();
   const scanDebounceRef = useRef(null);
 
@@ -9075,17 +9105,48 @@ function SortingPage() {
       .some((v) => String(v).toLowerCase().includes(q));
   });
 
+  // Exact counts from the database — the history list below is capped, so
+  // counting its rows would stop at 100.
+  async function loadSortCounts() {
+    if (!supabase) return;
+    const startToday = new Date();
+    startToday.setHours(0, 0, 0, 0);
+    const [all, today] = await Promise.all([
+      supabase
+        .from("sorting_records")
+        .select("id", { count: "exact", head: true }),
+      supabase
+        .from("sorting_records")
+        .select("id", { count: "exact", head: true })
+        .gte("sorted_at", startToday.toISOString()),
+    ]);
+    setSortCounts({
+      total: all.error ? null : all.count,
+      today: today.error ? null : today.count,
+    });
+  }
+
   async function loadHistory() {
     if (!supabase) {
       setHistory([]);
       return;
     }
     setLoadingHistory(true);
-    const { data, error: readErr } = await supabase
-      .from("sorting_records")
-      .select("*")
-      .order("sorted_at", { ascending: false })
-      .limit(100);
+    const { from, to } = resolveDateRange(dateRangeRef.current);
+    const ranged = !!(from || to);
+    const build = ({ count, stable }) => {
+      let q = supabase
+        .from("sorting_records")
+        .select("*", count ? { count: "exact" } : undefined);
+      if (from) q = q.gte("sorted_at", dayStartISO(from));
+      if (to) q = q.lt("sorted_at", dayStartISO(to, 1));
+      q = q.order("sorted_at", { ascending: false });
+      return stable ? q.order("id", { ascending: false }) : q;
+    };
+    // No date range: newest 100 (as before). With a range: every record in it.
+    const { data, error: readErr } = ranged
+      ? await fetchAllRows(build, { cap: 5000 })
+      : await build({ count: false, stable: false }).limit(100);
     setLoadingHistory(false);
     if (readErr) {
       console.error("[sorting_records] read failed", readErr);
@@ -9097,11 +9158,13 @@ function SortingPage() {
       return;
     }
     setHistory(data || []);
+    loadSortCounts();
   }
 
   useEffect(() => {
     loadHistory();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateRange]);
 
   useEffect(() => {
     if (!supabase) return undefined;
@@ -9317,19 +9380,21 @@ function SortingPage() {
     },
     {
       label: "Sorted Today",
-      value: history.filter((r) => {
-        if (!r.sorted_at) return false;
-        const d = new Date(r.sorted_at);
-        const n = new Date();
-        return d.toDateString() === n.toDateString();
-      }).length,
+      value:
+        sortCounts.today ??
+        history.filter((r) => {
+          if (!r.sorted_at) return false;
+          const d = new Date(r.sorted_at);
+          const n = new Date();
+          return d.toDateString() === n.toDateString();
+        }).length,
       icon: Icons.ListChecks,
       tone: "text-signal-teal bg-signal-teal/10",
       key: "history",
     },
     {
       label: "Total Sorting Records",
-      value: history.length,
+      value: sortCounts.total ?? history.length,
       icon: Icons.History,
       tone: "text-signal-amber bg-signal-amber/10",
       key: "history",
@@ -9587,7 +9652,7 @@ function SortingPage() {
           </div>
         </div>
 
-        <div className="bg-white border border-mist-200 rounded-md shadow-panel overflow-hidden">
+        <div className="bg-white border border-mist-200 rounded-md shadow-panel">
           <div className="px-5 py-4 border-b border-mist-200 flex items-center justify-between">
             <div>
               <h2 className="font-display font-bold text-base text-ink-900">
@@ -9601,8 +9666,8 @@ function SortingPage() {
               {visiblePending.length}
             </span>
           </div>
-          <div className="p-4 border-b border-mist-200">
-            <div className="flex items-center gap-2 bg-mist-50 border border-mist-200 rounded-md px-3 py-2">
+          <div className="p-4 border-b border-mist-200 flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-2 bg-mist-50 border border-mist-200 rounded-md px-3 py-2 flex-1 min-w-[160px]">
               <Search size={15} className="text-ink-600/35" />
               <input
                 value={search}
@@ -9610,6 +9675,13 @@ function SortingPage() {
                 className="flex-1 bg-transparent outline-none text-sm"
               />
             </div>
+            {filter !== "pending" && (
+              <DateRangeFilter
+                label="Sorted At"
+                value={dateRange}
+                onChange={setDateRange}
+              />
+            )}
           </div>
           <div className="max-h-[560px] overflow-y-auto divide-y divide-mist-100">
             {filter === "pending" ? (
@@ -14353,6 +14425,12 @@ function ListPage({
   const [adv, setAdv] = useState(EMPTY_ADV);
   const [showAdv, setShowAdv] = useState(false);
   const [dateRange, setDateRange] = useState(EMPTY_DATE_RANGE);
+  // Each list page has its own date meaning (Registered / Scan In / Scan Out…),
+  // so a range picked on one page must not carry over to the next.
+  useEffect(() => {
+    setDateRange(EMPTY_DATE_RANGE);
+    setPage(0);
+  }, [path]);
   const filterRef = useRef(null);
 
   useEffect(() => {
@@ -32002,6 +32080,7 @@ function ExceptionCenterPage() {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
   const [typeFilter, setTypeFilter] = useState("All");
+  const [dateRange, setDateRange] = useState(EMPTY_DATE_RANGE);
   const [showCreate, setShowCreate] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
   const [notice, setNotice] = useState("");
@@ -32022,6 +32101,7 @@ function ExceptionCenterPage() {
     return exceptions
       .filter((e) => statusFilter === "All" || e.status === statusFilter)
       .filter((e) => typeFilter === "All" || e.type === typeFilter)
+      .filter((e) => dateInRange(e.createdAt, dateRange))
       .filter((e) => {
         if (!q) return true;
         return [e.id, e.tk, e.type, e.description, e.createdBy, e.assignee]
@@ -32031,7 +32111,7 @@ function ExceptionCenterPage() {
           .includes(q);
       })
       .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-  }, [exceptions, query, statusFilter, typeFilter]);
+  }, [exceptions, query, statusFilter, typeFilter, dateRange]);
 
   const selected = exceptions.find((e) => e.id === selectedId) || null;
   const counts = React.useMemo(
@@ -32179,7 +32259,7 @@ function ExceptionCenterPage() {
         ))}
       </div>
 
-      <div className="bg-white border border-mist-200 rounded-md shadow-panel overflow-hidden">
+      <div className="bg-white border border-mist-200 rounded-md shadow-panel">
         <div className="p-4 border-b border-mist-200 flex flex-wrap gap-2">
           <div className="flex items-center gap-2 border border-mist-200 rounded-md px-3 py-2 flex-1 min-w-[220px] focus-within:border-signal-blue">
             <Search size={15} className="text-ink-600/35" />
@@ -32209,6 +32289,7 @@ function ExceptionCenterPage() {
               <option key={s}>{s}</option>
             ))}
           </select>
+          <DateRangeFilter value={dateRange} onChange={setDateRange} />
         </div>
 
         <div className="overflow-x-auto">
@@ -32267,8 +32348,8 @@ function ExceptionCenterPage() {
                       {e.status}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-xs text-ink-600/55">
-                    {new Date(e.createdAt).toLocaleString("en-US")}
+                  <td className="px-4 py-3">
+                    <CreatedAtCell iso={e.createdAt} />
                   </td>
                   <td className="px-4 py-3">
                     <button
