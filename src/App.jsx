@@ -1591,6 +1591,29 @@ function rowInScope(row, codes) {
 
 const col = (key, label, extra = {}) => ({ key, label, ...extra });
 
+// Standard date column: two-line "Oct 14, 2026 / 10:09 PM · 57m ago", drives the
+// "Created At" date-range filter on ListPage, never shown as a form field.
+// Inbound scan time: `inbound_at` is stamped when the TK is scanned in at the
+// China warehouse (older rows without it fall back to created_at, the same rule
+// the "Received (Today)" card uses).
+const scanInCol = () =>
+  col("inbound_at", "Scanned In", {
+    dateFilter: true,
+    dateLabel: "Scan In",
+    readOnly: true,
+    dateValue: (row) => row.inbound_at || row.created_at,
+    render: (row) => <CreatedAtCell iso={row.inbound_at || row.created_at} />,
+    csv: (row) => formatIso(row.inbound_at || row.created_at),
+  });
+
+const createdCol = (label = "Created") =>
+  col("created_at", label, {
+    dateFilter: true,
+    readOnly: true,
+    render: (row) => <CreatedAtCell iso={row.created_at} />,
+    csv: (row) => formatIso(row.created_at),
+  });
+
 const MODULES = {
   "/packages": {
     title: "Packages / TK",
@@ -1693,6 +1716,7 @@ const MODULES = {
       col("cbm", "CBM"),
       col("freight", "Freight"),
       col("created_by", "Received By"),
+      scanInCol(),
       col("inbound_status", "Inbound Status", { status: true }),
       col("shipping_fee", "Shipping Fee", {
         render: (row) => <ShippingFeeCell row={row} />,
@@ -1779,6 +1803,7 @@ const MODULES = {
       col("packages", "Packages"),
       col("weight", "Weight"),
       col("status", "Status", { status: true }),
+      createdCol(),
     ],
     rows: [], // live data only — loaded from the server
   },
@@ -1792,6 +1817,7 @@ const MODULES = {
       col("port", "Port / Dry Port"),
       col("arrivalDate", "Arrival Date"),
       col("status", "Status", { status: true }),
+      createdCol(),
     ],
     rows: [], // live data only — loaded from the server
   },
@@ -1899,11 +1925,7 @@ const MODULES = {
       col("phone", "Phone"),
       col("warehouse", "Default Warehouse"),
       col("status", "Status", { status: true }),
-      col("created_at", "Registered", {
-        dateFilter: true,
-        render: (row) => <CreatedAtCell iso={row.created_at} />,
-        csv: (row) => formatIso(row.created_at),
-      }),
+      createdCol("Registered"),
     ],
     rows: [], // live data only — loaded from the server
   },
@@ -1917,6 +1939,7 @@ const MODULES = {
       col("email", "Email"),
       col("registered", "Registered"),
       col("status", "Status", { status: true }),
+      createdCol(),
     ],
     rows: [], // live data only — loaded from the server
   },
@@ -1930,6 +1953,7 @@ const MODULES = {
       col("recipient", "Recipient"),
       col("version", "Version"),
       col("status", "Status", { status: true }),
+      createdCol(),
     ],
     rows: [], // live data only — loaded from the server
   },
@@ -1948,6 +1972,7 @@ const MODULES = {
       col("reason", "Reason"),
       col("approvedBy", "Approved By"),
       col("status", "Status", { status: true }),
+      createdCol(),
     ],
     rows: [], // live data only — loaded from the server
   },
@@ -11606,16 +11631,69 @@ const CUSTOMERS_DISPLAY_SELECT =
 const HIDE_ARCHIVED_CUSTOMERS =
   "status.is.null,status.not.in.(archived,purged)";
 
+// PostgREST returns at most `max-rows` (Supabase default: 1000) rows per request
+// no matter what .limit() says, so one .limit(5000) can silently cut data off.
+// This loads a query in batches until everything (or `cap`) is read, and also
+// reports the exact total so the UI can warn when something is left out.
+// `build({ count, stable })` must return a FRESH query each call (select,
+// filters, order); `count` asks for the exact total, `stable` asks for an `id`
+// tiebreaker so rows with the same created_at never repeat/skip between batches.
+const FETCH_BATCH = 1000;
+const FETCH_ALL_CAP = 20000;
+async function fetchAllRows(build, { cap = FETCH_ALL_CAP } = {}) {
+  const rows = [];
+  let total = null;
+  let stable = true;
+  while (rows.length < cap) {
+    const from = rows.length;
+    const to = Math.min(from + FETCH_BATCH, cap) - 1;
+    const { data, error, count } = await build({
+      count: from === 0,
+      stable,
+    }).range(from, to);
+    if (error) {
+      // The id tiebreaker is only an optimisation: retry once without it.
+      if (from === 0 && stable) {
+        stable = false;
+        continue;
+      }
+      return { data: null, error, total, truncated: false };
+    }
+    if (count != null) total = count;
+    const got = data ? data.length : 0;
+    if (!got) break;
+    rows.push(...data);
+    if (total != null && rows.length >= total) break;
+    if (total == null && got < to - from + 1) break;
+  }
+  const truncated = total != null ? rows.length < total : rows.length >= cap;
+  return { data: rows, error: null, total: total ?? rows.length, truncated };
+}
+
 // Loads rows for a module from Supabase. If Supabase isn't configured, or
 // the table doesn't exist yet / errors out, it falls back to the mock rows
 // from MODULES so the UI never breaks.
 function useTableRows(path, fallbackRows) {
   const tableName = pathToTable(path);
   const isCustomers = path === "/customers";
-  const [rows, setRows] = usePersistentState(
-    `cargo_bridge_${tableName}`,
-    fallbackRows,
-  );
+  const cacheKey = `cargo_bridge_${tableName}`;
+  const [rows, setRows] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(cacheKey);
+      if (raw != null) return JSON.parse(raw);
+    } catch {
+      // Corrupted/unavailable storage — fall through to the fallback rows.
+    }
+    return fallbackRows;
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(cacheKey, JSON.stringify(rows.slice(0, 500)));
+    } catch {
+      // Storage full/unavailable — the list still works for this session.
+    }
+  }, [cacheKey, rows]);
+  const [meta, setMeta] = useState({ total: null, truncated: false });
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(!supabase); // first fetch finished
   const [usingLiveData, setUsingLiveData] = useState(false);
@@ -11623,17 +11701,24 @@ function useTableRows(path, fallbackRows) {
   const refetch = React.useCallback(async () => {
     if (!supabase) return;
     setLoading(true);
-    let listQuery = supabase
-      .from(tableName)
-      .select(isCustomers ? CUSTOMERS_DISPLAY_SELECT : "*");
-    if (isCustomers) listQuery = listQuery.or(HIDE_ARCHIVED_CUSTOMERS);
-    const { data, error } = await listQuery
-      .order("created_at", { ascending: false })
-      .limit(500);
+    const { data, error, total, truncated } = await fetchAllRows(
+      ({ count, stable }) => {
+        let q = supabase
+          .from(tableName)
+          .select(
+            isCustomers ? CUSTOMERS_DISPLAY_SELECT : "*",
+            count ? { count: "exact" } : undefined,
+          );
+        if (isCustomers) q = q.or(HIDE_ARCHIVED_CUSTOMERS);
+        q = q.order("created_at", { ascending: false });
+        return stable ? q.order("id", { ascending: false }) : q;
+      },
+    );
     setLoading(false);
     setReady(true);
     if (!error && data) {
       setRows(data);
+      setMeta({ total, truncated });
       setUsingLiveData(true);
     }
     // On error (e.g. table not created yet), silently keep showing the
@@ -11741,6 +11826,8 @@ function useTableRows(path, fallbackRows) {
     updateRow,
     deleteRow,
     tableName,
+    total: meta.total,
+    truncated: meta.truncated,
   };
 }
 
@@ -11776,7 +11863,7 @@ function CreateRowModal({
   onClose,
   onSubmit,
 }) {
-  const editableColumns = columns.filter((c) => c.key !== "id");
+  const editableColumns = columns.filter((c) => c.key !== "id" && !c.readOnly);
   const [values, setValues] = useState({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -13902,7 +13989,7 @@ const EMPTY_ADV = {
   to: "",
 };
 
-function AdvancedTkFilters({ adv, setAdv, rows }) {
+function AdvancedTkFilters({ adv, setAdv, rows, hideDates = false }) {
   const warehouses = [...new Set(rows.map((r) => r.warehouse).filter(Boolean))];
   const set = (key) => (e) => setAdv((a) => ({ ...a, [key]: e.target.value }));
   const outboundOptions = ["Not Shipped", ...PACKAGE_STAGES.slice(1)];
@@ -13972,24 +14059,28 @@ function AdvancedTkFilters({ adv, setAdv, rows }) {
             ))}
           </select>
         </div>
-        <div>
-          <label className={LABEL_CLS}>ចាប់ពីថ្ងៃ</label>
-          <input
-            type="date"
-            value={adv.from}
-            onChange={set("from")}
-            className={INPUT_CLS}
-          />
-        </div>
-        <div>
-          <label className={LABEL_CLS}>ដល់ថ្ងៃ</label>
-          <input
-            type="date"
-            value={adv.to}
-            onChange={set("to")}
-            className={INPUT_CLS}
-          />
-        </div>
+        {!hideDates && (
+          <>
+            <div>
+              <label className={LABEL_CLS}>ចាប់ពីថ្ងៃ</label>
+              <input
+                type="date"
+                value={adv.from}
+                onChange={set("from")}
+                className={INPUT_CLS}
+              />
+            </div>
+            <div>
+              <label className={LABEL_CLS}>ដល់ថ្ងៃ</label>
+              <input
+                type="date"
+                value={adv.to}
+                onChange={set("to")}
+                className={INPUT_CLS}
+              />
+            </div>
+          </>
+        )}
         <div className="flex items-end">
           <button
             type="button"
@@ -14023,6 +14114,8 @@ function ListPage({
     prependRow,
     updateRow,
     deleteRow,
+    total: tableTotal,
+    truncated: tableTruncated,
   } = useTableRows(path, []);
   const {
     packages,
@@ -14294,9 +14387,16 @@ function ListPage({
       );
     const matchesStatus =
       !statusFilter || row[statusColumn?.key] === statusFilter;
-    const matchesDate = !dateCol || dateInRange(row[dateCol.key], dateRange);
+    const matchesDate =
+      !dateCol ||
+      dateInRange(
+        dateCol.dateValue ? dateCol.dateValue(row) : row[dateCol.key],
+        dateRange,
+      );
     if (!isLinkedTk) return matchesSearch && matchesStatus && matchesDate;
-    const day = String(row.inbound_at || row.created_at || "").slice(0, 10);
+    // Local calendar day (slice(0, 10) of an ISO string is UTC, which put scans
+    // made 12am-7am in Cambodia on the previous day).
+    const day = localDayKey(row.inbound_at || row.created_at);
     const matchesAdv =
       (!adv.inbound || row.inbound_status === adv.inbound) &&
       (!adv.outbound || outboundStatusOf(row) === adv.outbound) &&
@@ -14305,7 +14405,7 @@ function ListPage({
       (!adv.warehouse || row.warehouse === adv.warehouse) &&
       (!adv.from || (day && day >= adv.from)) &&
       (!adv.to || (day && day <= adv.to));
-    return matchesSearch && matchesStatus && matchesAdv;
+    return matchesSearch && matchesStatus && matchesAdv && matchesDate;
   });
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
@@ -14367,6 +14467,14 @@ function ListPage({
           </div>
         ))}
 
+      {!isLinkedTk && !isExceptionsModule && tableTruncated && (
+        <div className="rounded-md bg-amber-50 text-amber-800 px-3 py-2 text-sm">
+          បង្ហាញ {displayRows.length.toLocaleString("en-US")} ក្នុងចំណោម{" "}
+          {Number(tableTotal).toLocaleString("en-US")} — លើសកម្រិតដែល load បាន (
+          {FETCH_ALL_CAP.toLocaleString("en-US")})។ ទិន្នន័យចាស់ៗមិនទាន់បង្ហាញ
+          ហើយតួលេខសរុប/overview អាចមិនពេញលេញ។
+        </div>
+      )}
       {path === "/customers" && !listLoading && (
         <RegistrationOverview rows={displayRows} />
       )}
@@ -14464,6 +14572,7 @@ function ListPage({
 
           {dateCol && (
             <DateRangeFilter
+              label={dateCol.dateLabel || "Created At"}
               value={dateRange}
               onChange={resetToFirstPage(setDateRange)}
             />
@@ -14502,6 +14611,7 @@ function ListPage({
               setAdv(fn);
             }}
             rows={displayRows}
+            hideDates={!!dateCol}
           />
         )}
         <DataTable
@@ -38771,7 +38881,7 @@ function CnActualCostModal({ row, onClose, onSaved }) {
 // Keep ID generation in the database so simultaneous order creation cannot collide.
 // CN Orders / TK List / Purchase & Finance
 // ------------------------------------------------------------
-const CN_ORDERS_LIMIT = 5000;
+const CN_ORDERS_LIMIT = FETCH_ALL_CAP;
 const CN_STAT_ICONS = {
   "Total Orders": "ShoppingCart",
   "Need Payment": "Wallet",
@@ -38816,6 +38926,8 @@ function CnOrdersPage() {
   const [dateRange, setDateRange] = useState(EMPTY_DATE_RANGE);
   const [page, setPage] = useState(0);
   const [quick, setQuick] = useState(""); // clickable stat / quick-tab filter
+  const [rowsMeta, setRowsMeta] = useState({ total: null, truncated: false });
+  const coverTried = useRef(new Set()); // order ids whose cover was already looked up
   const navigate = useNavigate();
   // Whole row opens the order, but clicks on links/buttons keep their own
   // behaviour and selecting text inside a row does not navigate away.
@@ -38828,11 +38940,16 @@ function CnOrdersPage() {
     if (!supabase) return setLoading(false);
     setLoading(true);
     setLoadError("");
-    const { data, error } = await supabase
-      .from("cn_orders")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(CN_ORDERS_LIMIT);
+    const { data, error, total, truncated } = await fetchAllRows(
+      ({ count, stable }) => {
+        const q = supabase
+          .from("cn_orders")
+          .select("*", count ? { count: "exact" } : undefined)
+          .order("created_at", { ascending: false });
+        return stable ? q.order("id", { ascending: false }) : q;
+      },
+      { cap: CN_ORDERS_LIMIT },
+    );
     if (error) {
       // Never show "No orders found" when the query actually failed.
       setLoadError(error.message || "Unable to load CN orders.");
@@ -38840,6 +38957,8 @@ function CnOrdersPage() {
       return;
     }
     const list = data || [];
+    setRowsMeta({ total, truncated });
+    coverTried.current = new Set();
     setRows(list);
     setLoading(false);
     attachCnCovers(list).then(
@@ -38851,12 +38970,17 @@ function CnOrdersPage() {
     if (!supabase) return setTkLoading(false);
     setTkLoading(true);
     setTkError("");
-    const { data, error } = await supabase
-      .from("packages")
-      .select("*")
-      .not("cn_order_id", "is", null)
-      .order("created_at", { ascending: false })
-      .limit(5000);
+    const { data, error } = await fetchAllRows(
+      ({ count, stable }) => {
+        const q = supabase
+          .from("packages")
+          .select("*", count ? { count: "exact" } : undefined)
+          .not("cn_order_id", "is", null)
+          .order("created_at", { ascending: false });
+        return stable ? q.order("id", { ascending: false }) : q;
+      },
+      { cap: CN_ORDERS_LIMIT },
+    );
     if (error) {
       setTkError(error.message || "Unable to load TK list.");
       setTkRows([]);
@@ -39122,6 +39246,26 @@ function CnOrdersPage() {
   const pagedOrders = filtered.slice(pageFrom, pageFrom + CN_PAGE_SIZE);
   const pagedTks = filteredTks.slice(pageFrom, pageFrom + CN_PAGE_SIZE);
 
+  const pageIdKey = pagedOrders.map((r) => r.id).join(",");
+  useEffect(() => {
+    if (!supabase || activeTab !== "orders") return;
+    const need = pagedOrders.filter(
+      (r) => !r.cover_url && !coverTried.current.has(r.id),
+    );
+    if (!need.length) return;
+    need.forEach((r) => coverTried.current.add(r.id));
+    attachCnCovers(need, need.length).then(
+      (withCovers) => {
+        const byId = new Map(
+          withCovers.filter((r) => r.cover_url).map((r) => [r.id, r]),
+        );
+        if (byId.size) setRows((prev) => prev.map((r) => byId.get(r.id) || r));
+      },
+      () => {},
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageIdKey, activeTab]);
+
   const dateActive = !!(dateRange.preset || dateRange.from || dateRange.to);
   const hasFilters = !!(
     q ||
@@ -39177,6 +39321,68 @@ function CnOrdersPage() {
       return;
     }
     const paidOf = (x) => Math.max(0, Number(x.amount_paid_usd) || 0);
+    if (activeTab === "finance") {
+      const r2 = (v) =>
+        v === null || v === undefined || v === "" || Number.isNaN(Number(v))
+          ? ""
+          : Math.round(Number(v) * 100) / 100;
+      const marginText = (c) => {
+        if (c.refunded) return "Excluded (Refunded)";
+        const m = c.preFreightMarginUsd;
+        if (m == null)
+          return c.minimumKnownLossUsd > 0.005
+            ? `Loss at least ${r2(c.minimumKnownLossUsd)}`
+            : "Pending actual costs";
+        if (m > 0.005) return "Profit";
+        if (m < -0.005) return "Loss";
+        return "Break-even";
+      };
+      exportRowsToCSV(
+        `cn-finance-${stamp}.csv`,
+        [
+          { label: "CN Order", key: "order_id" },
+          { label: "Customer", key: "customer" },
+          { label: "Order Status", csv: (x) => cnOrderTableStatus(x) },
+          { label: "Customer Charges (USD)", csv: (x) => r2(x.total_due_usd) },
+          { label: "Customer Paid (USD)", csv: (x) => r2(paidOf(x)) },
+          {
+            label: "Outstanding (USD)",
+            csv: (x) =>
+              x.payment_status === "Refunded"
+                ? 0
+                : r2(Math.max(0, (Number(x.total_due_usd) || 0) - paidOf(x))),
+          },
+          { label: "Actual Goods Cost (CNY)", key: "actual_cost_cny" },
+          {
+            label: "Actual Goods Cost (USD)",
+            csv: (x) => r2(x._calc.goodsUsd),
+          },
+          {
+            label: "Actual China Shipping (CNY)",
+            key: "actual_domestic_shipping_cny",
+          },
+          {
+            label: "Actual China Shipping (USD)",
+            csv: (x) => r2(x._calc.shippingUsd),
+          },
+          {
+            label: "Total Recorded Cost (USD)",
+            csv: (x) => r2(x._calc.totalCostUsd),
+          },
+          { label: "Exchange Rate", csv: (x) => x._calc.rate ?? "" },
+          {
+            label: "Pre-Freight Profit/Loss (USD)",
+            csv: (x) =>
+              x._calc.refunded ? "" : r2(x._calc.preFreightMarginUsd),
+          },
+          { label: "Margin Status", csv: (x) => marginText(x._calc) },
+          { label: "Payment", key: "payment_status" },
+          { label: "Created", csv: (x) => formatIso(x.created_at) },
+        ],
+        filtered.map((x) => ({ ...x, _calc: cnPurchaseFinancials(x) })),
+      );
+      return;
+    }
     exportRowsToCSV(
       `cn-orders-${stamp}.csv`,
       [
@@ -39261,10 +39467,11 @@ function CnOrdersPage() {
           </button>
         </div>
       )}
-      {!loadError && !loading && rows.length >= CN_ORDERS_LIMIT && (
+      {!loadError && !loading && rowsMeta.truncated && (
         <div className="rounded-xl bg-amber-50 text-amber-800 px-3 py-2 text-sm">
-          បង្ហាញត្រឹម {CN_ORDERS_LIMIT.toLocaleString("en-US")} Order
-          ចុងក្រោយប៉ុណ្ណោះ — Order ចាស់ៗអាចមិនបានបង្ហាញ ហើយតួលេខ stat
+          បង្ហាញ {rows.length.toLocaleString("en-US")} ក្នុងចំណោម{" "}
+          {Number(rowsMeta.total).toLocaleString("en-US")} Order — លើសកម្រិតដែល
+          load បាន។ Order ចាស់ៗមិនទាន់បង្ហាញ ហើយតួលេខ stat និង Download
           អាចមិនពេញលេញ។
         </div>
       )}
@@ -39434,7 +39641,7 @@ function CnOrdersPage() {
             </button>
           )}
           <div className="flex items-center gap-2 ml-auto">
-            {activeTab !== "finance" && (
+            {
               <button
                 type="button"
                 onClick={exportCurrent}
@@ -39445,7 +39652,7 @@ function CnOrdersPage() {
               >
                 <Download size={14} /> Download
               </button>
-            )}
+            }
             <button
               type="button"
               onClick={refreshAll}
@@ -39695,7 +39902,14 @@ function CnOrdersPage() {
                           o?.cn_order_items?.[0]?.product_name ||
                           "—";
                     return (
-                      <tr key={p.id || p.tk} className="hover:bg-mist-50">
+                      <tr
+                        key={p.id || p.tk}
+                        onClick={(e) =>
+                          p.tk &&
+                          openRow(e, `/packages/${encodeURIComponent(p.tk)}`)
+                        }
+                        className={`hover:bg-mist-50 ${p.tk ? "cursor-pointer" : ""}`}
+                      >
                         <td className="px-4 py-3 font-bold">
                           <Link
                             to={`/packages/${encodeURIComponent(p.tk || "")}`}
@@ -39713,10 +39927,11 @@ function CnOrdersPage() {
                           </Link>
                         </td>
                         <td className="px-4 py-3">
-                          {o?.customer ||
-                            p.customer_name ||
-                            p.customer_id ||
-                            "—"}
+                          <CnCustomerCell
+                            value={
+                              o?.customer || p.customer_name || p.customer_id
+                            }
+                          />
                         </td>
                         <td className="px-4 py-3 text-ink-700 max-w-[200px] truncate">
                           {productLabel}
