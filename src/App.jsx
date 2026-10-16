@@ -128,6 +128,264 @@ if (
   document.head.appendChild(el);
 }
 
+// ------------------------------------------------------------
+// Design tokens (Phase A) — additive, prefix `cbx-`.
+// Light = primary design. Dark values are applied by the existing
+// `html.cb-admin-dark` switch, so theme preference behaviour is unchanged.
+// ------------------------------------------------------------
+const DESIGN_TOKENS_CSS = `
+:root{
+  --cbx-navy:#172B4D; --cbx-blue:#2563EB; --cbx-blue-soft:#EFF6FF;
+  --cbx-page:#F5F7FB; --cbx-card:#FFFFFF; --cbx-text:#172033;
+  --cbx-muted:#64748B; --cbx-border:#E2E8F0;
+  --cbx-success:#16A34A; --cbx-warning:#D97706; --cbx-danger:#DC2626; --cbx-info:#0284C7;
+  --cbx-radius-sm:8px; --cbx-radius:12px; --cbx-radius-lg:16px;
+  --cbx-shadow-sm:0 1px 2px rgba(23,43,77,.06);
+  --cbx-shadow-md:0 4px 14px rgba(23,43,77,.08);
+  /* sidebar */
+  --cbx-side-w:264px; --cbx-side-w-collapsed:76px;
+  --cbx-side-bg:#FFFFFF; --cbx-side-border:#E2E8F0;
+  --cbx-side-title:#172B4D; --cbx-side-sub:#64748B; --cbx-side-group:#94A3B8;
+  --cbx-side-text:#475569; --cbx-side-hover-bg:#F1F5F9; --cbx-side-hover-text:#172B4D;
+  --cbx-side-active-bg:#EFF6FF; --cbx-side-active-text:#1D4ED8; --cbx-side-bar:#2563EB;
+  --cbx-tip-bg:#172B4D; --cbx-tip-text:#FFFFFF;
+  --cbx-hover:#F1F5F9; --cbx-border-strong:#CBD5E1;
+  --cbx-warn-soft:rgba(217,119,6,.12); --cbx-warn-text:#B45309;
+  --cbx-danger-soft:rgba(220,38,38,.10); --cbx-danger-text:#B91C1C;
+  --cbx-ok-soft:rgba(22,163,74,.12); --cbx-ok-text:#15803D;
+  --cbx-avatar-bg:#172B4D; --cbx-menu-shadow:0 12px 32px rgba(23,43,77,.14);
+}
+html.cb-admin-dark{
+  --cbx-blue-soft:rgba(96,165,250,.14); --cbx-page:#0b1120; --cbx-card:#151c2c;
+  --cbx-text:#e2e8f0; --cbx-muted:#94a3b8; --cbx-border:#263043;
+  --cbx-side-bg:#0f1626; --cbx-side-border:#1e2638;
+  --cbx-side-title:#f1f5f9; --cbx-side-sub:#94a3b8; --cbx-side-group:#64728b;
+  --cbx-side-text:#a9b6c9; --cbx-side-hover-bg:#1b2436; --cbx-side-hover-text:#f1f5f9;
+  --cbx-side-active-bg:rgba(96,165,250,.16); --cbx-side-active-text:#93c5fd; --cbx-side-bar:#60a5fa;
+  --cbx-tip-bg:#e2e8f0; --cbx-tip-text:#0b1120;
+  --cbx-hover:#1b2436; --cbx-border-strong:#3a4763;
+  --cbx-warn-soft:rgba(251,191,36,.14); --cbx-warn-text:#fbbf24;
+  --cbx-danger-soft:rgba(248,113,113,.14); --cbx-danger-text:#fca5a5;
+  --cbx-ok-soft:rgba(74,222,128,.14); --cbx-ok-text:#86efac;
+  --cbx-avatar-bg:#2f4270; --cbx-menu-shadow:0 16px 40px rgba(0,0,0,.45);
+}
+
+.cbx-sidebar{
+  width:var(--cbx-side-w); background:var(--cbx-side-bg);
+  border-right:1px solid var(--cbx-side-border); color:var(--cbx-side-text);
+  transition:width .18s ease, transform .2s ease;
+}
+.cbx-side-head{ height:64px; border-bottom:1px solid var(--cbx-side-border); }
+.cbx-side-title{ color:var(--cbx-side-title); }
+.cbx-side-sub{ color:var(--cbx-side-sub); }
+.cbx-side-group{
+  color:var(--cbx-side-group); font-size:11px; font-weight:600;
+  letter-spacing:.06em; text-transform:uppercase;
+}
+.cbx-side-rule{ display:none; height:1px; margin:6px 12px; background:var(--cbx-side-border); }
+.cbx-nav-link{
+  position:relative; display:flex; align-items:center; gap:10px;
+  padding:9px 12px; border-radius:var(--cbx-radius-sm);
+  font-size:13.5px; line-height:1.25; color:var(--cbx-side-text);
+  transition:background-color .12s ease, color .12s ease;
+}
+.cbx-nav-link:hover{ background:var(--cbx-side-hover-bg); color:var(--cbx-side-hover-text); }
+.cbx-nav-link:focus-visible{ outline:2px solid var(--cbx-blue); outline-offset:2px; }
+.cbx-nav-link.is-active{
+  background:var(--cbx-side-active-bg); color:var(--cbx-side-active-text); font-weight:600;
+}
+.cbx-nav-link.is-active::before{
+  content:""; position:absolute; left:-12px; top:8px; bottom:8px; width:3px;
+  border-radius:0 3px 3px 0; background:var(--cbx-side-bar);
+}
+.cbx-collapse-btn{
+  display:none; width:28px; height:28px; border-radius:8px; flex-shrink:0;
+  align-items:center; justify-content:center; color:var(--cbx-side-sub);
+  border:1px solid var(--cbx-side-border); background:transparent;
+}
+.cbx-collapse-btn:hover{ background:var(--cbx-side-hover-bg); color:var(--cbx-side-hover-text); }
+.cbx-collapse-btn:focus-visible{ outline:2px solid var(--cbx-blue); outline-offset:2px; }
+.cbx-tip{
+  position:fixed; z-index:80; pointer-events:none; transform:translateY(-50%);
+  padding:6px 10px; border-radius:8px; font-size:12px; font-weight:500; white-space:nowrap;
+  background:var(--cbx-tip-bg); color:var(--cbx-tip-text); box-shadow:var(--cbx-shadow-md);
+}
+@media (min-width:1024px){
+  .cbx-collapse-btn{ display:inline-flex; }
+  .cbx-sidebar.is-collapsed{ width:var(--cbx-side-w-collapsed); }
+  .cbx-sidebar.is-collapsed .cbx-label,
+  .cbx-sidebar.is-collapsed .cbx-side-group,
+  .cbx-sidebar.is-collapsed .cbx-side-brandtext{ display:none; }
+  .cbx-sidebar.is-collapsed .cbx-side-rule{ display:block; }
+  .cbx-sidebar.is-collapsed .cbx-nav-link{ justify-content:center; padding:10px 0; }
+  .cbx-sidebar.is-collapsed .cbx-side-head{ flex-direction:column; justify-content:center; gap:6px; padding:0; height:auto; min-height:64px; padding-block:10px; }
+  .cbx-sidebar.is-collapsed .cbx-nav-link.is-active::before{ left:-12px; }
+}
+
+/* ---- Topbar (Phase A) - NOTE: no display property is set on classes that
+   Tailwind utilities (hidden, md:flex, lg:hidden) control in JSX. ---- */
+.cbx-topbar{
+  position:relative; z-index:20; background:var(--cbx-card);
+  border-bottom:1px solid var(--cbx-border);
+}
+.cbx-page-title{ color:var(--cbx-text); letter-spacing:-.01em; }
+.cbx-muted{ color:var(--cbx-muted); }
+.cbx-search{
+  border:1px solid var(--cbx-border); background:var(--cbx-page);
+  color:var(--cbx-muted); border-radius:10px;
+  transition:background-color .12s ease, border-color .12s ease;
+}
+.cbx-search:hover{ background:var(--cbx-card); border-color:var(--cbx-border-strong); }
+.cbx-search:focus-visible,.cbx-icon-btn:focus-visible,.cbx-user-pill:focus-visible,.cbx-menu-item:focus-visible{
+  outline:2px solid var(--cbx-blue); outline-offset:2px;
+}
+.cbx-menu-item:focus-visible{ outline-offset:-2px; }
+.cbx-kbd{
+  border:1px solid var(--cbx-border); background:var(--cbx-card); color:var(--cbx-muted);
+  border-radius:6px; padding:2px 8px; font-size:11px; font-weight:500;
+}
+.cbx-icon-btn{
+  position:relative; width:40px; height:40px; border-radius:10px; flex-shrink:0;
+  border:1px solid var(--cbx-border); background:var(--cbx-card); color:var(--cbx-text);
+  transition:background-color .12s ease;
+}
+.cbx-icon-btn:hover{ background:var(--cbx-hover); }
+.cbx-badge{
+  position:absolute; top:-6px; right:-6px; box-sizing:border-box;
+  min-width:20px; height:20px; padding:0 5px; border-radius:10px;
+  background:var(--cbx-danger); color:#fff; border:2px solid var(--cbx-card);
+  font-size:11px; font-weight:700; line-height:16px; text-align:center;
+}
+.cbx-divider{ width:1px; height:28px; background:var(--cbx-border); }
+.cbx-user-pill{
+  display:flex; align-items:center; gap:10px; height:44px; padding:0 10px 0 6px;
+  border:1px solid var(--cbx-border); border-radius:12px;
+  background:var(--cbx-card); color:var(--cbx-text);
+  transition:background-color .12s ease;
+}
+.cbx-user-pill:hover{ background:var(--cbx-hover); }
+.cbx-avatar{
+  position:relative; width:32px; height:32px; border-radius:9999px; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center; overflow:hidden;
+  background:var(--cbx-avatar-bg); color:#fff; font-size:12px; font-weight:600;
+}
+.cbx-user-name{ color:var(--cbx-text); font-size:14px; font-weight:600; }
+.cbx-user-role{ color:var(--cbx-muted); font-size:12px; }
+.cbx-menu{
+  background:var(--cbx-card); border:1px solid var(--cbx-border);
+  border-radius:12px; box-shadow:var(--cbx-menu-shadow);
+}
+.cbx-menu-head{ padding:10px 14px; border-bottom:1px solid var(--cbx-border); }
+.cbx-menu-name{ font-size:14px; font-weight:600; color:var(--cbx-text); }
+.cbx-menu-mail{ font-size:12px; color:var(--cbx-muted); }
+.cbx-menu-item{
+  width:100%; display:flex; align-items:center; gap:10px; padding:9px 14px;
+  font-size:14px; color:var(--cbx-text); text-align:left;
+  background:transparent; border:0; cursor:pointer;
+}
+.cbx-menu-item:hover{ background:var(--cbx-hover); }
+.cbx-menu-item.is-danger{ color:var(--cbx-danger); }
+.cbx-menu-item.is-danger:hover{ background:rgba(220,38,38,.08); }
+.cbx-menu-meta{ margin-left:auto; font-size:12px; color:var(--cbx-muted); }
+.cbx-menu-sep{ height:1px; background:var(--cbx-border); margin:4px 0; }
+
+
+/* ---- Dark remaps missing from ADMIN_DARK_CSS: tint families already used by
+   CN / Dashboard status badges. Same recipe as the existing emerald/violet. ---- */
+html.cb-admin-dark .bg-teal-50{background-color:rgba(20,184,166,.14)}
+html.cb-admin-dark .text-teal-700{color:#5eead4}
+html.cb-admin-dark .bg-cyan-50{background-color:rgba(6,182,212,.14)}
+html.cb-admin-dark .text-cyan-700{color:#67e8f9}
+html.cb-admin-dark .bg-sky-50{background-color:rgba(14,165,233,.14)}
+html.cb-admin-dark .text-sky-700{color:#7dd3fc}
+html.cb-admin-dark .bg-indigo-50{background-color:rgba(99,102,241,.16)}
+html.cb-admin-dark .text-indigo-700{color:#a5b4fc}
+
+
+/* ---- Tables (Phase C). No display property on classes Tailwind controls in JSX. ---- */
+.cbx-th{ background:var(--cbx-page); }
+.cbx-row:hover{ background:var(--cbx-hover); }
+.cbx-state{
+  display:flex; flex-direction:column; align-items:center; gap:6px;
+  padding:40px 16px; text-align:center; white-space:normal;
+}
+.cbx-state-ico{
+  width:44px; height:44px; border-radius:9999px; display:grid; place-items:center;
+  background:var(--cbx-hover); color:var(--cbx-muted); margin-bottom:4px;
+}
+.cbx-state.is-error .cbx-state-ico{ background:var(--cbx-danger-soft); color:var(--cbx-danger-text); }
+.cbx-state-title{ font-size:14px; font-weight:600; color:var(--cbx-text); }
+.cbx-state-hint{ font-size:13px; color:var(--cbx-muted); max-width:380px; }
+.cbx-state .cbx-btn{ margin-top:10px; }
+.cbx-row-action{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:32px; height:32px; border-radius:8px; color:var(--cbx-muted);
+  background:transparent; border:0; cursor:pointer;
+  transition:background-color .12s ease, color .12s ease;
+}
+.cbx-row-action:hover{ background:var(--cbx-hover); color:var(--cbx-text); }
+.cbx-row-action.is-primary:hover{ background:var(--cbx-blue-soft); color:var(--cbx-side-active-text); }
+.cbx-row-action.is-warn:hover{ background:var(--cbx-warn-soft); color:var(--cbx-warn-text); }
+.cbx-row-action.is-danger:hover{ background:var(--cbx-danger-soft); color:var(--cbx-danger-text); }
+.cbx-row-action:focus-visible{ outline:2px solid var(--cbx-blue); outline-offset:1px; }
+
+/* ---- Dashboard (Phase B) ---- */
+.cbx-btn{
+  display:inline-flex; align-items:center; gap:6px; height:36px; padding:0 12px;
+  border:1px solid var(--cbx-border); border-radius:10px; background:var(--cbx-card);
+  color:var(--cbx-text); font-size:13px; font-weight:600; cursor:pointer;
+  transition:background-color .12s ease;
+}
+.cbx-btn:hover:not(:disabled){ background:var(--cbx-hover); }
+.cbx-btn:disabled{ opacity:.6; cursor:progress; }
+.cbx-btn:focus-visible{ outline:2px solid var(--cbx-blue); outline-offset:2px; }
+.cbx-pill{
+  display:inline-flex; align-items:center; height:36px; padding:0 12px;
+  border:1px solid var(--cbx-border); border-radius:10px; background:var(--cbx-card);
+  color:var(--cbx-muted); font-size:12px; font-weight:500;
+}
+.cbx-h1{ color:var(--cbx-text); letter-spacing:-.01em; }
+.cbx-sub{ color:var(--cbx-muted); }
+.cbx-kpi-link{ display:block; }
+.cbx-kpi-link:hover .cb-stat{ box-shadow:var(--cbx-shadow-md); border-color:var(--cbx-border-strong); }
+.cbx-kpi-link:focus-visible{ outline:none; }
+.cbx-kpi-link:focus-visible .cb-stat{ outline:2px solid var(--cbx-blue); outline-offset:2px; }
+.cbx-queue{ list-style:none; margin:0; padding:0; }
+.cbx-queue-row{
+  display:flex; align-items:center; gap:12px; padding:12px 20px;
+  border-top:1px solid var(--cbx-border);
+}
+.cbx-queue-ico{
+  width:36px; height:36px; border-radius:10px; flex-shrink:0;
+  display:grid; place-items:center;
+}
+.cbx-queue-ico.is-amber{ background:var(--cbx-warn-soft); color:var(--cbx-warn-text); }
+.cbx-queue-ico.is-red{ background:var(--cbx-danger-soft); color:var(--cbx-danger-text); }
+.cbx-queue-ico.is-blue{ background:var(--cbx-blue-soft); color:var(--cbx-side-active-text); }
+.cbx-queue-title{ font-size:14px; font-weight:600; color:var(--cbx-text); }
+.cbx-queue-desc{ font-size:12px; color:var(--cbx-muted); margin-top:2px; }
+.cbx-queue-count{ font-size:20px; font-weight:700; color:var(--cbx-text); min-width:2ch; text-align:right; }
+.cbx-queue-link{
+  font-size:12px; font-weight:600; color:var(--cbx-side-active-text);
+  white-space:nowrap; border-radius:6px; padding:4px 6px;
+}
+.cbx-queue-link:hover{ text-decoration:underline; }
+.cbx-queue-link:focus-visible{ outline:2px solid var(--cbx-blue); outline-offset:2px; }
+@media (prefers-reduced-motion:reduce){
+  .cbx-sidebar,.cbx-nav-link,.cbx-search,.cbx-icon-btn,.cbx-user-pill,.cbx-btn{ transition:none; }
+}
+`;
+
+if (
+  typeof document !== "undefined" &&
+  !document.getElementById("cbx-design-tokens")
+) {
+  const el = document.createElement("style");
+  el.id = "cbx-design-tokens";
+  el.textContent = DESIGN_TOKENS_CSS;
+  document.head.appendChild(el);
+}
+
 // A single grey block. `delay` (ms) offsets the sweep so rows ripple.
 function Skeleton({ className = "", style, delay = 0 }) {
   return (
@@ -844,9 +1102,8 @@ const NAV_SECTIONS = [
     items: [{ label: "Wallet Top Up", icon: "Wallet", path: "/wallet-top-up" }],
   },
   {
-    label: "Exceptions & Reports",
+    label: "Reports",
     items: [
-      { label: "Exceptions", icon: "TriangleAlert", path: "/exceptions" },
       {
         label: "Reports & Analytics",
         icon: "BarChart3",
@@ -10007,11 +10264,80 @@ function toneFor(label) {
   return "gray";
 }
 
+// ------------------------------------------------------------
+// Central status presentation (Phase 8)
+// ------------------------------------------------------------
+// ONE place that decides how a status LABEL is coloured. It invents no new
+// colours: it re-uses the tone functions the dedicated modules already use
+// (CN, AIR, Delivery, payment), so the same label cannot render two ways.
+// The TK lifecycle is reached through TK_TO_CN_STATUS - the same single
+// source of truth the DB trigger mirrors - so a TK and the CN order it
+// belongs to always share a colour. DISPLAY ONLY: no status value, label or
+// transition is changed anywhere.
+//
+// Matching is EXACT on purpose. Some labels mean different things per module
+// ("In Transit", "Order Processing" exist in AIR and in Containers; "Completed"
+// is also an SLA state), so only unambiguous labels are mapped here; anything
+// else falls through to the original keyword rules (toneFor) unchanged.
+const NOT_SUCCESS_RE =
+  /^(un|in|non)(paid|active|ready|checked|cleared|confirmed|resolved)$/i;
+const STATUS_NEUTRAL_CLASS = "bg-slate-100 text-slate-600";
+// Labels that exist only in the CN order flow (not shared with another module).
+const CN_ONLY_STATUSES = new Set([
+  "Waiting Order Payment",
+  "Approve Purchase",
+  "Purchased",
+  "Intransit",
+  "Arrive Destination",
+  "Shipping to China WH",
+]);
+const AIR_UNAMBIGUOUS_STATUSES = new Set([
+  "Received at Indonesia Warehouse",
+  "Departed Indonesia Warehouse",
+  "Received at Cambodia Warehouse",
+  "Complete Order",
+]);
+
+function statusToneClass(label) {
+  const raw = String(label ?? "").trim();
+  if (!raw || raw === "—") return null;
+  if (TK_TO_CN_STATUS[raw]) return cnStatusTone(TK_TO_CN_STATUS[raw]);
+  if (CN_ONLY_STATUSES.has(raw)) return cnStatusTone(raw);
+  // Same colours the CN module already gives these payment states
+  // ("Pending Shipping Payment" is deliberately red there - see cnStatusTone).
+  if (raw === PAY_STATUS.PENDING) return cnStatusTone("Waiting Payment");
+  if (raw === PAY_STATUS.PAID) return cnStatusTone("Complete Order");
+  if (CN_PAYMENT_STATUSES.includes(raw)) return cnPaymentTone(raw);
+  if (raw !== "Pending" && DELIVERY_TONE[raw]) return DELIVERY_TONE[raw];
+  if (AIR_UNAMBIGUOUS_STATUSES.has(raw)) return airStatusTone(raw);
+  // "Unpaid" / "Inactive" contain "paid" / "active", which the keyword rules
+  // below would otherwise read as success.
+  if (NOT_SUCCESS_RE.test(raw)) return STATUS_NEUTRAL_CLASS;
+  return null;
+}
+
+// Hex triplets for the places that cannot use Tailwind classes (pipeline
+// circles). Looked up FROM the class statusToneClass already chose, so the
+// two can never drift apart.
+const STATUS_FAMILY_HEX = {
+  violet: { bg: "#EDE9FE", fg: "#6D28D9", solid: "#7C3AED" },
+  amber: { bg: "#FEF3C7", fg: "#B45309", solid: "#F59E0B" },
+  teal: { bg: "#CCFBF1", fg: "#0F766E", solid: "#0D9488" },
+  cyan: { bg: "#CFFAFE", fg: "#0E7490", solid: "#06B6D4" },
+  emerald: { bg: "#D1FAE5", fg: "#047857", solid: "#10B981" },
+  blue: { bg: "#DBEAFE", fg: "#1D4ED8", solid: "#2563EB" },
+};
+function statusToneHex(label) {
+  const cls = statusToneClass(label);
+  const family = cls && cls.match(/bg-([a-z]+)-50/)?.[1];
+  return (family && STATUS_FAMILY_HEX[family]) || null;
+}
+
 function StatusBadge({ label }) {
-  const tone = toneFor(label);
+  const cls = statusToneClass(label) || TONE_CLASS[toneFor(label)];
   return (
     <span
-      className={`inline-flex items-center text-[11px] font-medium px-2 py-0.5 rounded-sm whitespace-nowrap ${TONE_CLASS[tone]}`}
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-bold whitespace-nowrap ${cls}`}
     >
       {label}
     </span>
@@ -10021,27 +10347,55 @@ function StatusBadge({ label }) {
 // ------------------------------------------------------------
 // components/DataTable.jsx
 // ------------------------------------------------------------
+// Optional, backward-compatible props (existing call sites are unchanged):
+//   caption      screen-reader name for the table
+//   error        { title, hint } -> error state with Retry (only when no rows)
+//   onRetry      handler for the Retry button
+//   emptyTitle / emptyHint / emptyAction({label,onClick})  empty-state copy
+//   col.numeric  right-align + tabular figures   col.align "right"|"center"
+function colAlignClass(col) {
+  if (col.numeric) return "text-right tabular-nums";
+  if (col.align === "right") return "text-right";
+  if (col.align === "center") return "text-center";
+  return "text-left";
+}
+
 function DataTable({
   columns,
   rows,
   loading = false,
   skeletonRows = 6,
   rowActions,
+  caption,
+  error = null,
+  onRetry,
+  emptyTitle,
+  emptyHint,
+  emptyAction,
 }) {
+  const colSpan = columns.length + (rowActions ? 1 : 0);
+  const showError = !loading && !!error;
+  const showEmpty = !loading && !error && rows.length === 0;
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
+        {caption && <caption className="sr-only">{caption}</caption>}
         <thead>
           <tr className="border-b border-mist-200">
             {columns.map((col) => (
               <th
                 key={col.key}
-                className="text-left font-semibold text-[11px] uppercase tracking-wide text-ink-600/45 px-4 py-3 whitespace-nowrap"
+                scope="col"
+                className={`cbx-th ${colAlignClass(col)} font-semibold text-[11px] uppercase tracking-wide text-ink-600/45 px-4 py-3 whitespace-nowrap`}
               >
                 {col.label}
               </th>
             ))}
-            {rowActions && <th className="w-24 px-4 py-3" />}
+            {rowActions && (
+              <th scope="col" className="cbx-th w-24 px-4 py-3">
+                <span className="sr-only">Actions</span>
+              </th>
+            )}
           </tr>
         </thead>
         <tbody
@@ -10053,12 +10407,13 @@ function DataTable({
             <SkeletonTableRows columns={columns} rows={skeletonRows} />
           )}
           {!loading &&
+            !error &&
             rows.map((row, i) => (
-              <tr key={i} className="hover:bg-mist-50/70 transition-colors">
+              <tr key={i} className="cbx-row transition-colors">
                 {columns.map((col) => (
                   <td
                     key={col.key}
-                    className="px-4 py-3 whitespace-nowrap text-ink-800"
+                    className={`px-4 py-3 whitespace-nowrap text-ink-800 ${col.numeric || col.align ? colAlignClass(col) : ""}`}
                   >
                     {col.render ? (
                       col.render(row)
@@ -10099,19 +10454,81 @@ function DataTable({
                 )}
               </tr>
             ))}
-          {!loading && rows.length === 0 && (
+          {showError && (
             <tr>
-              <td
-                colSpan={columns.length + (rowActions ? 1 : 0)}
-                className="px-4 py-10 text-center text-ink-600/40 text-sm"
-              >
-                No data available.
+              <td colSpan={colSpan}>
+                <div role="alert" className="cbx-state is-error">
+                  <span className="cbx-state-ico" aria-hidden="true">
+                    <Icon name={error.icon || "CloudOff"} size={20} />
+                  </span>
+                  <div className="cbx-state-title">
+                    {error.title || "Couldn't load this list"}
+                  </div>
+                  {error.hint && (
+                    <div className="cbx-state-hint">{error.hint}</div>
+                  )}
+                  {onRetry && (
+                    <button type="button" className="cbx-btn" onClick={onRetry}>
+                      <Icon name="RefreshCw" size={15} />
+                      Retry
+                    </button>
+                  )}
+                </div>
+              </td>
+            </tr>
+          )}
+          {showEmpty && (
+            <tr>
+              <td colSpan={colSpan}>
+                <div className="cbx-state">
+                  <span className="cbx-state-ico" aria-hidden="true">
+                    <Icon name={emptyAction ? "SearchX" : "Inbox"} size={20} />
+                  </span>
+                  <div className="cbx-state-title">
+                    {emptyTitle || "No data available."}
+                  </div>
+                  {emptyHint && (
+                    <div className="cbx-state-hint">{emptyHint}</div>
+                  )}
+                  {emptyAction && (
+                    <button
+                      type="button"
+                      className="cbx-btn"
+                      onClick={emptyAction.onClick}
+                    >
+                      {emptyAction.label}
+                    </button>
+                  )}
+                </div>
               </td>
             </tr>
           )}
         </tbody>
       </table>
     </div>
+  );
+}
+
+// One accessible icon button for row actions: 32px target, a real accessible
+// name ("Edit TK123") instead of a bare title, visible keyboard focus.
+function RowAction({ label, subject, icon, onClick, to, tone = "default" }) {
+  const name = subject ? `${label} ${subject}` : label;
+  const cls = `cbx-row-action is-${tone}`;
+  const glyph = <Icon name={icon} size={15} aria-hidden="true" />;
+  return to ? (
+    <Link to={to} title={label} aria-label={name} className={cls}>
+      {glyph}
+    </Link>
+  ) : (
+    <button
+      type="button"
+      title={label}
+      aria-label={name}
+      onClick={onClick}
+      className={cls}
+    >
+      {glyph}
+    </button>
   );
 }
 
@@ -10273,9 +10690,10 @@ const TONES = {
   violet: "bg-violet-50 text-violet-700",
 };
 
-function StatCard({ icon, label, value, unit, tone = "ink", delta }) {
+function StatCard({ icon, label, value, unit, tone = "ink", delta, to }) {
   const Icon = Icons[icon] || Icons.Circle;
-  return (
+  const Arrow = Icons.ArrowUpRight || Icons.ChevronRight || Icons.Circle;
+  const card = (
     <div className="cb-surface cb-card cb-stat p-4 shadow-panel">
       <div className="flex items-center gap-3">
         <div
@@ -10286,6 +10704,13 @@ function StatCard({ icon, label, value, unit, tone = "ink", delta }) {
         <div className="text-[13px] font-medium text-ink-600/70 leading-tight">
           {label}
         </div>
+        {to && (
+          <Arrow
+            size={15}
+            className="ml-auto shrink-0 text-ink-600/40"
+            aria-hidden="true"
+          />
+        )}
       </div>
       <div className="mt-3 flex items-baseline gap-1.5">
         <span className="font-display text-[28px] leading-none font-extrabold text-ink-900 tabular-nums">
@@ -10305,6 +10730,12 @@ function StatCard({ icon, label, value, unit, tone = "ink", delta }) {
         )}
       </div>
     </div>
+  );
+  if (!to) return card;
+  return (
+    <Link to={to} className="cbx-kpi-link" aria-label={`${label}: ${value}`}>
+      {card}
+    </Link>
   );
 }
 
@@ -10423,7 +10854,7 @@ function PipelineCard({
       <div className="px-5 py-5 overflow-x-auto">
         <div className="flex items-start min-w-[720px]">
           {steps.map((st, i) => {
-            const tone = PIPE_TONES[i % PIPE_TONES.length];
+            const tone = st.tone || PIPE_TONES[i % PIPE_TONES.length];
             const Ico = Icons[st.icon] || Icons.Circle;
             const isActive = i === activeIndex;
             return (
@@ -10523,6 +10954,7 @@ function RouteFlow() {
         label: label === "Completed" ? "Complete / Delivered" : label,
         count: counts[label],
         icon: CHINA_STAGE_ICONS[label],
+        tone: statusToneHex(label),
       }))}
     />
   );
@@ -10592,6 +11024,9 @@ const ADMIN_KM = {
   Finance: "ហិរញ្ញវត្ថុ",
   "Wallet Top Up": "បញ្ចូលកាបូប",
   "Exceptions & Reports": "ករណីលើកលែង និងរបាយការណ៍",
+  Reports: "របាយការណ៍",
+  "Collapse sidebar": "បង្រួមម៉ឺនុយ",
+  "Expand sidebar": "ពង្រីកម៉ឺនុយ",
   Exceptions: "ករណីលើកលែង",
   "Reports & Analytics": "របាយការណ៍ និងការវិភាគ",
   System: "ប្រព័ន្ធ",
@@ -10646,6 +11081,25 @@ const ADMIN_KM = {
   "Are you sure you want to sign out?": "តើអ្នកប្រាកដថាចង់ចាកចេញមែនទេ?",
   Confirm: "បញ្ជាក់",
   Notifications: "ការជូនដំណឹង",
+  "Operations Dashboard": "ផ្ទាំងប្រតិបត្តិការ",
+  "Live overview of China → Cambodia shipments.":
+    "ទិដ្ឋភាពទូទៅនៃការដឹកជញ្ជូនចិន → កម្ពុជា",
+  Refresh: "ផ្ទុកឡើងវិញ",
+  "Needs Attention": "ត្រូវការការយកចិត្តទុកដាក់",
+  "Nothing is waiting right now.": "មិនមានការងារកំពុងរង់ចាំទេ។",
+  "Open exceptions": "ករណីលើកលែងដែលកំពុងបើក",
+  "Needs staff follow-up in the Exception Center.":
+    "ត្រូវការការតាមដានពីបុគ្គលិកក្នុងមជ្ឈមណ្ឌលករណីលើកលែង។",
+  "Waiting for arrival scan": "រង់ចាំស្កេនមកដល់",
+  "Left the origin warehouse; waiting for the W.H Arrived scan.":
+    "បានចេញពីឃ្លាំងប្រភព កំពុងរង់ចាំស្កេននៅ W.H Arrived។",
+  "Waiting to ship to branch": "រង់ចាំបញ្ជូនទៅសាខា",
+  "Arrived at the destination warehouse; not yet sent to a branch.":
+    "បានមកដល់ឃ្លាំងគោលដៅ មិនទាន់បញ្ជូនទៅសាខា។",
+  "Waiting for sorting scan": "រង់ចាំស្កេនតម្រៀប",
+  "On the way to the branch; waiting for the Sorting scan.":
+    "កំពុងធ្វើដំណើរទៅសាខា កំពុងរង់ចាំស្កេននៅ Sorting។",
+  more: "ទៀត",
 };
 
 const ADMIN_DARK_CSS = String.raw`
@@ -10913,12 +11367,39 @@ function AdminLoginPrefs() {
   );
 }
 
-function Sidebar({ open, onClose }) {
+const SIDEBAR_COLLAPSED_KEY = "cb_sidebar_collapsed";
+const readSidebarCollapsed = () => {
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+const isDesktopViewport = () =>
+  typeof window !== "undefined" &&
+  window.matchMedia("(min-width: 1024px)").matches;
+
+function Sidebar({ open, onClose, collapsed = false, onToggleCollapse }) {
   const { user } = useAuth();
   const { t } = useAdminPrefs();
   const systemSettings = useSystemSettings();
   const company = systemSettings.company || DEFAULT_SYSTEM_SETTINGS.company;
   const sidebarLogo = company.logoUrl || company.logoDataUrl || "";
+  const [tip, setTip] = useState(null); // { label, top, left }
+
+  // Tooltip only while the desktop sidebar is collapsed (labels are hidden).
+  const showTip = (e, label) => {
+    if (!collapsed || !isDesktopViewport()) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    setTip({ label, top: r.top + r.height / 2, left: r.right + 10 });
+  };
+  const hideTip = () => setTip(null);
+  useEffect(() => {
+    if (!collapsed) setTip(null);
+  }, [collapsed]);
+
+  const toggleLabel = collapsed ? t("Expand sidebar") : t("Collapse sidebar");
+
   return (
     <>
       {/* mobile overlay */}
@@ -10929,12 +11410,13 @@ function Sidebar({ open, onClose }) {
         />
       )}
       <aside
-        className={`cb-sidebar fixed z-40 inset-y-0 left-0 w-64 text-mist-100 flex flex-col
-          transform transition-transform duration-200 lg:static lg:translate-x-0
+        aria-label="Main navigation"
+        className={`cbx-sidebar ${collapsed ? "is-collapsed" : ""} fixed z-40 inset-y-0 left-0 flex flex-col
+          transform lg:static lg:translate-x-0
           ${open ? "translate-x-0" : "-translate-x-full"}`}
       >
-        <div className="h-16 flex items-center gap-2 px-5 border-b border-white/10 shrink-0">
-          <div className="w-8 h-8 rounded-sm bg-signal-blue flex items-center justify-center overflow-hidden">
+        <div className="cbx-side-head flex items-center gap-2.5 px-4 shrink-0">
+          <div className="w-9 h-9 rounded-lg bg-signal-blue flex items-center justify-center overflow-hidden shrink-0">
             {sidebarLogo ? (
               <img
                 src={sidebarLogo}
@@ -10945,19 +11427,34 @@ function Sidebar({ open, onClose }) {
               <Icons.Waypoints size={18} className="text-white" />
             )}
           </div>
-          <div className="leading-tight min-w-0">
-            <div className="font-display font-extrabold text-white text-sm tracking-tight truncate">
+          <div className="cbx-side-brandtext leading-tight min-w-0 flex-1">
+            <div className="cbx-side-title font-display font-extrabold text-sm tracking-tight truncate">
               {company.name || "Cargo Bridge"}
             </div>
-            <div className="text-[11px] text-mist-100/50 truncate">
+            <div className="cbx-side-sub text-[11px] truncate">
               {company.shortName
                 ? `${company.shortName} · Logistics`
                 : "CN → KH Logistics"}
             </div>
           </div>
+          {onToggleCollapse && (
+            <button
+              type="button"
+              className="cbx-collapse-btn"
+              aria-label={toggleLabel}
+              aria-pressed={collapsed}
+              title={toggleLabel}
+              onClick={onToggleCollapse}
+            >
+              <Icon
+                name={collapsed ? "PanelLeftOpen" : "PanelLeftClose"}
+                size={16}
+              />
+            </button>
+          )}
         </div>
 
-        <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
+        <nav className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 space-y-4">
           {NAV_SECTIONS.map((section, i) => {
             const items = section.items.filter(
               (item) =>
@@ -10967,44 +11464,59 @@ function Sidebar({ open, onClose }) {
             if (items.length === 0) return null;
             return (
               <div key={i}>
-                {section.label && (
-                  <div className="px-3 mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-mist-100/35">
-                    {t(section.label)}
-                  </div>
-                )}
+                {section.label ? (
+                  <>
+                    <div className="cbx-side-group px-3 mb-1.5">
+                      {t(section.label)}
+                    </div>
+                    <div className="cbx-side-rule" aria-hidden="true" />
+                  </>
+                ) : null}
                 <div className="space-y-0.5">
-                  {items.map((item) => (
-                    <NavLink
-                      key={item.path}
-                      to={item.path}
-                      onClick={onClose}
-                      className={({ isActive }) =>
-                        `flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm transition-colors ${
-                          isActive
-                            ? "cb-active text-white font-medium"
-                            : "text-mist-100/70 hover:bg-white/5 hover:text-white"
-                        }`
-                      }
-                    >
-                      <Icon
-                        name={item.icon}
-                        size={16}
-                        strokeWidth={2}
-                        className="shrink-0"
-                      />
-                      <span className="truncate">{t(item.label)}</span>
-                    </NavLink>
-                  ))}
+                  {items.map((item) => {
+                    const label = t(item.label);
+                    return (
+                      <NavLink
+                        key={item.path}
+                        to={item.path}
+                        end={item.path === "/"}
+                        onClick={onClose}
+                        aria-label={label}
+                        onMouseEnter={(e) => showTip(e, label)}
+                        onMouseLeave={hideTip}
+                        onFocus={(e) => showTip(e, label)}
+                        onBlur={hideTip}
+                        className={({ isActive }) =>
+                          `cbx-nav-link ${isActive ? "is-active" : ""}`
+                        }
+                      >
+                        <Icon
+                          name={item.icon}
+                          size={17}
+                          strokeWidth={2}
+                          className="shrink-0"
+                        />
+                        <span className="cbx-label truncate">{label}</span>
+                      </NavLink>
+                    );
+                  })}
                 </div>
               </div>
             );
           })}
         </nav>
-
-        <div className="px-4 py-3 border-t border-white/10 text-[11px] text-mist-100/40">
-          v0.1 · Frontend skeleton
-        </div>
       </aside>
+      {tip &&
+        createPortal(
+          <div
+            role="tooltip"
+            className="cbx-tip"
+            style={{ top: tip.top, left: tip.left }}
+          >
+            {tip.label}
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
@@ -11171,6 +11683,11 @@ function Topbar({ title, onMenuClick }) {
 
   const displayName = user?.name || user?.email?.split("@")[0] || "User";
   const initials = displayName.slice(0, 2).toUpperCase();
+  const shortcutLabel =
+    typeof navigator !== "undefined" &&
+    /Mac|iPhone|iPad/i.test(navigator.platform || "")
+      ? "⌘ K"
+      : "Ctrl K";
 
   async function handleAvatarChange(e) {
     const file = e.target.files?.[0];
@@ -11238,102 +11755,111 @@ function Topbar({ title, onMenuClick }) {
 
   return (
     <>
-      <header className="cb-topbar h-16 shrink-0 flex items-center gap-3 px-4 lg:px-6">
+      <header className="cbx-topbar h-16 shrink-0 flex items-center gap-3 px-4 lg:px-6">
         <button
+          type="button"
           onClick={onMenuClick}
-          className="lg:hidden p-2 -ml-2 rounded-sm hover:bg-mist-100 text-ink-800"
+          className="cbx-icon-btn lg:hidden inline-flex items-center justify-center"
           aria-label="Open menu"
         >
           <Menu size={20} />
         </button>
 
-        <h1 className="cb-page-title font-display font-bold text-lg text-ink-900 hidden sm:block">
+        <h1 className="cbx-page-title font-display font-bold text-lg hidden sm:block">
           {t(title)}
         </h1>
 
         <button
           type="button"
           onClick={openCommandPalette}
-          className="hidden md:flex flex-1 max-w-2xl mx-auto items-center gap-3 h-10 px-3.5
-                     rounded-lg border border-mist-200 bg-mist-50/70
-                     text-left hover:bg-white hover:border-mist-300
-                     transition-all shadow-sm"
+          className="cbx-search hidden md:flex flex-1 max-w-2xl mx-auto items-center gap-3 h-10 px-3.5 text-left"
           aria-label="Search pages or jump to a menu"
         >
-          <Search size={18} className="text-ink-600/45 shrink-0" />
-          <span className="text-sm text-ink-600/55 flex-1">
+          <Search size={18} className="shrink-0" />
+          <span className="text-sm flex-1">
             {t("Search pages or jump to a menu...")}
           </span>
-          <kbd
-            className="hidden lg:inline-flex items-center rounded-md border border-mist-200
-                          bg-white px-2 py-0.5 text-[11px] font-medium text-ink-600/55"
-          >
-            Ctrl K
+          <kbd className="cbx-kbd hidden lg:inline-flex items-center">
+            {shortcutLabel}
           </kbd>
         </button>
 
         <div className="flex-1 md:hidden" />
 
         <button
-          onClick={() => navigate("/notifications")}
-          className={`cb-bell-btn ${slaUnread > 0 ? "has-unread" : ""}`}
-          aria-label={t("Notifications")}
+          type="button"
+          onClick={openCommandPalette}
+          className="cbx-icon-btn md:hidden inline-flex items-center justify-center"
+          aria-label="Search pages or jump to a menu"
         >
-          <Bell size={23} strokeWidth={1.9} />
+          <Search size={19} />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => navigate("/notifications")}
+          className="cbx-icon-btn inline-flex items-center justify-center"
+          aria-label={`${t("Notifications")}${slaUnread > 0 ? ` (${slaUnread})` : ""}`}
+        >
+          <Bell size={20} strokeWidth={1.9} />
           {slaUnread > 0 && (
-            <span className="cb-badge">
+            <span className="cbx-badge" aria-hidden="true">
               {slaUnread > 99 ? "99+" : slaUnread}
             </span>
           )}
         </button>
 
-        <span
-          className="hidden sm:block h-9 w-px bg-mist-200"
-          aria-hidden="true"
-        />
+        <span className="cbx-divider hidden sm:block" aria-hidden="true" />
 
-        <div className="relative" ref={menuRef}>
+        <div
+          className="relative"
+          ref={menuRef}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setMenuOpen(false);
+          }}
+        >
           <button
+            type="button"
             onClick={() => setMenuOpen((v) => !v)}
-            className="cb-user-pill"
+            className="cbx-user-pill"
             aria-haspopup="menu"
             aria-expanded={menuOpen}
+            aria-label={`${displayName}, ${user?.role || "Admin"}`}
           >
-            <div className="cb-avatar">
+            <div className="cbx-avatar">
               <UserAvatar url={user?.avatarUrl} initials={initials} />
-              <span className="cb-dot" />
             </div>
             <div className="hidden sm:block text-left leading-tight min-w-0">
-              <div className="text-[15px] font-bold text-ink-900 capitalize truncate max-w-[150px]">
+              <div className="cbx-user-name capitalize truncate max-w-[150px]">
                 {displayName}
               </div>
-              <div className="mt-0.5 flex items-center gap-1 text-[13px] font-medium text-ink-600/60">
-                <Icons.ShieldCheck size={14} />
+              <div className="cbx-user-role mt-0.5 flex items-center gap-1">
+                <Icons.ShieldCheck size={13} />
                 {t(user?.role || "Admin")}
               </div>
             </div>
             <ChevronDown
-              size={18}
-              className={`ml-1 text-ink-600/60 hidden sm:block transition-transform duration-200 ${menuOpen ? "rotate-180" : ""}`}
+              size={16}
+              className={`cbx-muted hidden sm:block transition-transform duration-200 ${menuOpen ? "rotate-180" : ""}`}
             />
           </button>
 
           {menuOpen && (
-            <div className="absolute right-0 mt-3 w-64 bg-white border border-mist-200 rounded-2xl shadow-xl py-1.5 z-50 cb-fade-in">
-              <div className="px-3.5 py-2 border-b border-mist-100">
-                <div className="text-sm font-medium text-ink-900 truncate">
-                  {displayName}
-                </div>
-                <div className="text-xs text-ink-600/50 truncate">
-                  {user?.email}
-                </div>
+            <div
+              role="menu"
+              className="cbx-menu absolute right-0 mt-2 w-64 py-1.5 z-50 cb-fade-in"
+            >
+              <div className="cbx-menu-head">
+                <div className="cbx-menu-name truncate">{displayName}</div>
+                <div className="cbx-menu-mail truncate">{user?.email}</div>
               </div>
               <button
                 onClick={() => {
                   setMenuOpen(false);
                   setShowAccount(true);
                 }}
-                className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
+                role="menuitem"
+                className="cbx-menu-item"
               >
                 <UserRound size={15} />
                 {t("My Account")}
@@ -11343,11 +11869,12 @@ function Topbar({ title, onMenuClick }) {
                   setMenuOpen(false);
                   setPrefsModal("lang");
                 }}
-                className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
+                role="menuitem"
+                className="cbx-menu-item"
               >
                 <Icons.Languages size={15} />
                 <span className="flex-1">{t("Language")}</span>
-                <span className="text-xs text-ink-600/50">
+                <span className="cbx-menu-meta">
                   {lang === "km" ? "ខ្មែរ" : "English"}
                 </span>
               </button>
@@ -11356,11 +11883,12 @@ function Topbar({ title, onMenuClick }) {
                   setMenuOpen(false);
                   setPrefsModal("theme");
                 }}
-                className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
+                role="menuitem"
+                className="cbx-menu-item"
               >
                 <Icons.Palette size={15} />
                 <span className="flex-1">{t("Appearance")}</span>
-                <span className="text-xs text-ink-600/50">
+                <span className="cbx-menu-meta">
                   {theme === "dark"
                     ? t("Dark")
                     : theme === "system"
@@ -11368,10 +11896,11 @@ function Topbar({ title, onMenuClick }) {
                       : t("Light")}
                 </span>
               </button>
-              <div className="my-1 border-t border-mist-100" />
+              <div className="cbx-menu-sep" />
               <button
                 onClick={handleLogout}
-                className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-signal-red hover:bg-signal-red/5 text-left"
+                role="menuitem"
+                className="cbx-menu-item is-danger"
               >
                 <LogOut size={15} />
                 {t("Log out")}
@@ -11613,11 +12142,28 @@ function useCurrentTitle() {
 
 function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] =
+    useState(readSidebarCollapsed);
   const title = useCurrentTitle();
+  const toggleSidebarCollapsed = () =>
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? "1" : "0");
+      } catch {
+        /* storage unavailable – still works for this session */
+      }
+      return next;
+    });
 
   return (
     <div className="cb-app h-screen flex bg-[#f4f7fb]">
-      <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+      <Sidebar
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={toggleSidebarCollapsed}
+      />
       <div className="flex-1 flex flex-col min-w-0">
         <SlaNotificationSync />
         <SlaAirNotificationSync />
@@ -11769,6 +12315,9 @@ function useTableRows(path, fallbackRows) {
   const [loading, setLoading] = useState(false);
   const [ready, setReady] = useState(!supabase); // first fetch finished
   const [usingLiveData, setUsingLiveData] = useState(false);
+  // Last fetch failure (null when the last fetch succeeded). Rows are NOT
+  // touched on error - this only lets the UI say the list may be stale.
+  const [loadError, setLoadError] = useState(null);
 
   const refetch = React.useCallback(async () => {
     if (!supabase) return;
@@ -11792,8 +12341,11 @@ function useTableRows(path, fallbackRows) {
       setRows(data);
       setMeta({ total, truncated });
       setUsingLiveData(true);
+      setLoadError(null);
+    } else if (error) {
+      setLoadError({ code: error.code || "", message: error.message || "" });
     }
-    // On error (e.g. table not created yet), silently keep showing the
+    // On error (e.g. table not created yet), keep showing the
     // mock rows — no need to break the page over a missing table.
   }, [tableName, isCustomers]);
 
@@ -11892,6 +12444,7 @@ function useTableRows(path, fallbackRows) {
     loading,
     ready,
     usingLiveData,
+    loadError,
     refetch,
     addRow,
     prependRow,
@@ -11904,7 +12457,21 @@ function useTableRows(path, fallbackRows) {
 }
 
 function exportRowsToCSV(filename, columns, rows) {
-  const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  // Spreadsheet apps run a cell that starts with = + - @ as a formula, so text
+  // typed by a user (a customer name, a note) could execute when staff open
+  // the export. Prefix such text with an apostrophe. Plain numbers and
+  // phone-style values (e.g. -5, 12.5, +855 12 345 678) are left untouched.
+  const SAFE_NUMERIC = /^[+-]?\d+([.,]\d+)*$/;
+  const SAFE_PHONE = /^\+[\d\s().-]+$/;
+  const neutralise = (v) => {
+    const s = String(v ?? "");
+    return /^[=+\-@\t\r]/.test(s) &&
+      !SAFE_NUMERIC.test(s) &&
+      !SAFE_PHONE.test(s)
+      ? `'${s}`
+      : s;
+  };
+  const esc = (v) => `"${neutralise(v).replace(/"/g, '""')}"`;
   const header = columns.map((c) => esc(c.label)).join(",");
   const body = rows
     .map((r) => columns.map((c) => esc(c.csv ? c.csv(r) : r[c.key])).join(","))
@@ -14188,6 +14755,7 @@ function ListPage({
     deleteRow,
     total: tableTotal,
     truncated: tableTruncated,
+    loadError: tableLoadError,
   } = useTableRows(path, []);
   const {
     packages,
@@ -14498,6 +15066,39 @@ function ListPage({
   // Create needs the module's own "create" permission (Super Admin always).
   const canCreate = hasPermission(user, PATH_ACTIONS[path]?.create);
 
+  // Load failure only applies to server-backed tables (TK lists / Exceptions
+  // read the shared package registry, which has its own state).
+  const tableError =
+    !isLinkedTk && !isExceptionsModule && supabase ? tableLoadError : null;
+  const errorInfo = tableError
+    ? tableError.code === "42501"
+      ? {
+          icon: "Lock",
+          title: "You don't have permission to view this data",
+          hint: "Ask an administrator to grant access, then try again.",
+        }
+      : tableError.code === "42P01" || tableError.code === "PGRST205"
+        ? {
+            icon: "Database",
+            title: "This list isn't set up yet",
+            hint: "The database table for this module hasn't been created. Contact your system administrator.",
+          }
+        : {
+            title: "Couldn't load this list",
+            hint: "Check your connection and try again. Nothing was changed.",
+          }
+    : null;
+  const hasActiveFilters = Boolean(
+    search || statusFilter || advCount > 0 || dateRangeLabel(dateRange),
+  );
+  function clearAllFilters() {
+    setSearch("");
+    setStatusFilter("");
+    setAdv(EMPTY_ADV);
+    setDateRange(EMPTY_DATE_RANGE);
+    setPage(0);
+  }
+
   function resetToFirstPage(fn) {
     return (...args) => {
       setPage(0);
@@ -14575,6 +15176,22 @@ function ListPage({
         />
       )}
 
+      {tableError && displayRows.length > 0 && (
+        <div
+          role="alert"
+          className="rounded-md bg-amber-50 text-amber-800 px-3 py-2 text-sm flex items-center gap-3 flex-wrap"
+        >
+          <span className="flex-1 min-w-[200px]">
+            Couldn't refresh this list — showing the last saved copy, which may
+            be out of date.
+          </span>
+          <button type="button" className="cbx-btn" onClick={() => refetch()}>
+            <Icon name="RefreshCw" size={15} />
+            Retry
+          </button>
+        </div>
+      )}
+
       <div className="cb-surface cb-card">
         {path === "/customers" && dateCol && (
           <div className="flex items-center gap-1 px-3 lg:px-4 border-b border-mist-200 overflow-x-auto">
@@ -14604,8 +15221,11 @@ function ListPage({
         )}
         <div className="flex items-center gap-2 px-4 lg:px-5 py-3.5 border-b border-mist-200 flex-wrap">
           <div className="flex items-center gap-2 bg-mist-100 rounded-md px-3 py-2 flex-1 min-w-[180px] max-w-xs">
-            <Search size={15} className="text-ink-600/40" />
+            <Search size={15} className="text-ink-600/40" aria-hidden="true" />
             <input
+              type="search"
+              aria-label="Search"
+              placeholder="Search…"
               value={search}
               onChange={resetToFirstPage((e) => setSearch(e.target.value))}
               className="bg-transparent outline-none text-sm w-full placeholder:text-ink-600/40"
@@ -14614,6 +15234,9 @@ function ListPage({
 
           <div className="relative" ref={filterRef}>
             <button
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={showFilterMenu}
               onClick={() => setShowFilterMenu((v) => !v)}
               disabled={!statusColumn}
               className="flex items-center gap-1.5 text-sm text-ink-700 border border-mist-200 px-3 py-2 rounded-md hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -14622,7 +15245,10 @@ function ListPage({
               {statusFilter || "ត្រង"}
             </button>
             {showFilterMenu && statusColumn && (
-              <div className="absolute left-0 mt-1 w-44 bg-white border border-mist-200 rounded-md shadow-lg py-1 z-20">
+              <div
+                role="menu"
+                className="absolute left-0 mt-1 w-44 bg-white border border-mist-200 rounded-md shadow-lg py-1 z-20"
+              >
                 <button
                   onClick={resetToFirstPage(() => {
                     setStatusFilter("");
@@ -14697,6 +15323,20 @@ function ListPage({
           rows={pagedRows}
           loading={listLoading}
           skeletonRows={8}
+          caption={title}
+          error={displayRows.length === 0 ? errorInfo : null}
+          onRetry={() => refetch()}
+          emptyTitle={hasActiveFilters ? "No matching results" : undefined}
+          emptyHint={
+            hasActiveFilters
+              ? "Try a different search, or clear the filters."
+              : undefined
+          }
+          emptyAction={
+            hasActiveFilters
+              ? { label: "Clear filters", onClick: clearAllFilters }
+              : undefined
+          }
           rowActions={
             (canEditRows || canDeleteRows || canResetPassword) &&
             !isExceptionsModule &&
@@ -14704,43 +15344,40 @@ function ListPage({
               ? (row) => (
                   <div className="inline-flex items-center gap-1">
                     {canResetPassword && (
-                      <button
-                        type="button"
-                        title="Reset Password"
+                      <RowAction
+                        label="Reset Password"
+                        subject={row.id}
+                        icon="KeyRound"
+                        tone="warn"
                         onClick={() => setResetPwRow(row)}
-                        className="p-1.5 rounded-md text-ink-600/50 hover:text-amber-600 hover:bg-amber-50"
-                      >
-                        <Icons.KeyRound size={14} />
-                      </button>
+                      />
                     )}
                     {canEditRows &&
                       (isLinkedTk ? (
-                        <Link
+                        <RowAction
+                          label="Edit"
+                          subject={row.tk}
+                          icon="Pencil"
+                          tone="primary"
                           to={`/packages/${encodeURIComponent(row.tk)}`}
-                          title="Edit"
-                          className="p-1.5 rounded-md text-ink-600/50 hover:text-signal-blue hover:bg-mist-100"
-                        >
-                          <Icons.Pencil size={14} />
-                        </Link>
+                        />
                       ) : (
-                        <button
-                          type="button"
-                          title="Edit"
+                        <RowAction
+                          label="Edit"
+                          subject={row.id ?? row.name}
+                          icon="Pencil"
+                          tone="primary"
                           onClick={() => setEditingRow(row)}
-                          className="p-1.5 rounded-md text-ink-600/50 hover:text-signal-blue hover:bg-mist-100"
-                        >
-                          <Icons.Pencil size={14} />
-                        </button>
+                        />
                       ))}
                     {canDeleteRows && (
-                      <button
-                        type="button"
-                        title="Delete"
+                      <RowAction
+                        label="Delete"
+                        subject={isLinkedTk ? row.tk : (row.id ?? row.name)}
+                        icon="Trash2"
+                        tone="danger"
                         onClick={() => setDeletingRow(row)}
-                        className="p-1.5 rounded-md text-ink-600/50 hover:text-signal-red hover:bg-signal-red/5"
-                      >
-                        <Icons.Trash2 size={14} />
-                      </button>
+                      />
                     )}
                   </div>
                 )
@@ -14836,25 +15473,30 @@ function ListPage({
               បង្ហាញ {pagedRows.length} នៃ {filteredRows.length} លទ្ធផល
             </span>
           )}
-          <div className="flex items-center gap-1">
+          <nav aria-label="Pagination" className="flex items-center gap-1">
             <button
+              type="button"
               onClick={() => setPage((p) => Math.max(0, p - 1))}
               disabled={currentPage === 0}
-              className="px-2.5 py-1 rounded-sm border border-mist-200 hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-2.5 py-1.5 rounded-sm border border-mist-200 hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Previous
             </button>
-            <span className="px-2.5 py-1 rounded-sm bg-signal-blue text-white">
+            <span
+              aria-current="page"
+              className="px-2.5 py-1.5 rounded-sm bg-signal-blue text-white"
+            >
               {currentPage + 1} / {totalPages}
             </span>
             <button
+              type="button"
               onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
               disabled={currentPage >= totalPages - 1}
-              className="px-2.5 py-1 rounded-sm border border-mist-200 hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-2.5 py-1.5 rounded-sm border border-mist-200 hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Next
             </button>
-          </div>
+          </nav>
         </div>
       </div>
 
@@ -15890,10 +16532,40 @@ function DashPanel({
   );
 }
 
+function WorkQueueRow({
+  icon,
+  tone,
+  title,
+  description,
+  count,
+  to,
+  actionLabel,
+}) {
+  return (
+    <li className="cbx-queue-row">
+      <span className={`cbx-queue-ico is-${tone}`} aria-hidden="true">
+        <Icon name={icon} size={18} strokeWidth={2} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="cbx-queue-title">{title}</div>
+        <div className="cbx-queue-desc">{description}</div>
+      </div>
+      <span className="cbx-queue-count tabular-nums">{count}</span>
+      {to && (
+        <Link to={to} className="cbx-queue-link">
+          {actionLabel} →
+        </Link>
+      )}
+    </li>
+  );
+}
+
 function Dashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { packages, ready: dashReady } = usePackageTracking();
+  const { t } = useAdminPrefs();
+  const { packages, ready: dashReady, refetch } = usePackageTracking();
+  const [refreshing, setRefreshing] = useState(false);
   const today = new Date();
   // Which parts of the dashboard this role may see (Role Management →
   // Dashboard). A staff member who only works Indonesia sees only AIR, and
@@ -15901,6 +16573,26 @@ function Dashboard() {
   const showChina = hasPermission(user, "dashboard.china");
   const showAir = !CHINA_ONLY && hasPermission(user, "dashboard.air");
 
+  // Only link to pages this role can open (same rule the Sidebar uses).
+  // The route itself stays protected regardless of what is shown here.
+  const canOpen = (path) =>
+    Boolean(user?.allowedPaths === "*" || user?.allowedPaths?.includes(path));
+
+  async function handleRefresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await refetch();
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  const exceptions = packages.filter((p) => p.exception);
+
+  // Click-through is only wired where the destination page is the module
+  // that owns that number. "In Transit" and "KH Warehouse Stock" have no
+  // matching list page with a status filter, so they stay non-clickable.
   const stats = [
     {
       icon: "LogIn",
@@ -15909,6 +16601,7 @@ function Dashboard() {
         packages.filter((p) => isSameCalendarDay(p.created_at, today)).length,
       ),
       tone: "blue",
+      to: "/inbound-origin",
     },
     {
       icon: "LogOut",
@@ -15922,6 +16615,7 @@ function Dashboard() {
         ).length,
       ),
       tone: "ink",
+      to: "/outbound-origin",
     },
     {
       icon: "Ship",
@@ -15943,7 +16637,9 @@ function Dashboard() {
       icon: "TriangleAlert",
       label: "Open Exceptions",
       value: String(packages.filter((p) => p.exception).length),
-      tone: "red",
+      // Red only when something needs attention; calm green when clear.
+      tone: exceptions.length > 0 ? "red" : "teal",
+      to: "/exceptions",
     },
   ];
 
@@ -15952,10 +16648,59 @@ function Dashboard() {
     .sort((a, b) => new Date(lastActivityAt(b)) - new Date(lastActivityAt(a)))
     .slice(0, 5);
 
-  const exceptions = packages.filter((p) => p.exception);
+  // Work queue: every count is a live count of the same `packages` registry
+  // (same exact-status match RouteFlow uses, so the numbers agree with the
+  // pipeline). The three "waiting" rows come from the scan-gated hand-offs in
+  // VERIFY_GATED_STAGES / WHArrivedPage / SortingPage. Rows with 0 are hidden.
+  const countAt = (status) =>
+    packages.filter((p) => p.status === status).length;
+  const queue = [
+    {
+      key: "exceptions",
+      icon: "TriangleAlert",
+      tone: "red",
+      title: t("Open exceptions"),
+      description: t("Needs staff follow-up in the Exception Center."),
+      count: exceptions.length,
+      to: "/exceptions",
+    },
+    {
+      key: "arrival",
+      icon: "PackageCheck",
+      tone: "amber",
+      title: t("Waiting for arrival scan"),
+      description: t(
+        "Left the origin warehouse; waiting for the W.H Arrived scan.",
+      ),
+      count: countAt("Outbound Origin"),
+      to: "/wh-arrived",
+    },
+    {
+      key: "branch",
+      icon: "Truck",
+      tone: "amber",
+      title: t("Waiting to ship to branch"),
+      description: t(
+        "Arrived at the destination warehouse; not yet sent to a branch.",
+      ),
+      count: countAt("Arrived Destination"),
+      to: "/wh-arrived",
+    },
+    {
+      key: "sorting",
+      icon: "ListTree",
+      tone: "amber",
+      title: t("Waiting for sorting scan"),
+      description: t("On the way to the branch; waiting for the Sorting scan."),
+      count: countAt("Shipping To Branch"),
+      to: "/sorting",
+    },
+  ].filter((row) => row.count > 0);
 
-  const who =
-    user?.name || user?.full_name || user?.fullName || user?.username || "";
+  const MAX_ALERTS = 5;
+  const shownExceptions = exceptions.slice(0, MAX_ALERTS);
+  const hiddenExceptions = exceptions.length - shownExceptions.length;
+
   const dateLabel = today.toLocaleDateString("en-GB", {
     weekday: "long",
     day: "2-digit",
@@ -15967,15 +16712,31 @@ function Dashboard() {
     <div className="space-y-5">
       <div className="flex items-end justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="font-display font-extrabold text-xl text-ink-900 cb-page-title">
-            Welcome back{who ? `, ${who}` : ""}
+          <h1 className="cbx-h1 font-display font-extrabold text-xl cb-page-title">
+            {t("Operations Dashboard")}
           </h1>
-          <p className="text-sm text-ink-600/55 mt-0.5">
-            Here’s what’s happening with your logistics today.
+          <p className="cbx-sub text-sm mt-0.5">
+            {t("Live overview of China → Cambodia shipments.")}
           </p>
         </div>
-        <div className="text-xs font-medium text-ink-700 bg-white border border-mist-200 rounded-xl px-3 py-2 shadow-panel">
-          {dateLabel}
+        <div className="flex items-center gap-2">
+          <span className="cbx-pill">{dateLabel}</span>
+          {showChina && (
+            <button
+              type="button"
+              className="cbx-btn"
+              onClick={handleRefresh}
+              disabled={refreshing || !dashReady}
+              aria-busy={refreshing}
+            >
+              <Icon
+                name="RefreshCw"
+                size={15}
+                className={refreshing ? "animate-spin" : ""}
+              />
+              {t("Refresh")}
+            </button>
+          )}
         </div>
       </div>
 
@@ -15995,13 +16756,15 @@ function Dashboard() {
         </div>
       )}
 
-      {showChina && <RouteFlow />}
-
       {showChina &&
         (dashReady ? (
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 cb-fade-in">
-            {stats.map((s) => (
-              <StatCard key={s.label} {...s} />
+            {stats.map(({ to, ...s }) => (
+              <StatCard
+                key={s.label}
+                {...s}
+                to={to && canOpen(to) ? to : undefined}
+              />
             ))}
           </div>
         ) : (
@@ -16011,82 +16774,44 @@ function Dashboard() {
           />
         ))}
 
-      {showAir && <AirDashboardSection />}
-
-      {showChina && <SlaDashboardSection />}
+      {showChina && <RouteFlow />}
 
       {showChina && (
         <div className="grid lg:grid-cols-3 gap-5">
           <DashPanel
-            icon="Clock"
-            title="Recent Activity"
-            action="View All"
-            onAction={() => navigate("/packages")}
+            icon="ListChecks"
+            title={t("Needs Attention")}
             className="lg:col-span-2"
           >
             {!dashReady ? (
-              <SkeletonListRows rows={5} />
-            ) : recent.length === 0 ? (
-              <p className="text-sm text-ink-600/45 px-5 py-6 text-center">
-                No recent activity yet.
-              </p>
-            ) : (
-              <div className="px-3 pb-3 overflow-x-auto cb-fade-in">
-                <table className="w-full text-left min-w-[520px]">
-                  <thead>
-                    <tr className="text-[11px] uppercase tracking-wide text-ink-600/45">
-                      <th className="font-semibold px-2 py-2">Time</th>
-                      <th className="font-semibold px-2 py-2">Tracking</th>
-                      <th className="font-semibold px-2 py-2">Customer</th>
-                      <th className="font-semibold px-2 py-2">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-mist-100">
-                    {recent.map((p) => (
-                      <tr key={p.tk} className="cb-table-row">
-                        <td className="px-2 py-3 text-xs text-ink-600/55 whitespace-nowrap">
-                          {timeAgoLabel(lastActivityAt(p))}
-                        </td>
-                        <td className="px-2 py-3">
-                          <Link
-                            to={`/packages/${p.tk}`}
-                            className="text-sm font-semibold text-ink-900 hover:text-signal-blue"
-                          >
-                            {p.tk}
-                          </Link>
-                        </td>
-                        <td className="px-2 py-3 text-xs text-ink-700 max-w-[220px] truncate">
-                          {packageCustomerLabel(p)}
-                        </td>
-                        <td className="px-2 py-3">
-                          <ActivityPill
-                            tone={
-                              p.exception
-                                ? "red"
-                                : p.status === "Completed"
-                                  ? "teal"
-                                  : p.status === "Inbound Origin"
-                                    ? "blue"
-                                    : IN_TRANSIT_STATUSES.includes(p.status)
-                                      ? "amber"
-                                      : "violet"
-                            }
-                          >
-                            {p.status || "—"}
-                          </ActivityPill>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <SkeletonListRows rows={3} />
+            ) : queue.length === 0 ? (
+              <div className="px-5 pb-7 pt-2 text-center cb-fade-in">
+                <div className="mx-auto w-11 h-11 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                  <Icons.CircleCheck size={22} />
+                </div>
+                <p className="text-sm text-ink-600/55 mt-2.5">
+                  {t("Nothing is waiting right now.")}
+                </p>
               </div>
+            ) : (
+              <ul className="cbx-queue cb-fade-in">
+                {queue.map(({ key, to, ...row }) => (
+                  <WorkQueueRow
+                    key={key}
+                    {...row}
+                    to={canOpen(to) ? to : undefined}
+                    actionLabel={t("Open")}
+                  />
+                ))}
+              </ul>
             )}
           </DashPanel>
 
           <DashPanel
             icon="TriangleAlert"
             title="Exception Alerts"
-            action="Open Center"
+            action={canOpen("/exceptions") ? "Open Center" : undefined}
             onAction={() => navigate("/exceptions")}
           >
             {!dashReady ? (
@@ -16102,7 +16827,7 @@ function Dashboard() {
               </div>
             ) : (
               <div className="px-3 pb-3 space-y-2 cb-fade-in">
-                {exceptions.map((p) => (
+                {shownExceptions.map((p) => (
                   <div
                     key={p.tk}
                     className="rounded-xl border border-red-100 bg-red-50/40 px-3.5 py-3"
@@ -16121,10 +16846,78 @@ function Dashboard() {
                     </div>
                   </div>
                 ))}
+                {hiddenExceptions > 0 && (
+                  <p className="text-xs text-ink-600/55 text-center pt-1">
+                    +{hiddenExceptions} {t("more")}
+                  </p>
+                )}
               </div>
             )}
           </DashPanel>
         </div>
+      )}
+
+      {showAir && <AirDashboardSection />}
+
+      {showChina && <SlaDashboardSection />}
+
+      {showChina && (
+        <DashPanel
+          icon="Clock"
+          title="Recent Activity"
+          action="View All"
+          onAction={() => navigate("/packages")}
+        >
+          {!dashReady ? (
+            <SkeletonListRows rows={5} />
+          ) : recent.length === 0 ? (
+            <p className="text-sm text-ink-600/45 px-5 py-6 text-center">
+              No recent activity yet.
+            </p>
+          ) : (
+            <div className="px-3 pb-3 overflow-x-auto cb-fade-in">
+              <table className="w-full text-left min-w-[520px]">
+                <thead>
+                  <tr className="text-[11px] uppercase tracking-wide text-ink-600/45">
+                    <th className="font-semibold px-2 py-2">Time</th>
+                    <th className="font-semibold px-2 py-2">Tracking</th>
+                    <th className="font-semibold px-2 py-2">Customer</th>
+                    <th className="font-semibold px-2 py-2">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-mist-100">
+                  {recent.map((p) => (
+                    <tr key={p.tk} className="cb-table-row">
+                      <td className="px-2 py-3 text-xs text-ink-600/55 whitespace-nowrap">
+                        {timeAgoLabel(lastActivityAt(p))}
+                      </td>
+                      <td className="px-2 py-3">
+                        <Link
+                          to={`/packages/${p.tk}`}
+                          className="text-sm font-semibold text-ink-900 hover:text-signal-blue"
+                        >
+                          {p.tk}
+                        </Link>
+                      </td>
+                      <td className="px-2 py-3 text-xs text-ink-700 max-w-[220px] truncate">
+                        {packageCustomerLabel(p)}
+                      </td>
+                      <td className="px-2 py-3">
+                        {p.exception ? (
+                          <ActivityPill tone="red">
+                            {p.status || "—"}
+                          </ActivityPill>
+                        ) : (
+                          <StatusBadge label={p.status || "—"} />
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </DashPanel>
       )}
     </div>
   );
