@@ -16560,25 +16560,920 @@ function WorkQueueRow({
   );
 }
 
+// ------------------------------------------------------------
+// Financial & Business Overview — values are loaded from Supabase.
+// Revenue = CN customer charges + AIR charges (when a known charge field
+// exists) + shipping fees on package rows. Collections use recorded paid
+// amounts only. No package/order totals are inferred from status counts.
+// ------------------------------------------------------------
+const FINANCIAL_RANGE_OPTIONS = [
+  ["date", "Date"],
+  ["week", "Week"],
+  ["month", "Month"],
+];
+
+function financialRangeBounds(range, from, to) {
+  const startOf = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const now = new Date();
+  const today = startOf(now);
+  const dayMs = 86400000;
+  if (range === "date") {
+    const selected = from ? startOf(new Date(`${from}T00:00:00`)) : today;
+    return [selected, new Date(selected.getTime() + dayMs)];
+  }
+  if (range === "week") {
+    const selected = from ? startOf(new Date(`${from}T00:00:00`)) : today;
+    const monday = new Date(selected);
+    monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+    return [monday, new Date(monday.getTime() + 7 * dayMs)];
+  }
+  if (range === "month") {
+    const selected = from ? new Date(`${from}-01T00:00:00`) : now;
+    return [
+      new Date(selected.getFullYear(), selected.getMonth(), 1),
+      new Date(selected.getFullYear(), selected.getMonth() + 1, 1),
+    ];
+  }
+  const a = from ? startOf(new Date(`${from}T00:00:00`)) : null;
+  const b = to
+    ? new Date(startOf(new Date(`${to}T00:00:00`)).getTime() + dayMs)
+    : null;
+  return [a, b];
+}
+
+function finNum(...values) {
+  for (const value of values) {
+    if (
+      value !== null &&
+      value !== undefined &&
+      String(value).trim() !== "" &&
+      Number.isFinite(Number(value))
+    )
+      return Number(value);
+  }
+  return null;
+}
+function finDateInRange(row, start, end) {
+  const raw =
+    row?.created_at || row?.paid_at || row?.updated_at || row?.transaction_date;
+  if (!raw) return false;
+  const d = new Date(raw);
+  return (
+    !Number.isNaN(d.getTime()) && (!start || d >= start) && (!end || d < end)
+  );
+}
+function finMoney(value, currency = "USD") {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 2,
+  }).format(Number(value) || 0);
+}
+function finIsRefunded(row) {
+  const s = String(row?.status || row?.payment_status || "").toLowerCase();
+  return (
+    s.includes("refund") || s.includes("cancelled") || s.includes("canceled")
+  );
+}
+function finCharge(row) {
+  // Only accept fields explicitly denominated in USD. AIR orders in this app
+  // store the entered USD product price in `unit_price`; use quantity when
+  // present. Never guess the currency of a generic `amount` field.
+  const explicitUsd = finNum(
+    row?.total_due_usd,
+    row?.total_amount_usd,
+    row?.customer_total_usd,
+    row?.total_usd,
+    row?.amount_due_usd,
+  );
+  if (explicitUsd !== null) return Math.max(0, explicitUsd);
+  const unitPrice = finNum(row?.unit_price_usd, row?.unit_price);
+  if (unitPrice !== null) return Math.max(0, unitPrice);
+  return 0;
+}
+function finHasCharge(row) {
+  return [
+    row?.total_due_usd,
+    row?.total_amount_usd,
+    row?.customer_total_usd,
+    row?.total_usd,
+    row?.amount_due_usd,
+    row?.unit_price_usd,
+    row?.unit_price,
+  ].some(
+    (v) =>
+      v !== null &&
+      v !== undefined &&
+      String(v).trim() !== "" &&
+      Number.isFinite(Number(v)),
+  );
+}
+function finPaid(row) {
+  return Math.max(
+    0,
+    finNum(
+      row?.amount_paid_usd,
+      row?.paid_amount_usd,
+      row?.amount_paid,
+      row?.paid_amount,
+      row?.total_paid_usd,
+      row?.collected_amount,
+    ) ?? 0,
+  );
+}
+function finPurchaseCost(row) {
+  const direct = finNum(
+    row?.actual_cost_usd,
+    row?.purchase_cost_usd,
+    row?.actual_purchase_usd,
+    row?.cost_usd,
+  );
+  if (direct !== null) return direct;
+  const cny = finNum(
+    row?.actual_cost_cny,
+    row?.product_total_cny,
+    row?.purchase_amount_cny,
+  );
+  const rate = finNum(
+    row?.purchase_exchange_rate,
+    row?.cny_per_usd,
+    row?.exchange_rate,
+  );
+  return cny !== null && rate !== null && rate > 0 ? cny / rate : null;
+}
+
+function FinancialStat({ label, value, detail, tone = "blue", icon }) {
+  const tones = {
+    blue: "bg-blue-50 text-blue-600 ring-blue-100",
+    green: "bg-emerald-50 text-emerald-600 ring-emerald-100",
+    amber: "bg-amber-50 text-amber-700 ring-amber-100",
+    red: "bg-rose-50 text-rose-600 ring-rose-100",
+    violet: "bg-violet-50 text-violet-600 ring-violet-100",
+    slate: "bg-slate-100 text-slate-600 ring-slate-200",
+  };
+  return (
+    <div className="cb-surface min-w-0 rounded-2xl border border-mist-100 p-4 sm:p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-xs sm:text-sm font-medium text-ink-600/70">
+          {label}
+        </p>
+        <span
+          className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ring-1 ${tones[tone] || tones.blue}`}
+        >
+          <Icon name={icon || "Wallet"} size={17} />
+        </span>
+      </div>
+      <p className="mt-3 break-words text-xl sm:text-2xl font-bold tracking-tight text-ink-900 tabular-nums">
+        {value}
+      </p>
+      {detail && <p className="mt-1 text-xs text-ink-600/55">{detail}</p>}
+    </div>
+  );
+}
+
+function FinancialRevenueChart({ points, currency = "USD", onSelectPoint }) {
+  const [hovered, setHovered] = useState(null);
+  const max = Math.max(1, ...points.map((p) => p.value));
+  const shown =
+    points.length > 31
+      ? points.filter((_, i) => i % Math.ceil(points.length / 31) === 0)
+      : points;
+  return (
+    <div className="px-4 pb-4 pt-3">
+      <div className="mb-2 flex items-center justify-between text-[11px] text-ink-600/55">
+        <span>Revenue ({currency})</span>
+        <span>Hover over a bar for details</span>
+      </div>
+      <div className="relative flex h-60 items-end gap-1 border-b border-l border-mist-200 px-2 pb-0">
+        {shown.map((p) => {
+          const active = hovered?.key === p.key;
+          return (
+            <button
+              key={p.key}
+              type="button"
+              className="group relative flex h-full min-w-0 flex-1 items-end justify-center rounded-t-md outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+              onMouseEnter={() => setHovered(p)}
+              onMouseLeave={() => setHovered(null)}
+              onFocus={() => setHovered(p)}
+              onBlur={() => setHovered(null)}
+              onClick={() => onSelectPoint?.(p)}
+              aria-label={`View revenue details for ${p.key}: ${finMoney(p.value, currency)}`}
+              title={`Click to view ${p.key}`}
+            >
+              <div
+                className="pointer-events-none absolute inset-x-0 top-0 border-t border-mist-100"
+                style={{ top: "25%" }}
+              />
+              <div
+                className={`w-full max-w-8 rounded-t-md transition-all duration-300 ease-out ${active ? "bg-blue-700 shadow-lg shadow-blue-500/25 -translate-y-1 scale-x-110" : "bg-blue-500/90 group-hover:bg-blue-600 group-hover:-translate-y-0.5"}`}
+                style={{
+                  height: `${Math.max(p.value > 0 ? 2 : 0, (p.value / max) * 100)}%`,
+                  minHeight: p.value > 0 ? 3 : 0,
+                }}
+              />
+            </button>
+          );
+        })}
+        {hovered && (
+          <div className="pointer-events-none absolute left-3 top-3 z-20 min-w-44 rounded-xl border border-mist-200 bg-white/95 px-3 py-2.5 text-xs shadow-xl backdrop-blur-md transition-all duration-200 ease-out">
+            <p className="font-semibold text-ink-900">{hovered.key}</p>
+            <div className="mt-1.5 flex items-center justify-between gap-5">
+              <span className="flex items-center gap-1.5 text-ink-600">
+                <span className="h-2 w-2 rounded-sm bg-blue-500" />
+                Revenue
+              </span>
+              <strong className="tabular-nums text-ink-900">
+                {finMoney(hovered.value, currency)}
+              </strong>
+            </div>
+            <p className="mt-1.5 text-[10px] text-blue-600">
+              Click bar to view this date
+            </p>
+          </div>
+        )}
+      </div>
+      <div className="mt-2 flex justify-between gap-2 text-[10px] text-ink-600/55">
+        <span>{shown[0]?.label || "—"}</span>
+        <span>{shown[Math.floor(shown.length / 2)]?.label || "—"}</span>
+        <span>{shown[shown.length - 1]?.label || "—"}</span>
+      </div>
+      {points.every((p) => p.value === 0) && (
+        <p className="mt-3 text-center text-sm text-ink-600/55">
+          No revenue recorded for this period.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
+  const localToday = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  const [range, setRange] = useState("date");
+  const [from, setFrom] = useState(localToday());
+  const [to, setTo] = useState("");
+  const [view, setView] = useState("chart");
+  const [rows, setRows] = useState({
+    cn: [],
+    air: [],
+    packages: [],
+    wallet: [],
+  });
+  const [loading, setLoading] = useState(true);
+  const [errors, setErrors] = useState([]);
+  const [lastUpdated, setLastUpdated] = useState(null);
+
+  const load = React.useCallback(async () => {
+    if (!supabase) {
+      setErrors([
+        "Supabase is not configured. Financial figures cannot be loaded.",
+      ]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    const tasks = await Promise.all([
+      showChina
+        ? supabase
+            .from("cn_orders")
+            .select("*")
+            .order("created_at", { ascending: false })
+            .limit(10000)
+        : Promise.resolve({ data: [], error: null }),
+      showAir
+        ? supabase
+            .from("air_orders")
+            .select("*")
+            .order("created_at", { ascending: false })
+            .limit(10000)
+        : Promise.resolve({ data: [], error: null }),
+      showChina
+        ? supabase
+            .from("packages")
+            .select(
+              "id,tk,status,freight_fee,paid_amount,created_at,updated_at,customer_id",
+            )
+            .order("created_at", { ascending: false })
+            .limit(20000)
+        : Promise.resolve({ data: [], error: null }),
+      supabase
+        .from("wallet_transactions")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(10000),
+    ]);
+    const labels = [
+      "CN Purchase Orders",
+      "AIR Shipment",
+      "Shipping fees",
+      "Wallet activity",
+    ];
+    const nextErrors = tasks
+      .map((r, i) =>
+        r?.error
+          ? `${labels[i]}: ${r.error.message || "Unable to load data"}`
+          : null,
+      )
+      .filter(Boolean);
+    setRows({
+      cn: tasks[0]?.data || [],
+      air: tasks[1]?.data || [],
+      packages: tasks[2]?.data || [],
+      wallet: tasks[3]?.data || [],
+    });
+    setErrors(nextErrors);
+    setLastUpdated(new Date());
+    setLoading(false);
+  }, [showChina, showAir]);
+
+  useEffect(() => {
+    load();
+    const timer = setInterval(load, 60000);
+    return () => clearInterval(timer);
+  }, [load]);
+
+  const [start, end] = financialRangeBounds(range, from, to);
+  const scoped = (list) => list.filter((r) => finDateInRange(r, start, end));
+  const cn = scoped(rows.cn);
+  const air = scoped(rows.air);
+  const packages = scoped(rows.packages);
+  const wallet = scoped(rows.wallet);
+  const activeCn = cn.filter((r) => !finIsRefunded(r));
+  const activeAir = air.filter((r) => !finIsRefunded(r));
+  const cnRevenue = activeCn.reduce((s, r) => s + finCharge(r), 0);
+  const airRevenueRows = activeAir.filter(finHasCharge);
+  const airRevenue = airRevenueRows.reduce((s, r) => s + finCharge(r), 0);
+  const shippingRows = packages.filter(
+    (r) =>
+      r.freight_fee !== null &&
+      r.freight_fee !== undefined &&
+      String(r.freight_fee).trim() !== "" &&
+      Number.isFinite(Number(r.freight_fee)),
+  );
+  const shippingRevenue = shippingRows.reduce(
+    (s, r) => s + Math.max(0, Number(r.freight_fee) || 0),
+    0,
+  );
+  const totalRevenue = cnRevenue + airRevenue + shippingRevenue;
+  const totalCollected =
+    activeCn.reduce((s, r) => s + finPaid(r), 0) +
+    activeAir.reduce((s, r) => s + finPaid(r), 0) +
+    shippingRows.reduce(
+      (s, r) => s + Math.max(0, finNum(r.paid_amount) ?? 0),
+      0,
+    );
+  const outstanding = Math.max(
+    0,
+    activeCn.reduce((s, r) => s + Math.max(0, finCharge(r) - finPaid(r)), 0) +
+      activeAir.reduce(
+        (s, r) => s + Math.max(0, finCharge(r) - finPaid(r)),
+        0,
+      ) +
+      shippingRows.reduce(
+        (s, r) =>
+          s +
+          Math.max(
+            0,
+            (Number(r.freight_fee) || 0) - (Number(r.paid_amount) || 0),
+          ),
+        0,
+      ),
+  );
+  const refundedCn = cn
+    .filter(finIsRefunded)
+    .reduce(
+      (s, r) =>
+        s +
+        (finNum(
+          r.refund_amount_usd,
+          r.refunded_amount_usd,
+          r.amount_refunded_usd,
+          r.amount_paid_usd,
+        ) ?? 0),
+      0,
+    );
+  const refundedAir = air
+    .filter(finIsRefunded)
+    .reduce(
+      (s, r) =>
+        s +
+        (finNum(
+          r.refund_amount_usd,
+          r.refunded_amount_usd,
+          r.amount_refunded_usd,
+          r.amount_paid_usd,
+          r.paid_amount_usd,
+          r.amount_paid,
+        ) ?? 0),
+      0,
+    );
+  const refunds = refundedCn + refundedAir;
+  const purchaseCosts = activeCn.map((r) => finPurchaseCost(r));
+  const airCosts = activeAir.map((r) => finPurchaseCost(r));
+  // Shipping-fee revenue also needs a corresponding actual-cost field before
+  // we can safely call the result profit/loss. Missing cost is never zero.
+  const shippingCosts = shippingRows.map((r) =>
+    finNum(
+      r.actual_shipping_cost_usd,
+      r.shipping_cost_usd,
+      r.freight_cost_usd,
+      r.actual_freight_cost_usd,
+    ),
+  );
+  const allCosts = [...purchaseCosts, ...airCosts, ...shippingCosts];
+  const costComplete = allCosts.length > 0 && allCosts.every((v) => v !== null);
+  const costCount = allCosts.filter((v) => v !== null).length;
+  const purchaseAmount = allCosts.reduce((s, v) => s + (v ?? 0), 0);
+  const profit = costComplete ? totalRevenue - purchaseAmount : null;
+  const walletTopups = wallet
+    .filter((r) =>
+      ["top_up", "deposit", "credit", "topup"].includes(
+        String(r.type || "").toLowerCase(),
+      ),
+    )
+    .reduce(
+      (s, r) => s + Math.abs(finNum(r.amount, r.amount_usd, r.value) ?? 0),
+      0,
+    );
+  const walletWithdrawals = wallet
+    .filter((r) =>
+      ["withdraw", "withdrawal", "debit", "top_up_reversal"].includes(
+        String(r.type || "").toLowerCase(),
+      ),
+    )
+    .reduce(
+      (s, r) => s + Math.abs(finNum(r.amount, r.amount_usd, r.value) ?? 0),
+      0,
+    );
+
+  const chartPoints = useMemo(() => {
+    const all = [
+      ...cn
+        .filter((r) => !finIsRefunded(r))
+        .map((r) => ({ date: r.created_at, amount: finCharge(r) })),
+      ...air
+        .filter((r) => !finIsRefunded(r) && finHasCharge(r))
+        .map((r) => ({ date: r.created_at, amount: finCharge(r) })),
+      ...shippingRows.map((r) => ({
+        date: r.created_at,
+        amount: Math.max(0, Number(r.freight_fee) || 0),
+      })),
+    ];
+    const map = new Map();
+    all.forEach((r) => {
+      if (!r.date) return;
+      const d = new Date(r.date);
+      if (Number.isNaN(d.getTime())) return;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      map.set(key, (map.get(key) || 0) + r.amount);
+    });
+    const days = [];
+    if (start && end) {
+      for (
+        let d = new Date(start);
+        d < end && days.length < 370;
+        d.setDate(d.getDate() + 1)
+      ) {
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        days.push({
+          key,
+          label: `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`,
+          value: map.get(key) || 0,
+        });
+      }
+    } else {
+      [...map.keys()].sort().forEach((key) =>
+        days.push({
+          key,
+          label: key.slice(5).replace("-", "/"),
+          value: map.get(key) || 0,
+        }),
+      );
+    }
+    return days;
+  }, [rows, range, from, to, showChina, showAir]);
+
+  const dateText =
+    start && end
+      ? `${start.toLocaleDateString("en-GB")} – ${new Date(end.getTime() - 86400000).toLocaleDateString("en-GB")}`
+      : "All dates";
+  const statCards = [
+    {
+      label: "Total Revenue",
+      value: finMoney(totalRevenue),
+      detail: "CN orders + AIR + shipping fees",
+      tone: "blue",
+      icon: "TrendingUp",
+    },
+    {
+      label: "Total Collected",
+      value: finMoney(totalCollected),
+      detail: "Recorded payments only",
+      tone: "green",
+      icon: "Wallet",
+    },
+    {
+      label: "Outstanding Balance",
+      value: finMoney(outstanding),
+      detail: "Unpaid customer charges",
+      tone: "amber",
+      icon: "Clock3",
+    },
+    {
+      label: "Purchase Amount",
+      value: finMoney(purchaseAmount),
+      detail: costComplete
+        ? "Actual costs available"
+        : `${costCount} of ${allCosts.length} order costs available`,
+      tone: "violet",
+      icon: "ShoppingCart",
+    },
+    {
+      label: "Refunds",
+      value: finMoney(refunds),
+      detail: "Refunded CN + AIR orders",
+      tone: "red",
+      icon: "RotateCcw",
+    },
+    {
+      label: "Profit / Loss",
+      value: profit === null ? "Incomplete data" : finMoney(profit),
+      detail:
+        profit === null
+          ? "Actual purchase costs are missing for some orders"
+          : profit >= 0
+            ? "Revenue less recorded purchase costs"
+            : "Recorded costs exceed revenue",
+      tone: profit === null ? "slate" : profit >= 0 ? "green" : "red",
+      icon: "Scale",
+    },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="cbx-h1 cb-page-title text-2xl font-bold tracking-tight">
+            Financial &amp; Business Overview
+          </h1>
+          <p className="cbx-sub mt-1 text-sm">
+            Revenue, collections, balances and purchase performance from
+            recorded system data.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="cbx-pill">
+            {new Date().toLocaleDateString("en-GB", {
+              weekday: "short",
+              day: "2-digit",
+              month: "short",
+              year: "numeric",
+            })}
+          </span>
+          <button
+            type="button"
+            className="cbx-btn"
+            onClick={async () => {
+              await load();
+              await onRefresh?.();
+            }}
+            disabled={loading || refreshing}
+          >
+            <Icon
+              name="RefreshCw"
+              size={15}
+              className={loading || refreshing ? "animate-spin" : ""}
+            />{" "}
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      <div className="cb-surface rounded-2xl border border-mist-100 p-3 sm:p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-ink-900">
+              Reporting period
+            </p>
+            <p className="mt-0.5 text-xs text-ink-600/55">
+              {dateText}
+              {lastUpdated
+                ? ` · Updated ${lastUpdated.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`
+                : ""}
+            </p>
+          </div>
+          <label className="flex flex-col gap-1 text-xs font-medium text-ink-600/70">
+            Select period
+            <div className="flex items-center overflow-hidden rounded-xl border border-mist-200 bg-white shadow-sm transition focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-500/15">
+              <select
+                aria-label="Reporting period"
+                value={range}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setRange(next);
+                  setTo("");
+                  setFrom(
+                    next === "month" ? localToday().slice(0, 7) : localToday(),
+                  );
+                }}
+                className="h-11 min-w-[94px] border-0 border-r border-mist-200 bg-transparent px-3 text-sm font-semibold text-ink-800 outline-none"
+              >
+                {FINANCIAL_RANGE_OPTIONS.map(([key, label]) => (
+                  <option key={key} value={key}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              <input
+                aria-label={
+                  range === "date"
+                    ? "Select date"
+                    : range === "week"
+                      ? "Choose a date in week"
+                      : "Select month"
+                }
+                type={range === "month" ? "month" : "date"}
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+                className="h-11 min-w-[170px] border-0 bg-transparent px-3 text-sm font-medium text-ink-800 outline-none"
+              />
+            </div>
+          </label>
+        </div>
+      </div>
+
+      {errors.length > 0 && (
+        <div
+          role="alert"
+          className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+        >
+          <p className="font-semibold">
+            Some financial sources could not be loaded.
+          </p>
+          <ul className="mt-1 list-disc pl-5">
+            {errors.map((e) => (
+              <li key={e}>{e}</li>
+            ))}
+          </ul>
+          <p className="mt-1 text-xs">
+            Displayed totals may be incomplete. Check Supabase table access and
+            Row Level Security policies.
+          </p>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 6 }, (_, i) => (
+            <div
+              key={i}
+              className="cb-surface h-32 animate-pulse rounded-2xl border border-mist-100 bg-mist-50"
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {statCards.map((card) => (
+            <FinancialStat key={card.label} {...card} />
+          ))}
+        </div>
+      )}
+
+      {!costComplete && !loading && (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-900">
+          <Icon name="Info" size={18} className="mt-0.5 shrink-0" />
+          <div>
+            <p className="font-semibold">Profit / Loss is not yet final.</p>
+            <p className="mt-0.5 text-xs leading-5">
+              Only recorded actual purchase costs with a valid conversion rate
+              are counted. Missing cost data is not treated as zero, so the
+              dashboard avoids presenting an unreliable profit figure.
+            </p>
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+        <section className="cb-surface overflow-hidden rounded-2xl border border-mist-100 xl:col-span-2">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-mist-100 px-4 py-4 sm:px-5">
+            <div>
+              <h2 className="font-semibold text-ink-900">Revenue Trend</h2>
+              <p className="mt-0.5 text-xs text-ink-600/55">
+                Daily billed revenue from CN orders, AIR charges and shipping
+                fees
+              </p>
+            </div>
+            <div className="inline-flex rounded-lg border border-mist-200 p-1">
+              <button
+                type="button"
+                onClick={() => setView("chart")}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold ${view === "chart" ? "bg-blue-600 text-white" : "text-ink-600"}`}
+              >
+                Chart View
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("table")}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold ${view === "table" ? "bg-blue-600 text-white" : "text-ink-600"}`}
+              >
+                Table View
+              </button>
+            </div>
+          </div>
+          {loading ? (
+            <div className="h-64 animate-pulse bg-mist-50" />
+          ) : view === "chart" ? (
+            <FinancialRevenueChart
+              points={chartPoints}
+              onSelectPoint={(point) => {
+                setRange("date");
+                setFrom(point.key);
+                setTo("");
+              }}
+            />
+          ) : (
+            <div className="max-h-72 overflow-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="sticky top-0 bg-mist-50 text-xs text-ink-600/65">
+                  <tr>
+                    <th className="px-4 py-3 font-semibold">Date</th>
+                    <th className="px-4 py-3 text-right font-semibold">
+                      Revenue
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-mist-100">
+                  {chartPoints
+                    .filter((p) => p.value > 0)
+                    .slice()
+                    .reverse()
+                    .map((p) => (
+                      <tr key={p.key}>
+                        <td className="px-4 py-3">{p.key}</td>
+                        <td className="px-4 py-3 text-right font-semibold tabular-nums">
+                          {finMoney(p.value)}
+                        </td>
+                      </tr>
+                    ))}
+                  {chartPoints.every((p) => p.value === 0) && (
+                    <tr>
+                      <td
+                        colSpan={2}
+                        className="px-4 py-8 text-center text-ink-600/55"
+                      >
+                        No revenue recorded for this period.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section className="cb-surface overflow-hidden rounded-2xl border border-mist-100">
+          <div className="border-b border-mist-100 px-4 py-4">
+            <h2 className="font-semibold text-ink-900">Wallet Activity</h2>
+            <p className="mt-0.5 text-xs text-ink-600/55">
+              Recorded wallet transactions in the selected period
+            </p>
+          </div>
+          <div className="space-y-4 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span className="grid h-9 w-9 place-items-center rounded-xl bg-emerald-50 text-emerald-600">
+                  <Icon name="ArrowDownLeft" size={17} />
+                </span>
+                <div>
+                  <p className="text-sm font-medium text-ink-800">
+                    Top-ups / Deposits
+                  </p>
+                  <p className="text-xs text-ink-600/50">Wallet funding</p>
+                </div>
+              </div>
+              <p className="font-semibold tabular-nums text-emerald-600">
+                {finMoney(walletTopups)}
+              </p>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span className="grid h-9 w-9 place-items-center rounded-xl bg-amber-50 text-amber-700">
+                  <Icon name="ArrowUpRight" size={17} />
+                </span>
+                <div>
+                  <p className="text-sm font-medium text-ink-800">
+                    Withdrawals / Reversals
+                  </p>
+                  <p className="text-xs text-ink-600/50">Wallet outflow</p>
+                </div>
+              </div>
+              <p className="font-semibold tabular-nums text-amber-700">
+                {finMoney(walletWithdrawals)}
+              </p>
+            </div>
+            <div className="border-t border-mist-100 pt-3">
+              <p className="text-xs text-ink-600/55">Transactions loaded</p>
+              <p className="mt-1 text-lg font-bold text-ink-900">
+                {wallet.length.toLocaleString("en-US")}
+              </p>
+              <p className="mt-1 text-[11px] leading-4 text-ink-600/50">
+                Wallet funding is shown separately from customer order revenue
+                to avoid double counting.
+              </p>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <section className="cb-surface overflow-hidden rounded-2xl border border-mist-100">
+        <div className="border-b border-mist-100 px-4 py-4 sm:px-5">
+          <h2 className="font-semibold text-ink-900">
+            Financial Source Breakdown
+          </h2>
+          <p className="mt-0.5 text-xs text-ink-600/55">
+            Actual rows returned by Supabase for the selected reporting period
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[560px] text-left text-sm">
+            <thead className="bg-mist-50 text-xs uppercase tracking-wide text-ink-600/60">
+              <tr>
+                <th className="px-4 py-3 font-semibold">Source</th>
+                <th className="px-4 py-3 text-right font-semibold">
+                  Orders / Rows
+                </th>
+                <th className="px-4 py-3 text-right font-semibold">Revenue</th>
+                <th className="px-4 py-3 text-right font-semibold">
+                  Collected
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-mist-100">
+              <tr>
+                <td className="px-4 py-3 font-medium">CN Purchase Orders</td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {cn.length.toLocaleString("en-US")}
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {finMoney(cnRevenue)}
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {finMoney(activeCn.reduce((s, r) => s + finPaid(r), 0))}
+                </td>
+              </tr>
+              <tr>
+                <td className="px-4 py-3 font-medium">
+                  AIR Shipment{" "}
+                  {airRevenueRows.length !== air.length ? (
+                    <span className="ml-1 text-xs text-amber-700">
+                      (some charge fields unavailable)
+                    </span>
+                  ) : null}
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {air.length.toLocaleString("en-US")}
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {finMoney(airRevenue)}
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {finMoney(activeAir.reduce((s, r) => s + finPaid(r), 0))}
+                </td>
+              </tr>
+              <tr>
+                <td className="px-4 py-3 font-medium">Shipping Fees</td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {shippingRows.length.toLocaleString("en-US")}
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {finMoney(shippingRevenue)}
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums">
+                  {finMoney(
+                    shippingRows.reduce(
+                      (s, r) => s + Math.max(0, finNum(r.paid_amount) ?? 0),
+                      0,
+                    ),
+                  )}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function Dashboard() {
-  const navigate = useNavigate();
   const { user } = useAuth();
-  const { t } = useAdminPrefs();
-  const { packages, ready: dashReady, refetch } = usePackageTracking();
+  const { refetch } = usePackageTracking();
   const [refreshing, setRefreshing] = useState(false);
-  const today = new Date();
-  // Which parts of the dashboard this role may see (Role Management →
-  // Dashboard). A staff member who only works Indonesia sees only AIR, and
-  // vice-versa. Super Admin sees everything.
   const showChina = hasPermission(user, "dashboard.china");
   const showAir = !CHINA_ONLY && hasPermission(user, "dashboard.air");
-
-  // Only link to pages this role can open (same rule the Sidebar uses).
-  // The route itself stays protected regardless of what is shown here.
-  const canOpen = (path) =>
-    Boolean(user?.allowedPaths === "*" || user?.allowedPaths?.includes(path));
-
-  async function handleRefresh() {
+  const handleRefresh = async () => {
     if (refreshing) return;
     setRefreshing(true);
     try {
@@ -16586,340 +17481,31 @@ function Dashboard() {
     } finally {
       setRefreshing(false);
     }
-  }
-
-  const exceptions = packages.filter((p) => p.exception);
-
-  // Click-through is only wired where the destination page is the module
-  // that owns that number. "In Transit" and "KH Warehouse Stock" have no
-  // matching list page with a status filter, so they stay non-clickable.
-  const stats = [
-    {
-      icon: "LogIn",
-      label: "Inbound (today)",
-      value: String(
-        packages.filter((p) => isSameCalendarDay(p.created_at, today)).length,
-      ),
-      tone: "blue",
-      to: "/inbound-origin",
-    },
-    {
-      icon: "LogOut",
-      label: "Outbound (today)",
-      value: String(
-        packages.filter((p) =>
-          isSameCalendarDay(
-            normalizeLegacyStamp(p.outboundAt, p.updated_at || p.created_at),
-            today,
-          ),
-        ).length,
-      ),
-      tone: "ink",
-      to: "/outbound-origin",
-    },
-    {
-      icon: "Ship",
-      label: "In Transit",
-      value: String(
-        packages.filter((p) => IN_TRANSIT_STATUSES.includes(p.status)).length,
-      ),
-      tone: "amber",
-    },
-    {
-      icon: "Warehouse",
-      label: "KH Warehouse Stock",
-      value: String(
-        packages.filter((p) => p.status === "Inbound Warehouse").length,
-      ),
-      tone: "teal",
-    },
-    {
-      icon: "TriangleAlert",
-      label: "Open Exceptions",
-      value: String(packages.filter((p) => p.exception).length),
-      // Red only when something needs attention; calm green when clear.
-      tone: exceptions.length > 0 ? "red" : "teal",
-      to: "/exceptions",
-    },
-  ];
-
-  const recent = [...packages]
-    .filter((p) => lastActivityAt(p))
-    .sort((a, b) => new Date(lastActivityAt(b)) - new Date(lastActivityAt(a)))
-    .slice(0, 5);
-
-  // Work queue: every count is a live count of the same `packages` registry
-  // (same exact-status match RouteFlow uses, so the numbers agree with the
-  // pipeline). The three "waiting" rows come from the scan-gated hand-offs in
-  // VERIFY_GATED_STAGES / WHArrivedPage / SortingPage. Rows with 0 are hidden.
-  const countAt = (status) =>
-    packages.filter((p) => p.status === status).length;
-  const queue = [
-    {
-      key: "exceptions",
-      icon: "TriangleAlert",
-      tone: "red",
-      title: t("Open exceptions"),
-      description: t("Needs staff follow-up in the Exception Center."),
-      count: exceptions.length,
-      to: "/exceptions",
-    },
-    {
-      key: "arrival",
-      icon: "PackageCheck",
-      tone: "amber",
-      title: t("Waiting for arrival scan"),
-      description: t(
-        "Left the origin warehouse; waiting for the W.H Arrived scan.",
-      ),
-      count: countAt("Outbound Origin"),
-      to: "/wh-arrived",
-    },
-    {
-      key: "branch",
-      icon: "Truck",
-      tone: "amber",
-      title: t("Waiting to ship to branch"),
-      description: t(
-        "Arrived at the destination warehouse; not yet sent to a branch.",
-      ),
-      count: countAt("Arrived Destination"),
-      to: "/wh-arrived",
-    },
-    {
-      key: "sorting",
-      icon: "ListTree",
-      tone: "amber",
-      title: t("Waiting for sorting scan"),
-      description: t("On the way to the branch; waiting for the Sorting scan."),
-      count: countAt("Shipping To Branch"),
-      to: "/sorting",
-    },
-  ].filter((row) => row.count > 0);
-
-  const MAX_ALERTS = 5;
-  const shownExceptions = exceptions.slice(0, MAX_ALERTS);
-  const hiddenExceptions = exceptions.length - shownExceptions.length;
-
-  const dateLabel = today.toLocaleDateString("en-GB", {
-    weekday: "long",
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
-
-  return (
-    <div className="space-y-5">
-      <div className="flex items-end justify-between gap-3 flex-wrap">
-        <div>
-          <h1 className="cbx-h1 font-display font-extrabold text-xl cb-page-title">
-            {t("Operations Dashboard")}
-          </h1>
-          <p className="cbx-sub text-sm mt-0.5">
-            {t("Live overview of China → Cambodia shipments.")}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="cbx-pill">{dateLabel}</span>
-          {showChina && (
-            <button
-              type="button"
-              className="cbx-btn"
-              onClick={handleRefresh}
-              disabled={refreshing || !dashReady}
-              aria-busy={refreshing}
-            >
-              <Icon
-                name="RefreshCw"
-                size={15}
-                className={refreshing ? "animate-spin" : ""}
-              />
-              {t("Refresh")}
-            </button>
-          )}
-        </div>
+  };
+  if (!showChina && !showAir) {
+    return (
+      <div className="cb-surface p-8 text-center">
+        <Icons.LayoutDashboard
+          size={28}
+          className="mx-auto text-ink-600/25 mb-3"
+        />
+        <p className="font-medium text-ink-800">
+          No dashboard sections are assigned to your role.
+        </p>
+        <p className="mt-1 text-sm text-ink-600/50">
+          Ask an administrator to enable Dashboard permissions in Role
+          Management.
+        </p>
       </div>
-
-      {!showChina && !showAir && (
-        <div className="cb-surface p-8 text-center">
-          <Icons.LayoutDashboard
-            size={28}
-            className="mx-auto text-ink-600/25 mb-3"
-          />
-          <p className="font-medium text-ink-800">
-            No dashboard sections are assigned to your role.
-          </p>
-          <p className="text-sm text-ink-600/50 mt-1">
-            Ask an administrator to enable “Dashboard · China” or “Dashboard ·
-            AIR” in Role Management.
-          </p>
-        </div>
-      )}
-
-      {showChina &&
-        (dashReady ? (
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 cb-fade-in">
-            {stats.map(({ to, ...s }) => (
-              <StatCard
-                key={s.label}
-                {...s}
-                to={to && canOpen(to) ? to : undefined}
-              />
-            ))}
-          </div>
-        ) : (
-          <StatCardsSkeleton
-            count={5}
-            className="grid grid-cols-2 lg:grid-cols-5 gap-3"
-          />
-        ))}
-
-      {showChina && <RouteFlow />}
-
-      {showChina && (
-        <div className="grid lg:grid-cols-3 gap-5">
-          <DashPanel
-            icon="ListChecks"
-            title={t("Needs Attention")}
-            className="lg:col-span-2"
-          >
-            {!dashReady ? (
-              <SkeletonListRows rows={3} />
-            ) : queue.length === 0 ? (
-              <div className="px-5 pb-7 pt-2 text-center cb-fade-in">
-                <div className="mx-auto w-11 h-11 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                  <Icons.CircleCheck size={22} />
-                </div>
-                <p className="text-sm text-ink-600/55 mt-2.5">
-                  {t("Nothing is waiting right now.")}
-                </p>
-              </div>
-            ) : (
-              <ul className="cbx-queue cb-fade-in">
-                {queue.map(({ key, to, ...row }) => (
-                  <WorkQueueRow
-                    key={key}
-                    {...row}
-                    to={canOpen(to) ? to : undefined}
-                    actionLabel={t("Open")}
-                  />
-                ))}
-              </ul>
-            )}
-          </DashPanel>
-
-          <DashPanel
-            icon="TriangleAlert"
-            title="Exception Alerts"
-            action={canOpen("/exceptions") ? "Open Center" : undefined}
-            onAction={() => navigate("/exceptions")}
-          >
-            {!dashReady ? (
-              <SkeletonListRows rows={3} />
-            ) : exceptions.length === 0 ? (
-              <div className="px-5 pb-7 pt-2 text-center cb-fade-in">
-                <div className="mx-auto w-11 h-11 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                  <Icons.CircleCheck size={22} />
-                </div>
-                <p className="text-sm text-ink-600/55 mt-2.5">
-                  No open exceptions.
-                </p>
-              </div>
-            ) : (
-              <div className="px-3 pb-3 space-y-2 cb-fade-in">
-                {shownExceptions.map((p) => (
-                  <div
-                    key={p.tk}
-                    className="rounded-xl border border-red-100 bg-red-50/40 px-3.5 py-3"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <Link
-                        to={`/packages/${p.tk}`}
-                        className="text-sm font-semibold text-ink-900 hover:text-signal-blue"
-                      >
-                        {p.tk}
-                      </Link>
-                      <ActivityPill tone="red">{p.exception.type}</ActivityPill>
-                    </div>
-                    <div className="text-xs text-ink-600/60 mt-1">
-                      {p.exception.detail || packageCustomerLabel(p)}
-                    </div>
-                  </div>
-                ))}
-                {hiddenExceptions > 0 && (
-                  <p className="text-xs text-ink-600/55 text-center pt-1">
-                    +{hiddenExceptions} {t("more")}
-                  </p>
-                )}
-              </div>
-            )}
-          </DashPanel>
-        </div>
-      )}
-
-      {showAir && <AirDashboardSection />}
-
-      {showChina && <SlaDashboardSection />}
-
-      {showChina && (
-        <DashPanel
-          icon="Clock"
-          title="Recent Activity"
-          action="View All"
-          onAction={() => navigate("/packages")}
-        >
-          {!dashReady ? (
-            <SkeletonListRows rows={5} />
-          ) : recent.length === 0 ? (
-            <p className="text-sm text-ink-600/45 px-5 py-6 text-center">
-              No recent activity yet.
-            </p>
-          ) : (
-            <div className="px-3 pb-3 overflow-x-auto cb-fade-in">
-              <table className="w-full text-left min-w-[520px]">
-                <thead>
-                  <tr className="text-[11px] uppercase tracking-wide text-ink-600/45">
-                    <th className="font-semibold px-2 py-2">Time</th>
-                    <th className="font-semibold px-2 py-2">Tracking</th>
-                    <th className="font-semibold px-2 py-2">Customer</th>
-                    <th className="font-semibold px-2 py-2">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-mist-100">
-                  {recent.map((p) => (
-                    <tr key={p.tk} className="cb-table-row">
-                      <td className="px-2 py-3 text-xs text-ink-600/55 whitespace-nowrap">
-                        {timeAgoLabel(lastActivityAt(p))}
-                      </td>
-                      <td className="px-2 py-3">
-                        <Link
-                          to={`/packages/${p.tk}`}
-                          className="text-sm font-semibold text-ink-900 hover:text-signal-blue"
-                        >
-                          {p.tk}
-                        </Link>
-                      </td>
-                      <td className="px-2 py-3 text-xs text-ink-700 max-w-[220px] truncate">
-                        {packageCustomerLabel(p)}
-                      </td>
-                      <td className="px-2 py-3">
-                        {p.exception ? (
-                          <ActivityPill tone="red">
-                            {p.status || "—"}
-                          </ActivityPill>
-                        ) : (
-                          <StatusBadge label={p.status || "—"} />
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </DashPanel>
-      )}
-    </div>
+    );
+  }
+  return (
+    <FinancialDashboard
+      showChina={showChina}
+      showAir={showAir}
+      onRefresh={handleRefresh}
+      refreshing={refreshing}
+    />
   );
 }
 
@@ -53437,6 +54023,52 @@ body{background:var(--cb-bg);color:var(--cb-text);}
 /* ---- customer input: remove the native inner focus box ---- */
 .cb-field-input,.cb-field-input:focus,.cb-field-input:focus-visible,.cb-field-input:active{outline:none!important;box-shadow:none!important;border:0!important;background:transparent!important;padding:0!important;-webkit-appearance:none;appearance:none;border-radius:0!important;}
 .cb-field-input:-webkit-autofill,.cb-field-input:-webkit-autofill:focus{-webkit-box-shadow:0 0 0 1000px #fff inset!important;-webkit-text-fill-color:#0f172a;}
+
+/* ================================================================
+   JEN-Z EXPRESS — Enterprise UI / Typography refinement
+   Additive presentation-only layer. Existing routes, data flow,
+   permissions, Supabase calls, and business logic are intentionally untouched.
+   ================================================================ */
+:root{
+  --jz-font-sans:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --jz-font-xs:11px; --jz-font-sm:12px; --jz-font-body:13px;
+  --jz-font-control:13px; --jz-font-section:16px; --jz-font-page:24px;
+  --jz-leading-tight:1.25; --jz-leading-normal:1.5;
+  --jz-space-1:4px; --jz-space-2:8px; --jz-space-3:12px; --jz-space-4:16px;
+  --jz-space-5:20px; --jz-space-6:24px;
+  --jz-focus-ring:0 0 0 3px rgba(37,99,235,.14);
+}
+html,body,#root{font-family:var(--jz-font-sans);text-rendering:optimizeLegibility;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;font-feature-settings:"cv11","ss01";}
+.cb-app{font-family:var(--jz-font-sans);font-size:var(--jz-font-body);line-height:var(--jz-leading-normal);letter-spacing:0;}
+.cb-app :is(h1,h2,h3,h4,h5,h6){color:var(--cbx-text,var(--cb-text,#172033));line-height:var(--jz-leading-tight);letter-spacing:-.025em;font-weight:650;}
+.cb-app :is(h1,.cb-page-title,.cbx-page-title){font-size:var(--jz-font-page);font-weight:700;letter-spacing:-.035em;}
+.cb-app :is(h2,.section-title,.cb-section-title){font-size:var(--jz-font-section);font-weight:650;letter-spacing:-.02em;}
+.cb-app :is(p,li,dd,dt){line-height:var(--jz-leading-normal);}
+.cb-app :is(button,[role="button"],input,select,textarea){font-family:inherit;font-size:var(--jz-font-control);line-height:1.4;}
+.cb-app :is(input,select,textarea){min-height:38px;border-radius:9px;}
+.cb-app :is(input,select,textarea):focus-visible{outline:2px solid var(--cbx-blue,#2563eb);outline-offset:1px;}
+.cb-app :is(table,[role="table"]){font-variant-numeric:tabular-nums;}
+.cb-app :is(th,[role="columnheader"]){font-size:11px;font-weight:650;letter-spacing:.035em;text-transform:uppercase;line-height:1.35;}
+.cb-app :is(td,[role="cell"]){font-size:13px;line-height:1.45;}
+.cb-app :is(.text-xs){line-height:1.45;}
+.cb-app :is(.text-sm){line-height:1.5;}
+.cb-app :is(.font-mono,code,kbd,pre){font-variant-numeric:tabular-nums;}
+.cb-app :is(.cb-surface,.cb-card,.cbx-card){border-radius:12px;}
+.cb-app :is(.cb-input,.cbx-search){transition:border-color .16s ease,box-shadow .16s ease,background-color .16s ease;}
+.cb-app :is(.cb-input,.cbx-search):focus-within{box-shadow:var(--jz-focus-ring);}
+.cb-app :is(.cb-table-row,[role="row"]){transition:background-color .12s ease;}
+.cb-app :is(.cb-badge,.cbx-badge,[class*="rounded-full"]){font-variant-numeric:tabular-nums;}
+/* Keep the established light/dark theme switches in control of colors. */
+html.cb-admin-dark .cb-app :is(h1,h2,h3,h4,h5,h6){color:var(--cbx-text,#e2e8f0);}
+html.cb-admin-dark .cb-app :is(input,select,textarea){color:var(--cbx-text,#e2e8f0);}
+@media(max-width:767px){
+  :root{--jz-font-page:21px;--jz-font-section:15px;}
+  .cb-app :is(th,[role="columnheader"]){font-size:10px;}
+}
+@media(prefers-reduced-motion:reduce){
+  .cb-app :is(.cb-table-row,[role="row"],.cb-input,.cbx-search){transition:none!important;}
+}
+
 `;
 
 // Keeps the browser tab title + icon in sync with Settings → Company Profile
