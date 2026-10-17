@@ -2998,6 +2998,285 @@ function DateRangeFilter({ label = "Created At", value, onChange }) {
   );
 }
 
+// Advanced date range picker for CN Purchase Orders only. Keeps the shared
+// DateRangeFilter used by other modules unchanged.
+function CNDateRangeFilter({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [month, setMonth] = useState(() => {
+    const key = value?.from || localDayKey(new Date());
+    const d = key ? new Date(`${key}T12:00:00`) : new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [draftStart, setDraftStart] = useState("");
+  const [hoverDate, setHoverDate] = useState("");
+  const [draftRange, setDraftRange] = useState({
+    from: value?.from || "",
+    to: value?.to || "",
+  });
+  const rootRef = useRef(null);
+  useEffect(() => {
+    const closeOutside = (event) => {
+      if (rootRef.current && !rootRef.current.contains(event.target)) {
+        setOpen(false);
+        setDraftStart("");
+        setHoverDate("");
+      }
+    };
+    document.addEventListener("mousedown", closeOutside);
+    return () => document.removeEventListener("mousedown", closeOutside);
+  }, []);
+  const dayKey = (d) => localDayKey(d);
+  const fmt = (key) =>
+    key
+      ? new Date(`${key}T12:00:00`).toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        })
+      : "Select date";
+  const active = dateRangeLabel(value || EMPTY_DATE_RANGE);
+  const presetClick = (key) => {
+    onChange({ preset: key, from: "", to: "" });
+    setDraftStart("");
+    setHoverDate("");
+    setOpen(false);
+  };
+  const selectDay = (key) => {
+    if (!draftStart) {
+      setDraftStart(key);
+      setHoverDate(key);
+      setDraftRange({ from: key, to: "" });
+      return;
+    }
+    const from = draftStart <= key ? draftStart : key;
+    const to = draftStart <= key ? key : draftStart;
+    setDraftRange({ from, to });
+    setDraftStart("");
+    setHoverDate("");
+  };
+  const renderMonth = (monthDate) => {
+    const y = monthDate.getFullYear();
+    const m = monthDate.getMonth();
+    const first = new Date(y, m, 1);
+    const offset = (first.getDay() + 6) % 7;
+    const cells = Array.from({ length: 42 }, (_, i) => {
+      const d = new Date(y, m, i - offset + 1);
+      return { d, key: dayKey(d), inMonth: d.getMonth() === m };
+    });
+    const tentativeEnd =
+      draftStart && hoverDate
+        ? draftStart < hoverDate
+          ? hoverDate
+          : draftStart
+        : draftRange.to;
+    const tentativeStart =
+      draftStart && hoverDate
+        ? draftStart < hoverDate
+          ? draftStart
+          : hoverDate
+        : draftRange.from || value?.from || "";
+    return (
+      <div className="min-w-0 flex-1" key={`${y}-${m}`}>
+        <div className="mb-3 text-center text-sm font-semibold text-ink-800">
+          {monthDate.toLocaleDateString("en-US", {
+            month: "long",
+            year: "numeric",
+          })}
+        </div>
+        <div className="mb-2 grid grid-cols-7 border-b border-mist-100 pb-2">
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
+            <div
+              key={d}
+              className="text-center text-[11px] font-semibold text-ink-600/55"
+            >
+              {d}
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-y-1">
+          {cells.map(({ d, key, inMonth }) => {
+            const between =
+              !!tentativeStart &&
+              !!tentativeEnd &&
+              key >= tentativeStart &&
+              key <= tentativeEnd;
+            const endpoint =
+              (key === tentativeStart || key === tentativeEnd) && between;
+            const today = key === dayKey(new Date());
+            return (
+              <button
+                key={key}
+                type="button"
+                onMouseEnter={() => draftStart && setHoverDate(key)}
+                onClick={() => selectDay(key)}
+                className={`mx-auto grid h-8 w-8 place-items-center rounded-full text-xs transition-all duration-150 hover:scale-105 hover:bg-signal-blue/10 hover:text-signal-blue ${between ? "!rounded-lg bg-signal-blue/10 text-signal-blue" : ""} ${endpoint ? "!rounded-full !bg-signal-blue !text-white shadow-sm" : today ? "ring-1 ring-signal-blue/30" : inMonth ? "text-ink-800" : "text-ink-600/25"}`}
+              >
+                {d.getDate()}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+  return (
+    <div className="relative" ref={rootRef}>
+      <button
+        type="button"
+        onClick={() => {
+          setOpen((v) => !v);
+          setDraftStart("");
+          setHoverDate("");
+          setDraftRange({ from: value?.from || "", to: value?.to || "" });
+        }}
+        className={`inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm transition-all hover:border-signal-blue/50 hover:shadow-sm ${active ? "border-signal-blue/40 bg-signal-blue/5 text-signal-blue" : "border-mist-200 bg-white text-ink-700"}`}
+      >
+        <Icons.CalendarDays size={15} />
+        <span>{active ? active : "Created At"}</span>
+        <Icons.ChevronDown size={14} />
+      </button>
+      {open && (
+        <>
+          <button
+            type="button"
+            aria-label="Close date range picker"
+            className="fixed inset-0 z-[70] cursor-default"
+            onClick={() => {
+              setOpen(false);
+              setDraftStart("");
+            }}
+          />
+          <div
+            className="absolute left-0 z-[80] mt-2 w-[min(94vw,760px)] overflow-hidden rounded-2xl border border-mist-200 bg-white shadow-2xl shadow-slate-900/15"
+            style={{
+              animation: "jenzCalendarIn .18s cubic-bezier(.2,.8,.2,1)",
+            }}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-mist-100 px-4 py-3 sm:px-5">
+              <div>
+                <p className="text-sm font-semibold text-ink-800">
+                  Select date range
+                </p>
+                <p className="mt-0.5 text-xs text-ink-600/50">
+                  Choose a preset or select start and end dates
+                </p>
+              </div>
+              <span className="max-w-[45%] truncate text-xs text-ink-600/60">
+                {draftStart
+                  ? `Start: ${fmt(draftStart)} · choose end date`
+                  : draftRange.from && draftRange.to
+                    ? `${fmt(draftRange.from)} – ${fmt(draftRange.to)}`
+                    : "Custom range"}
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-[150px_minmax(0,1fr)]">
+              <div className="border-b border-mist-100 p-2 sm:border-b-0 sm:border-r sm:p-3">
+                {DATE_PRESETS.map((p) => (
+                  <button
+                    key={p.key}
+                    type="button"
+                    onClick={() => presetClick(p.key)}
+                    className={`block w-full rounded-lg px-3 py-2.5 text-left text-sm transition-colors hover:bg-signal-blue/5 hover:text-signal-blue ${value?.preset === p.key ? "bg-signal-blue/5 font-medium text-signal-blue" : "text-ink-700"}`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+                <div className="mt-2 border-t border-mist-100 px-3 pt-3 text-[10px] font-semibold uppercase tracking-[.12em] text-ink-600/40">
+                  Custom date
+                </div>
+                <div className="px-3 pb-2 pt-1 text-xs text-ink-600/60">
+                  {draftStart
+                    ? `Start: ${fmt(draftStart)}`
+                    : draftRange.from && draftRange.to
+                      ? `${fmt(draftRange.from)} – ${fmt(draftRange.to)}`
+                      : "Select start and end"}
+                </div>
+              </div>
+              <div className="min-w-0 p-3 sm:p-4">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    aria-label="Previous month"
+                    onClick={() =>
+                      setMonth(
+                        new Date(month.getFullYear(), month.getMonth() - 1, 1),
+                      )
+                    }
+                    className="grid h-8 w-8 place-items-center rounded-lg text-ink-600/70 transition hover:bg-mist-50"
+                  >
+                    <Icons.ChevronLeft size={17} />
+                  </button>
+                  <span className="text-xs text-ink-600/50">
+                    {draftStart ? "Select the end date" : "Select a date range"}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="Next month"
+                    onClick={() =>
+                      setMonth(
+                        new Date(month.getFullYear(), month.getMonth() + 1, 1),
+                      )
+                    }
+                    className="grid h-8 w-8 place-items-center rounded-lg text-ink-600/70 transition hover:bg-mist-50"
+                  >
+                    <Icons.ChevronRight size={17} />
+                  </button>
+                </div>
+                <div className="flex flex-col gap-5 md:flex-row">
+                  {renderMonth(month)}
+                  {renderMonth(
+                    new Date(month.getFullYear(), month.getMonth() + 1, 1),
+                  )}
+                </div>
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-mist-100 pt-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onChange(EMPTY_DATE_RANGE);
+                      setDraftRange({ from: "", to: "" });
+                      setDraftStart("");
+                      setOpen(false);
+                    }}
+                    className="rounded-lg px-3 py-2 text-sm text-ink-600/70 transition hover:bg-mist-50"
+                  >
+                    Clear
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => presetClick("today")}
+                      className="rounded-lg px-3 py-2 text-sm font-medium text-signal-blue transition hover:bg-signal-blue/5"
+                    >
+                      Today
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!draftRange.from || !draftRange.to}
+                      onClick={() => {
+                        onChange({
+                          preset: "",
+                          from: draftRange.from,
+                          to: draftRange.to,
+                        });
+                        setOpen(false);
+                        setDraftStart("");
+                        setHoverDate("");
+                      }}
+                      className="rounded-lg bg-signal-blue px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ------------------------------------------------------------
 // Customers: Registration overview card + list tabs
 // ------------------------------------------------------------
@@ -16570,6 +16849,8 @@ const FINANCIAL_RANGE_OPTIONS = [
   ["date", "Date"],
   ["week", "Week"],
   ["month", "Month"],
+  ["last7", "Last 7 days"],
+  ["custom", "Custom range"],
 ];
 
 function financialRangeBounds(range, from, to) {
@@ -16593,6 +16874,20 @@ function financialRangeBounds(range, from, to) {
       new Date(selected.getFullYear(), selected.getMonth(), 1),
       new Date(selected.getFullYear(), selected.getMonth() + 1, 1),
     ];
+  }
+  if (range === "last7") {
+    const end = new Date(today.getTime() + dayMs);
+    const start = new Date(today.getTime() - 6 * dayMs);
+    return [start, end];
+  }
+  if (range === "last30") {
+    return [
+      new Date(today.getTime() - 29 * dayMs),
+      new Date(today.getTime() + dayMs),
+    ];
+  }
+  if (range === "yesterday") {
+    return [new Date(today.getTime() - dayMs), today];
   }
   const a = from ? startOf(new Date(`${from}T00:00:00`)) : null;
   const b = to
@@ -16780,13 +17075,28 @@ function FinancialRevenueChart({ points, currency = "USD", onSelectPoint }) {
             <div className="mt-1.5 flex items-center justify-between gap-5">
               <span className="flex items-center gap-1.5 text-ink-600">
                 <span className="h-2 w-2 rounded-sm bg-blue-500" />
-                Revenue
+                Total revenue
               </span>
               <strong className="tabular-nums text-ink-900">
                 {finMoney(hovered.value, currency)}
               </strong>
             </div>
-            <p className="mt-1.5 text-[10px] text-blue-600">
+            {[
+              ["CN Purchase Orders", hovered.cn || 0],
+              ["AIR Shipment", hovered.air || 0],
+              ["Shipping fees", hovered.shipping || 0],
+            ].map(([label, amount]) => (
+              <div
+                key={label}
+                className="mt-1 flex items-center justify-between gap-5 text-[11px] text-ink-600"
+              >
+                <span>{label}</span>
+                <span className="tabular-nums">
+                  {finMoney(amount, currency)}
+                </span>
+              </div>
+            ))}
+            <p className="mt-2 border-t border-mist-100 pt-2 text-[10px] text-blue-600">
               Click bar to view this date
             </p>
           </div>
@@ -16801,6 +17111,417 @@ function FinancialRevenueChart({ points, currency = "USD", onSelectPoint }) {
         <p className="mt-3 text-center text-sm text-ink-600/55">
           No revenue recorded for this period.
         </p>
+      )}
+    </div>
+  );
+}
+
+function FinancialPeriodPicker({ range, from, to, setRange, setFrom, setTo }) {
+  const [open, setOpen] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const d = from ? new Date(`${from.slice(0, 10)}T12:00:00`) : new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [draftStart, setDraftStart] = useState("");
+  const [hoverDate, setHoverDate] = useState("");
+  const today = new Date();
+  const dayMs = 86400000;
+  const toIso = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const fromIso = (value) =>
+    value ? new Date(`${value}T12:00:00`) : new Date();
+  const shiftDays = (d, n) =>
+    new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+  const fmt = (value) =>
+    value
+      ? fromIso(value).toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        })
+      : "Select date range";
+  const startValue = range === "month" && from ? `${from}-01` : from;
+  const endValue = range === "date" ? from : to || from;
+  const displayText =
+    range === "week"
+      ? (() => {
+          const d = fromIso(from);
+          d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+          return `${fmt(toIso(d))} – ${fmt(toIso(shiftDays(d, 6)))}`;
+        })()
+      : range === "month"
+        ? fromIso(`${from || toIso(today).slice(0, 7)}-01`).toLocaleDateString(
+            "en-GB",
+            { month: "long", year: "numeric" },
+          )
+        : range === "custom"
+          ? `${fmt(from)} – ${fmt(to)}`
+          : range === "last7"
+            ? `Last 7 days · ${fmt(toIso(shiftDays(today, -6)))} – ${fmt(toIso(today))}`
+            : range === "last30"
+              ? `Last 30 days · ${fmt(toIso(shiftDays(today, -29)))} – ${fmt(toIso(today))}`
+              : range === "yesterday"
+                ? fmt(toIso(shiftDays(today, -1)))
+                : fmt(from || toIso(today));
+  const applyPreset = (preset) => {
+    const now = new Date();
+    const todayIso = toIso(now);
+    if (preset === "today") {
+      setRange("date");
+      setFrom(todayIso);
+      setTo("");
+    }
+    if (preset === "yesterday") {
+      setRange("date");
+      setFrom(toIso(shiftDays(now, -1)));
+      setTo("");
+    }
+    if (preset === "last7") {
+      setRange("custom");
+      setFrom(toIso(shiftDays(now, -6)));
+      setTo(todayIso);
+    }
+    if (preset === "last30") {
+      setRange("custom");
+      setFrom(toIso(shiftDays(now, -29)));
+      setTo(todayIso);
+    }
+    if (preset === "thisMonth") {
+      setRange("month");
+      setFrom(todayIso.slice(0, 7));
+      setTo("");
+    }
+    if (preset === "lastMonth") {
+      const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      setRange("custom");
+      setFrom(toIso(d));
+      setTo(toIso(new Date(now.getFullYear(), now.getMonth(), 0)));
+    }
+    setDraftStart("");
+    if (
+      [
+        "today",
+        "yesterday",
+        "last7",
+        "last30",
+        "thisMonth",
+        "lastMonth",
+      ].includes(preset)
+    )
+      setOpen(false);
+  };
+  const selectDay = (value) => {
+    if (range === "date") {
+      setFrom(value);
+      setTo("");
+      setOpen(false);
+      return;
+    }
+    if (range === "week") {
+      setFrom(value);
+      setTo("");
+      setOpen(false);
+      return;
+    }
+    if (range === "month") {
+      setFrom(value.slice(0, 7));
+      setTo("");
+      setOpen(false);
+      return;
+    }
+    if (!draftStart) {
+      setDraftStart(value);
+      setFrom(value);
+      setTo("");
+      setHoverDate("");
+      return;
+    }
+    const a = draftStart <= value ? draftStart : value;
+    const b = draftStart <= value ? value : draftStart;
+    setRange("custom");
+    setFrom(a);
+    setTo(b);
+    setDraftStart("");
+    setHoverDate("");
+    setOpen(false);
+  };
+  const calendar = (monthDate) => {
+    const year = monthDate.getFullYear(),
+      month = monthDate.getMonth();
+    const first = new Date(year, month, 1);
+    const offset = (first.getDay() + 6) % 7;
+    const cells = Array.from({ length: 42 }, (_, i) => {
+      const d = new Date(year, month, i - offset + 1);
+      return { d, value: toIso(d), inMonth: d.getMonth() === month };
+    });
+    const rangeEnd =
+      to ||
+      (draftStart && hoverDate
+        ? draftStart < hoverDate
+          ? hoverDate
+          : draftStart
+        : "");
+    const rangeStart =
+      draftStart && hoverDate
+        ? draftStart < hoverDate
+          ? draftStart
+          : hoverDate
+        : draftStart || from;
+    return (
+      <div className="min-w-0 flex-1" key={`${year}-${month}`}>
+        <div className="mb-2 text-center text-[13px] font-semibold text-slate-800">
+          {monthDate.toLocaleDateString("en-US", {
+            month: "long",
+            year: "numeric",
+          })}
+        </div>
+        <div className="mb-2 grid grid-cols-7 border-b border-slate-100 pb-2">
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((x) => (
+            <div
+              key={x}
+              className="text-center text-[10px] font-semibold text-slate-400"
+            >
+              {x}
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-y-0.5">
+          {cells.map(({ d, value, inMonth }) => {
+            const selectedSingle = range === "date" && value === from;
+            const isStart =
+              value === (draftStart || from) &&
+              (range === "custom" || range === "last7" || range === "last30");
+            const isEnd = value === to && !!to;
+            const between =
+              !!rangeEnd &&
+              !!rangeStart &&
+              value >= rangeStart &&
+              value <= rangeEnd;
+            const isToday = value === toIso(today);
+            return (
+              <button
+                key={value}
+                type="button"
+                onMouseEnter={() => draftStart && setHoverDate(value)}
+                onClick={() => selectDay(value)}
+                className={`relative mx-auto grid h-8 w-8 place-items-center rounded-full text-[12px] transition-all duration-150 hover:scale-105 hover:bg-blue-50 hover:text-blue-700 ${between ? "!rounded-lg bg-blue-50 text-blue-700" : ""} ${selectedSingle || isStart || isEnd ? "!bg-blue-600 !text-white shadow-md shadow-blue-600/20" : isToday ? "ring-1 ring-blue-200 text-blue-700" : inMonth ? "text-slate-700" : "text-slate-300"}`}
+              >
+                {d.getDate()}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => {
+          setOpen((v) => !v);
+          setDraftStart("");
+          setHoverDate("");
+          const d = from
+            ? fromIso(from.length === 7 ? `${from}-01` : from)
+            : today;
+          setCalendarMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+        }}
+        className={`flex h-11 min-w-[250px] max-w-full items-center gap-2 rounded-xl border bg-white px-3 text-left text-sm font-medium text-slate-700 shadow-sm transition-all hover:border-blue-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${open ? "border-blue-500 ring-2 ring-blue-500/10" : "border-slate-200"}`}
+      >
+        <Icon
+          name="CalendarDays"
+          size={16}
+          className="shrink-0 text-slate-400"
+        />
+        <span className="min-w-0 flex-1 truncate">{displayText}</span>
+        <Icon
+          name={open ? "ChevronUp" : "ChevronDown"}
+          size={15}
+          className="shrink-0 text-slate-400"
+        />
+      </button>
+      {open && (
+        <>
+          <button
+            type="button"
+            aria-label="Close date picker"
+            className="fixed inset-0 z-[80] cursor-default"
+            onClick={() => {
+              setOpen(false);
+              setDraftStart("");
+            }}
+          />
+          <div
+            className="jenz-period-pop absolute right-0 z-[90] mt-2 w-[min(94vw,500px)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl shadow-slate-900/15"
+            style={{
+              animation: "jenzCalendarIn .18s cubic-bezier(.2,.8,.2,1)",
+            }}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 sm:px-5">
+              <div>
+                <p className="text-sm font-semibold text-slate-800">
+                  Select reporting period
+                </p>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  {draftStart
+                    ? "Choose an end date"
+                    : "Choose a preset or select dates"}
+                </p>
+              </div>
+              <select
+                aria-label="Calendar period type"
+                value={
+                  range === "custom" ||
+                  range === "last7" ||
+                  range === "last30" ||
+                  range === "yesterday"
+                    ? "custom"
+                    : range
+                }
+                onChange={(e) => {
+                  const next = e.target.value;
+                  setRange(next);
+                  setDraftStart("");
+                  if (next === "date") {
+                    setFrom(toIso(today));
+                    setTo("");
+                  } else if (next === "week") {
+                    setFrom(toIso(today));
+                    setTo("");
+                  } else if (next === "month") {
+                    setFrom(toIso(today).slice(0, 7));
+                    setTo("");
+                  } else {
+                    setRange("custom");
+                    setFrom("");
+                    setTo("");
+                  }
+                }}
+                className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-blue-500"
+              >
+                <option value="date">Date</option>
+                <option value="week">Week</option>
+                <option value="month">Month</option>
+                <option value="custom">Custom range</option>
+              </select>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-[112px_minmax(0,1fr)]">
+              <div className="border-b border-slate-100 p-2 sm:border-b-0 sm:border-r sm:p-2">
+                {[
+                  ["today", "Today"],
+                  ["yesterday", "Yesterday"],
+                  ["last7", "Last 7 days"],
+                  ["last30", "Last 30 days"],
+                  ["thisMonth", "This month"],
+                  ["lastMonth", "Last month"],
+                ].map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => applyPreset(key)}
+                    className="block w-full rounded-lg px-2.5 py-2 text-left text-[13px] text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700"
+                  >
+                    {label}
+                  </button>
+                ))}
+                <div className="mt-1.5 border-t border-slate-100 px-2 pt-2 text-[9px] font-semibold uppercase tracking-[.12em] text-slate-400">
+                  Custom range
+                </div>
+                <div className="px-2 pb-1 pt-1 text-[11px] text-slate-500">
+                  {from && to
+                    ? `${fmt(from)} – ${fmt(to)}`
+                    : draftStart
+                      ? `Start: ${fmt(draftStart)}`
+                      : "Select start and end"}
+                </div>
+              </div>
+              <div className="min-w-0 p-3">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    aria-label="Previous month"
+                    onClick={() =>
+                      setCalendarMonth(
+                        new Date(
+                          calendarMonth.getFullYear(),
+                          calendarMonth.getMonth() - 1,
+                          1,
+                        ),
+                      )
+                    }
+                    className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition hover:bg-blue-50 hover:text-blue-700"
+                  >
+                    <Icon name="ChevronLeft" size={17} />
+                  </button>
+                  <div className="text-xs text-slate-400">
+                    {draftStart ? "Select the end date" : "Select a date"}
+                  </div>
+                  <button
+                    type="button"
+                    aria-label="Next month"
+                    onClick={() =>
+                      setCalendarMonth(
+                        new Date(
+                          calendarMonth.getFullYear(),
+                          calendarMonth.getMonth() + 1,
+                          1,
+                        ),
+                      )
+                    }
+                    className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition hover:bg-blue-50 hover:text-blue-700"
+                  >
+                    <Icon name="ChevronRight" size={17} />
+                  </button>
+                </div>
+                <div className="mx-auto w-full max-w-[280px]">
+                  {calendar(calendarMonth)}
+                </div>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRange("date");
+                      setFrom("");
+                      setTo("");
+                      setDraftStart("");
+                    }}
+                    className="rounded-lg px-3 py-2 text-sm text-slate-500 transition hover:bg-slate-100"
+                  >
+                    Clear
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => applyPreset("today")}
+                      className="rounded-lg px-3 py-2 text-sm font-medium text-blue-600 transition hover:bg-blue-50"
+                    >
+                      Today
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (range === "custom" && from && to) setOpen(false);
+                        else if (draftStart && to) setOpen(false);
+                        else if (draftStart) {
+                          setFrom(draftStart);
+                          setTo(draftStart);
+                          setRange("custom");
+                          setDraftStart("");
+                          setOpen(false);
+                        }
+                      }}
+                      className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
@@ -17012,13 +17733,22 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
     const all = [
       ...cn
         .filter((r) => !finIsRefunded(r))
-        .map((r) => ({ date: r.created_at, amount: finCharge(r) })),
+        .map((r) => ({
+          date: r.created_at,
+          amount: finCharge(r),
+          source: "cn",
+        })),
       ...air
         .filter((r) => !finIsRefunded(r) && finHasCharge(r))
-        .map((r) => ({ date: r.created_at, amount: finCharge(r) })),
+        .map((r) => ({
+          date: r.created_at,
+          amount: finCharge(r),
+          source: "air",
+        })),
       ...shippingRows.map((r) => ({
         date: r.created_at,
         amount: Math.max(0, Number(r.freight_fee) || 0),
+        source: "shipping",
       })),
     ];
     const map = new Map();
@@ -17027,7 +17757,10 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
       const d = new Date(r.date);
       if (Number.isNaN(d.getTime())) return;
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      map.set(key, (map.get(key) || 0) + r.amount);
+      const item = map.get(key) || { value: 0, cn: 0, air: 0, shipping: 0 };
+      item.value += r.amount;
+      item[r.source] += r.amount;
+      map.set(key, item);
     });
     const days = [];
     if (start && end) {
@@ -17037,10 +17770,16 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
         d.setDate(d.getDate() + 1)
       ) {
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        const amounts = map.get(key) || {
+          value: 0,
+          cn: 0,
+          air: 0,
+          shipping: 0,
+        };
         days.push({
           key,
           label: `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`,
-          value: map.get(key) || 0,
+          ...amounts,
         });
       }
     } else {
@@ -17048,7 +17787,7 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
         days.push({
           key,
           label: key.slice(5).replace("-", "/"),
-          value: map.get(key) || 0,
+          ...map.get(key),
         }),
       );
     }
@@ -17164,43 +17903,16 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
                 : ""}
             </p>
           </div>
-          <label className="flex flex-col gap-1 text-xs font-medium text-ink-600/70">
-            Select period
-            <div className="flex items-center overflow-hidden rounded-xl border border-mist-200 bg-white shadow-sm transition focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-500/15">
-              <select
-                aria-label="Reporting period"
-                value={range}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  setRange(next);
-                  setTo("");
-                  setFrom(
-                    next === "month" ? localToday().slice(0, 7) : localToday(),
-                  );
-                }}
-                className="h-11 min-w-[94px] border-0 border-r border-mist-200 bg-transparent px-3 text-sm font-semibold text-ink-800 outline-none"
-              >
-                {FINANCIAL_RANGE_OPTIONS.map(([key, label]) => (
-                  <option key={key} value={key}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-              <input
-                aria-label={
-                  range === "date"
-                    ? "Select date"
-                    : range === "week"
-                      ? "Choose a date in week"
-                      : "Select month"
-                }
-                type={range === "month" ? "month" : "date"}
-                value={from}
-                onChange={(e) => setFrom(e.target.value)}
-                className="h-11 min-w-[170px] border-0 bg-transparent px-3 text-sm font-medium text-ink-800 outline-none"
-              />
-            </div>
-          </label>
+          <div className="flex items-end gap-2.5">
+            <FinancialPeriodPicker
+              range={range}
+              from={from}
+              to={to}
+              setRange={setRange}
+              setFrom={setFrom}
+              setTo={setTo}
+            />
+          </div>
         </div>
       </div>
 
@@ -20458,7 +21170,7 @@ function PackageDetail() {
                           <span
                             className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
                               isActive
-                                ? "bg-signal-blue/15 border-2 border-signal-blue"
+                                ? "bg-signal-blue/15 border-2 border-signal-blue animate-pulse"
                                 : "bg-signal-teal text-white"
                             }`}
                           >
@@ -32847,7 +33559,7 @@ function ProcessTrackingPage() {
                         className="relative flex items-start gap-3"
                       >
                         <div
-                          className={`relative z-10 w-8 h-8 rounded-full flex items-center justify-center shrink-0 border-2 ${step.state === "done" ? "bg-signal-teal text-white border-signal-teal" : step.state === "active" ? "bg-signal-blue text-white border-signal-blue" : "bg-white text-ink-600/30 border-mist-200"}`}
+                          className={`relative z-10 w-8 h-8 rounded-full flex items-center justify-center shrink-0 border-2 transition-all duration-300 ${step.state === "done" ? "bg-signal-teal text-white border-signal-teal" : step.state === "active" ? "bg-signal-blue text-white border-signal-blue animate-pulse" : "bg-white text-ink-600/30 border-mist-200"}`}
                         >
                           {step.state === "done" ? (
                             <Check size={14} />
@@ -39752,13 +40464,24 @@ function CnStatusTimeline({
     if (["Complete Order", "Completed"].includes(core)) return "Completed";
     return core;
   };
-  const timeOf = (s) =>
-    history.find((h) => {
+  // Keep the full status-history row so the staff/admin timeline can show
+  // who processed each milestone, matching Package/TK Tracking History.
+  const historyEntryOf = (s) =>
+    [...history].reverse().find((h) => {
       if (h.event !== "status") return false;
       return customerView
         ? toCustomerStatus(h.status) === s
         : cnNormalizeStatus(h.status) === s;
-    })?.created_at;
+    });
+  const timeOf = (s) => historyEntryOf(s)?.created_at;
+  const processorOf = (s) => {
+    const entry = historyEntryOf(s);
+    if (entry?.created_by) return entry.created_by;
+    if (s === normalizedStatus || s === timelineCurrent) {
+      return row.updated_by || row.created_by || null;
+    }
+    return null;
+  };
   const refundEntry = history.find(
     (h) => h.event === "status" && h.status === CN_ORDER_TERMINAL,
   );
@@ -39788,15 +40511,19 @@ function CnStatusTimeline({
           <div key={s} className="flex gap-3">
             <div className="flex flex-col items-center">
               <span
-                className={`w-6 h-6 rounded-full grid place-items-center text-white text-[11px] shrink-0 ${
+                className={`w-6 h-6 rounded-full grid place-items-center shrink-0 ${
                   done
-                    ? "bg-emerald-500"
+                    ? "bg-emerald-500 text-white"
                     : active
-                      ? "bg-blue-600"
-                      : "bg-slate-200"
+                      ? "bg-blue-600 text-white animate-pulse"
+                      : "bg-white border-2 border-slate-200 text-transparent"
                 }`}
               >
-                {done ? <Icons.Check size={13} /> : displayIndex + 1}
+                {done ? (
+                  <Icons.Check size={13} />
+                ) : active ? (
+                  <span className="w-1.5 h-1.5 rounded-full bg-white" />
+                ) : null}
               </span>
               {(!isLastVisible || refunded) && (
                 <span
@@ -39813,6 +40540,11 @@ function CnStatusTimeline({
               {t && (
                 <p className="text-xs text-slate-500 mt-0.5">
                   {formatDbTimestamp(t)}
+                </p>
+              )}
+              {!customerView && (done || active) && processorOf(s) && (
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Proceed By: {processorOf(s)}
                 </p>
               )}
               {!customerView && active && CN_AUTO_STAGES.has(s) && (
@@ -41090,7 +41822,7 @@ function CnOrdersPage() {
               </select>
             </>
           )}
-          <DateRangeFilter value={dateRange} onChange={setDateRange} />
+          <CNDateRangeFilter value={dateRange} onChange={setDateRange} />
           {hasFilters && (
             <button
               type="button"
@@ -48092,13 +48824,39 @@ const CdStat = ({ label, value, tone = "text-slate-900" }) => (
   </div>
 );
 
-function CdTable({ cols, rows, empty, loading, stages }) {
+function CdTable({
+  cols,
+  rows,
+  empty,
+  loading,
+  stages,
+  statusGroups,
+  getStatus,
+}) {
   const [q, setQ] = useState("");
   const [stage, setStage] = useState("");
+  const [statusOpen, setStatusOpen] = useState(false);
+  const [statusQuery, setStatusQuery] = useState("");
   const [page, setPage] = useState(1);
+  const rowStatus = (r) => (getStatus ? getStatus(r) : r.status || "");
+  const statusOptions = useMemo(() => {
+    if (!statusGroups) return [];
+    // Always show the complete configured JEN-Z workflow, even when a status
+    // currently has zero records for this customer. Counts remain data-driven.
+    const configured = new Set(statusGroups.flatMap((g) => g.items));
+    const extras = [...new Set(rows.map(rowStatus).filter(Boolean))]
+      .filter((s) => !configured.has(s) && s !== "—")
+      .sort((a, b) => a.localeCompare(b));
+    return [
+      ...statusGroups.map((g) => ({ ...g, items: [...g.items] })),
+      ...(extras.length
+        ? [{ name: "Other existing statuses", items: extras }]
+        : []),
+    ];
+  }, [rows, statusGroups, getStatus]);
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
-    const base = stage ? rows.filter((r) => r.status === stage) : rows;
+    const base = stage ? rows.filter((r) => rowStatus(r) === stage) : rows;
     if (!s) return base;
     return base.filter((r) =>
       cols.some((c) =>
@@ -48107,7 +48865,7 @@ function CdTable({ cols, rows, empty, loading, stages }) {
           .includes(s),
       ),
     );
-  }, [rows, q, cols, stage]);
+  }, [rows, q, cols, stage, getStatus]);
   useEffect(() => setPage(1), [q, rows, stage]);
   const pages = Math.max(1, Math.ceil(filtered.length / CD_PAGE));
   const cur = Math.min(page, pages);
@@ -48117,19 +48875,148 @@ function CdTable({ cols, rows, empty, loading, stages }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 p-3">
-        <div className="relative max-w-xs">
-          <Icons.Search
-            size={14}
-            className="absolute left-3 top-2.5 text-slate-400"
-          />
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search…"
-            className="h-9 w-full rounded-xl border border-slate-200 pl-8 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
-          />
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative max-w-xs flex-1">
+            <Icons.Search
+              size={14}
+              className="absolute left-3 top-2.5 text-slate-400"
+            />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search…"
+              className="h-9 w-full rounded-xl border border-slate-200 pl-8 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+            />
+          </div>
+          {statusGroups && (
+            <div className="relative">
+              <button
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded={statusOpen}
+                onClick={() => setStatusOpen((v) => !v)}
+                className={`inline-flex h-9 min-w-[142px] items-center justify-between gap-2 rounded-xl border px-3 text-sm font-semibold transition ${stage ? "border-blue-300 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <Icons.CircleDot size={15} />
+                  <span className="truncate">{stage || "All Status"}</span>
+                </span>
+                <Icons.ChevronDown size={14} />
+              </button>
+              {statusOpen && (
+                <>
+                  <button
+                    type="button"
+                    aria-label="Close status menu"
+                    className="fixed inset-0 z-30 cursor-default"
+                    onClick={() => setStatusOpen(false)}
+                  />
+                  <div className="absolute right-0 top-full z-40 mt-2 w-[min(320px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
+                    <div className="border-b border-slate-100 p-3">
+                      <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                        Select status
+                      </div>
+                      <div className="relative">
+                        <Icons.Search
+                          size={14}
+                          className="absolute left-3 top-2.5 text-slate-400"
+                        />
+                        <input
+                          autoComplete="off"
+                          value={statusQuery}
+                          onChange={(e) => setStatusQuery(e.target.value)}
+                          placeholder="Search status…"
+                          className="h-9 w-full rounded-lg bg-slate-50 pl-8 pr-3 text-sm outline-none focus:ring-2 focus:ring-blue-500/20"
+                        />
+                      </div>
+                    </div>
+                    <div className="max-h-[min(420px,60vh)] overflow-y-auto p-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStage("");
+                          setStatusOpen(false);
+                          setStatusQuery("");
+                        }}
+                        className={`mb-2 flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${!stage ? "bg-blue-50 font-bold text-blue-700" : "text-slate-700 hover:bg-slate-50"}`}
+                      >
+                        <span>All Status</span>
+                        <span className="text-xs opacity-70">
+                          {rows.length}
+                        </span>
+                      </button>
+                      {statusOptions.map((group) => {
+                        const items = group.items.filter((s) =>
+                          s
+                            .toLowerCase()
+                            .includes(statusQuery.trim().toLowerCase()),
+                        );
+                        if (!items.length) return null;
+                        return (
+                          <div key={group.name} className="mb-2 last:mb-0">
+                            <div className="px-3 pb-1 pt-2 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+                              {group.name}
+                            </div>
+                            {items.map((s) => {
+                              const count = rows.filter(
+                                (r) => rowStatus(r) === s,
+                              ).length;
+                              return (
+                                <button
+                                  key={s}
+                                  type="button"
+                                  onClick={() => {
+                                    setStage(s);
+                                    setStatusOpen(false);
+                                    setStatusQuery("");
+                                  }}
+                                  className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition ${stage === s ? "bg-blue-50 font-bold text-blue-700" : "text-slate-700 hover:bg-slate-50"}`}
+                                >
+                                  <span className="truncate">{s}</span>
+                                  <span className="ml-3 text-xs text-slate-400">
+                                    {count}
+                                  </span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
+                      {!statusOptions.some((g) =>
+                        g.items.some((s) =>
+                          s
+                            .toLowerCase()
+                            .includes(statusQuery.trim().toLowerCase()),
+                        ),
+                      ) && (
+                        <div className="px-3 py-6 text-center text-sm text-slate-400">
+                          No matching statuses
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between border-t border-slate-100 px-3 py-2">
+                      <span className="text-xs text-slate-400">
+                        {stage ? "1 status selected" : "No status filter"}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setStage("");
+                          setStatusQuery("");
+                          setStatusOpen(false);
+                        }}
+                        className="text-xs font-bold text-blue-600 hover:underline"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
         </div>
-        {stages && (
+        {stages && !statusGroups && (
           <div className="mt-3 flex flex-wrap gap-1.5">
             {[
               ["", "All", rows.length],
@@ -48888,14 +49775,16 @@ function CustomerDetailPage() {
   const canEditRoute =
     hasPermission(user, "customer.edit") ||
     hasPermission(user, "warehouse.manage");
-  const [tab, setTab] = useState("packages");
+  const [tab, setTab] = useState("orders");
   const [topUp, setTopUp] = useState(false);
   const [addressModal, setAddressModal] = useState(false);
   const [editAddress, setEditAddress] = useState(null);
   const [routeModal, setRouteModal] = useState(false);
   const [reload, setReload] = useState(0);
   const canViewAir = hasPermission(user, "air_order.view");
+  const canViewCnOrders = hasPermission(user, "cn_order.view");
   const [airRows, setAirRows] = useState([]); // AIR (Indonesia) orders of this customer
+  const [cnOrderRows, setCnOrderRows] = useState([]); // China purchase orders for this customer
   const [state, setState] = useState({
     loading: true,
     cust: null,
@@ -48941,7 +49830,7 @@ function CustomerDetailPage() {
         });
         return;
       }
-      const [p, a, t, ar] = await Promise.all([
+      const [p, a, t, ar, cn] = await Promise.all([
         supabase
           .from("packages")
           .select("*")
@@ -48967,9 +49856,20 @@ function CustomerDetailPage() {
               .order("created_at", { ascending: false })
               .limit(2000)
           : Promise.resolve({ data: [] }),
+        canViewCnOrders
+          ? supabase
+              .from("cn_orders")
+              .select(
+                "id,order_id,customer_id,order_type,product_name,shop_name,platform,quantity,total_due_usd,amount_paid_usd,payment_status,status,created_at,updated_at",
+              )
+              .eq("customer_id", cust.id)
+              .order("created_at", { ascending: false })
+              .limit(2000)
+          : Promise.resolve({ data: [] }),
       ]);
       if (!alive) return;
       setAirRows(ar?.data || []);
+      setCnOrderRows(cn?.data || []);
       setState({
         loading: false,
         cust,
@@ -49070,6 +49970,94 @@ function CustomerDetailPage() {
       label: "Status",
       search: (r) => pkgDisplayStatus(r),
       render: (r) => <StatusBadge label={pkgDisplayStatus(r) || "—"} />,
+    },
+  ];
+  const cnOrderCols = [
+    {
+      key: "updated",
+      label: "Updated At",
+      search: (r) =>
+        `${cdDate(r.updated_at || r.created_at)} ${r.order_id || ""}`,
+      render: (r) => (
+        <div>
+          <div className="font-semibold text-slate-800">
+            {cdDate(r.updated_at || r.created_at)}
+          </div>
+          <div className="text-[11px] text-slate-400">
+            {cdAgo(r.updated_at || r.created_at)}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "order_id",
+      label: "Order ID",
+      render: (r) => (
+        <Link
+          to={`/cn-orders/${encodeURIComponent(r.order_id)}`}
+          className="font-bold text-blue-700 hover:underline"
+        >
+          {r.order_id || "—"}
+        </Link>
+      ),
+    },
+    {
+      key: "product_name",
+      label: "Product",
+      search: (r) =>
+        `${r.product_name || ""} ${r.shop_name || ""} ${r.platform || ""}`,
+      render: (r) => (
+        <div className="min-w-[180px] max-w-[280px] whitespace-normal">
+          <div className="font-semibold text-slate-800">
+            {r.product_name || "Product order"}
+          </div>
+          <div className="mt-0.5 text-xs text-slate-400">
+            {r.shop_name || r.platform || "China purchase"}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "quantity",
+      label: "Qty",
+      search: () => "",
+      render: (r) => (Number(r.quantity) > 0 ? r.quantity : "—"),
+    },
+    {
+      key: "total_due_usd",
+      label: "Total (USD)",
+      search: (r) => String(r.total_due_usd ?? ""),
+      render: (r) => (
+        <span className="font-bold text-slate-800">
+          {moneyS(r.total_due_usd || 0)}
+        </span>
+      ),
+    },
+    {
+      key: "payment_status",
+      label: "Payment",
+      search: (r) => `${r.payment_status || ""} ${r.amount_paid_usd ?? ""}`,
+      render: (r) => {
+        const paid = String(r.payment_status || "").toLowerCase();
+        const isPaid = ["paid", "completed", "success"].includes(paid);
+        return (
+          <StatusBadge
+            label={
+              r.payment_status ||
+              (Number(r.amount_paid_usd || 0) >= Number(r.total_due_usd || 0) &&
+              Number(r.total_due_usd || 0) > 0
+                ? "Paid"
+                : "Pending")
+            }
+          />
+        );
+      },
+    },
+    {
+      key: "status",
+      label: "Status",
+      search: (r) => r.status || "",
+      render: (r) => <StatusBadge label={r.status || "—"} />,
     },
   ];
   const airCols = [
@@ -49263,8 +50251,198 @@ function CustomerDetailPage() {
     },
   ];
 
+  // One combined Order section for CN purchase orders and TK/package records.
+  // AIR (Indonesia) remains a separate tab and is intentionally not merged.
+  const orderRows = [
+    ...packages.map((r) => ({
+      ...r,
+      _orderKind: "package",
+      _rowKey: `pkg-${r.id || r.tk}`,
+    })),
+    ...(canViewCnOrders ? cnOrderRows : []).map((r) => ({
+      ...r,
+      _orderKind: "cn",
+      _rowKey: `cn-${r.id || r.order_id}`,
+    })),
+  ].sort(
+    (a, b) =>
+      new Date(b.updated_at || b.created_at || 0) -
+      new Date(a.updated_at || a.created_at || 0),
+  );
+  // Group existing CN/TK display statuses for one shared Order filter.
+  // This only normalizes labels for filtering; stored database statuses remain untouched.
+  // Local status normalizer for the Customer Details Order table.
+  // Do not call normStep here: that helper belongs to another component scope.
+  // This is display/filter-only and never updates stored Supabase statuses.
+  const normalizeCombinedOrderStatus = (status) => {
+    const raw = String(status ?? "").trim();
+    if (!raw) return "—";
+    const key = raw
+      .toLowerCase()
+      .replace(/[_-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const aliases = {
+      "waiting order payment": "Waiting Order Payment",
+      "pending order payment": "Waiting Order Payment",
+      "approve purchase": "Approve Purchase",
+      "approved purchase": "Approve Purchase",
+      "order processing": "Approve Purchase",
+      purchased: "Purchased",
+      "in transit": "Intransit",
+      intransit: "Intransit",
+      "inbound origin": "Inbound Origin",
+      "outbound origin": "Outbound Origin",
+      "arrived destination": "Arrive Destination",
+      "arrive destination": "Arrive Destination",
+      "arrived wh": "Arrive Destination",
+      "shipping to branch": "Delivery",
+      delivery: "Delivery",
+      "inbound warehouse": "Delivery",
+      "pending shipping payment": "Pending Shipping Payment",
+      "shipping paid": "Shipping Paid",
+      completed: "Completed",
+      complete: "Completed",
+      "complete order": "Completed",
+      refund: "Refund Order",
+      "refund order": "Refund Order",
+    };
+    return aliases[key] || raw;
+  };
+  const orderStatusForFilter = (r) => {
+    if (r._orderKind === "cn")
+      return normalizeCombinedOrderStatus(cnOrderTableStatus(r));
+    const displayed = pkgDisplayStatus(r) || r.status || "";
+    // Keep payment states explicit; all other TK stages use the same local
+    // customer-facing labels as the shared Order status filter.
+    if (displayed === PAY_STATUS.PENDING || displayed === PAY_STATUS.PAID)
+      return displayed;
+    return normalizeCombinedOrderStatus(displayed);
+  };
+  const orderStatusGroups = [
+    {
+      name: "Order & Payment",
+      items: [
+        "Waiting Order Payment",
+        "Approve Purchase",
+        "Purchased",
+        "Pending Shipping Payment",
+        "Shipping Paid",
+      ],
+    },
+    {
+      name: "Origin & Transit",
+      items: ["Intransit", "Inbound Origin", "Outbound Origin"],
+    },
+    {
+      name: "Destination & Delivery",
+      items: ["Arrive Destination", "Delivery"],
+    },
+    { name: "Final Status", items: ["Completed", "Refund Order"] },
+  ];
+  const orderCols = [
+    {
+      key: "updated",
+      label: "Updated At",
+      search: (r) =>
+        `${cdDate(r.updated_at || r.created_at)} ${r.order_id || ""} ${r.tk || ""}`,
+      render: (r) => (
+        <div>
+          <div className="font-semibold text-slate-800">
+            {cdDate(r.updated_at || r.created_at)}
+          </div>
+          <div className="text-[11px] text-slate-400">
+            {cdAgo(r.updated_at || r.created_at)}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "order_reference",
+      label: "Order / Tracking Number",
+      search: (r) =>
+        `${r.order_id || ""} ${r.tk || ""} ${r.tracking_number || ""}`,
+      render: (r) =>
+        r._orderKind === "cn" ? (
+          <Link
+            to={`/cn-orders/${encodeURIComponent(r.order_id || r.id)}`}
+            className="font-bold text-blue-700 hover:underline"
+          >
+            {r.order_id || "—"}
+          </Link>
+        ) : (
+          <Link
+            to={`/packages/${encodeURIComponent(r.tk || "")}`}
+            className="font-bold text-blue-700 hover:underline"
+          >
+            {r.tk || r.tracking_number || "—"}
+          </Link>
+        ),
+    },
+    {
+      key: "product",
+      label: "Product / Details",
+      search: (r) =>
+        `${r.product_name || ""} ${r.shop_name || ""} ${r.platform || ""} ${r.container_no || ""}`,
+      render: (r) =>
+        r._orderKind === "cn" ? (
+          <div className="min-w-[160px] max-w-[260px] whitespace-normal">
+            <div className="font-semibold text-slate-800">
+              {r.product_name || "China purchase order"}
+            </div>
+            <div className="mt-0.5 text-xs text-slate-400">
+              {r.shop_name || r.platform || "CN Purchase"}
+            </div>
+          </div>
+        ) : (
+          <div className="min-w-[160px]">
+            <div className="font-semibold text-slate-800">
+              {r.product_name || r.description || "Package / TK"}
+            </div>
+            <div className="mt-0.5 text-xs text-slate-400">
+              {r.container_no ? `Container ${r.container_no}` : "Package / TK"}
+            </div>
+          </div>
+        ),
+    },
+    {
+      key: "record_type",
+      label: "Type",
+      search: (r) =>
+        r._orderKind === "cn"
+          ? "CN Purchase Order China"
+          : "Package TK Shipment",
+      render: (r) => (
+        <span
+          className={`inline-flex rounded-full px-2 py-1 text-[11px] font-bold ${r._orderKind === "cn" ? "bg-violet-50 text-violet-700" : "bg-blue-50 text-blue-700"}`}
+        >
+          {r._orderKind === "cn" ? "CN Order" : "Package / TK"}
+        </span>
+      ),
+    },
+    {
+      key: "amount",
+      label: "Amount",
+      search: (r) => `${r.total_due_usd ?? ""} ${r.shipping_fee ?? ""}`,
+      render: (r) =>
+        r._orderKind === "cn" ? (
+          <span className="font-bold text-slate-800">
+            {moneyS(r.total_due_usd || 0)}
+          </span>
+        ) : (
+          <ShippingFeeCell row={r} />
+        ),
+    },
+    {
+      key: "status",
+      label: "Status",
+      search: (r) =>
+        `${r.status || ""} ${r._orderKind === "cn" ? r.payment_status || "" : pkgDisplayStatus(r) || ""}`,
+      render: (r) => <StatusBadge label={orderStatusForFilter(r) || "—"} />,
+    },
+  ];
   const tabs = [
-    ["packages", "Packages / TK", packages.length],
+    ["orders", "Order", orderRows.length],
     ...(canViewAir ? [["air", "AIR · Indonesia", airList.length]] : []),
     ["transactions", "Transactions", tx.length],
     ["addresses", "Addresses", addrs.length],
@@ -49442,12 +50620,13 @@ function CustomerDetailPage() {
                 </button>
               ))}
             </div>
-            {tab === "packages" && (
+            {tab === "orders" && (
               <CdTable
-                cols={pkgCols}
-                rows={packages}
-                stages={PACKAGE_STAGES}
-                empty="No packages yet."
+                cols={orderCols}
+                rows={orderRows}
+                statusGroups={orderStatusGroups}
+                getStatus={orderStatusForFilter}
+                empty="No orders or packages for this customer yet."
               />
             )}
             {tab === "air" && (
@@ -54118,6 +55297,174 @@ function BrandHead() {
   return null;
 }
 
+// JEN-Z global date picker: consistent calendar UI for every native date field.
+function JenzGlobalDatePicker() {
+  const [target, setTarget] = useState(null);
+  const [viewMonth, setViewMonth] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [selected, setSelected] = useState("");
+  const [rect, setRect] = useState(null);
+  useEffect(() => {
+    const open = (event) => {
+      const input = event.target?.closest?.('input[type="date"]');
+      if (!input || input.disabled || input.readOnly) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const d = input.value ? new Date(`${input.value}T12:00:00`) : new Date();
+      setTarget(input);
+      setSelected(input.value || "");
+      setViewMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+      const r = input.getBoundingClientRect();
+      setRect({
+        left: Math.max(12, Math.min(r.left, window.innerWidth - 320)),
+        top: Math.min(r.bottom + 8, window.innerHeight - 390),
+        width: r.width,
+      });
+    };
+    document.addEventListener("pointerdown", open, true);
+    return () => document.removeEventListener("pointerdown", open, true);
+  }, []);
+  useEffect(() => {
+    if (!target) return;
+    const dismiss = (e) => {
+      if (
+        !e.target.closest?.("[data-jenz-date-popover]") &&
+        e.target !== target
+      )
+        setTarget(null);
+    };
+    const reposition = () => {
+      const r = target.getBoundingClientRect();
+      setRect({
+        left: Math.max(12, Math.min(r.left, window.innerWidth - 320)),
+        top: Math.min(r.bottom + 8, window.innerHeight - 390),
+        width: r.width,
+      });
+    };
+    document.addEventListener("pointerdown", dismiss, true);
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      document.removeEventListener("pointerdown", dismiss, true);
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [target]);
+  const apply = (value) => {
+    if (!target) return;
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value",
+    )?.set;
+    setter?.call(target, value);
+    target.dispatchEvent(new Event("input", { bubbles: true }));
+    target.dispatchEvent(new Event("change", { bubbles: true }));
+    setSelected(value);
+    setTarget(null);
+  };
+  if (!target || !rect) return null;
+  const year = viewMonth.getFullYear(),
+    month = viewMonth.getMonth();
+  const firstDay = new Date(year, month, 1);
+  const mondayOffset = (firstDay.getDay() + 6) % 7;
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const today = new Date();
+  const iso = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const cells = Array.from({ length: 42 }, (_, i) => {
+    const d = new Date(year, month, i - mondayOffset + 1);
+    return { date: d, value: iso(d), inMonth: d.getMonth() === month };
+  });
+  return createPortal(
+    <>
+      <style>{`@keyframes jenzCalendarIn{from{opacity:0;transform:translateY(-7px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}} .jenz-date-pop{animation:jenzCalendarIn .18s cubic-bezier(.2,.8,.2,1);transform-origin:top left}`}</style>
+      <div
+        data-jenz-date-popover
+        style={{
+          position: "fixed",
+          zIndex: 99999,
+          left: rect.left,
+          top: Math.max(12, rect.top),
+          width: 308,
+        }}
+        className="jenz-date-pop rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl shadow-slate-900/15 text-slate-800"
+      >
+        <div className="flex items-center justify-between gap-2 mb-4">
+          <div className="font-semibold text-[14px]">
+            {viewMonth.toLocaleDateString("en-US", {
+              month: "long",
+              year: "numeric",
+            })}
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              aria-label="Previous month"
+              className="h-8 w-8 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition"
+              onClick={() => setViewMonth(new Date(year, month - 1, 1))}
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              aria-label="Next month"
+              className="h-8 w-8 rounded-lg hover:bg-blue-50 hover:text-blue-600 transition"
+              onClick={() => setViewMonth(new Date(year, month + 1, 1))}
+            >
+              ›
+            </button>
+          </div>
+        </div>
+        <div className="grid grid-cols-7 mb-2 border-b border-slate-100 pb-2">
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((x) => (
+            <div
+              key={x}
+              className="text-center text-[11px] font-semibold text-slate-400"
+            >
+              {x}
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-y-1">
+          {cells.map(({ date, value, inMonth }) => {
+            const active = value === selected;
+            const isToday = value === iso(today);
+            return (
+              <button
+                key={value}
+                type="button"
+                onClick={() => apply(value)}
+                className={`mx-auto grid h-8 w-8 place-items-center rounded-full text-[12px] transition-all duration-150 hover:scale-105 hover:bg-blue-50 hover:text-blue-700 ${active ? "!bg-blue-600 !text-white shadow-md shadow-blue-600/25" : isToday ? "ring-1 ring-blue-200 text-blue-700" : inMonth ? "text-slate-700" : "text-slate-300"}`}
+              >
+                {date.getDate()}
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between">
+          <button
+            type="button"
+            className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-500 hover:bg-slate-100 transition"
+            onClick={() => apply("")}
+          >
+            Clear
+          </button>
+          <button
+            type="button"
+            className="rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 transition"
+            onClick={() => apply(iso(today))}
+          >
+            Today
+          </button>
+        </div>
+      </div>
+    </>,
+    document.body,
+  );
+}
+
 function App() {
   return (
     <>
@@ -54125,6 +55472,7 @@ function App() {
       <style>{CB_DESIGN_CSS}</style>
       <GlobalToastHost />
       <GlobalConfirmHost />
+      <JenzGlobalDatePicker />
       <Routes>
         <Route path="/customer/*" element={<CustomerApp />} />
         <Route path="/*" element={<AdminApp />} />
