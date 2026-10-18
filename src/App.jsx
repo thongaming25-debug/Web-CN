@@ -38082,6 +38082,8 @@ const cnLinkKey = (t) =>
 function cnStatusIndex(status) {
   return CN_ORDER_STATUS_FLOW.indexOf(cnNormalizeStatus(status));
 }
+// One distinct colour family per status so no two stages look alike.
+// Staff and customer names of the same stage share the same colour.
 function cnStatusTone(status) {
   switch (cnNormalizeStatus(status)) {
     case "Order Processing":
@@ -38091,36 +38093,31 @@ function cnStatusTone(status) {
       // Match the customer-facing Pending Shipping Payment badge.
       return "bg-red-50 text-red-600";
     case "Approve Purchase":
-      return "bg-indigo-50 text-indigo-700";
-    case "Intransit":
-      return "bg-blue-50 text-blue-700";
-    case "Inbound Origin":
-      return "bg-violet-50 text-violet-700";
-    case "Outbound Origin":
-      return "bg-amber-50 text-amber-700";
-    case "Arrive Destination":
-      return "bg-teal-50 text-teal-700";
-    case "Delivery":
-      return "bg-cyan-50 text-cyan-700";
-    case "Completed":
-      return "bg-emerald-50 text-emerald-700";
+      return "bg-indigo-100 text-indigo-700";
     case "Purchased":
-      return "bg-sky-50 text-sky-700";
+      return "bg-pink-100 text-pink-700";
+    case "Intransit":
     case "Shipping to China WH":
-      return "bg-blue-50 text-blue-700";
+      return "bg-blue-100 text-blue-700";
+    case "Inbound Origin":
     case "Inbound":
-      return "bg-violet-50 text-violet-700";
+      return "bg-violet-100 text-violet-700";
+    case "Outbound Origin":
     case "Outbound":
-      return "bg-amber-50 text-amber-700";
+      return "bg-orange-100 text-orange-700";
+    case "Arrive Destination":
     case "Arrived":
-      return "bg-teal-50 text-teal-700";
+      return "bg-cyan-100 text-cyan-800";
+    case "Delivery":
     case "Shipping to Branch":
-      return "bg-cyan-50 text-cyan-700";
+      return "bg-lime-100 text-lime-800";
     case "Inbound Warehouse":
+      return "bg-teal-100 text-teal-800";
+    case "Completed":
     case "Complete Order":
-      return "bg-emerald-50 text-emerald-700";
+      return "bg-emerald-100 text-emerald-700";
     case CN_ORDER_TERMINAL:
-      return "bg-red-50 text-red-700";
+      return "bg-red-600 text-white";
     default:
       return "bg-slate-100 text-slate-600";
   }
@@ -42482,7 +42479,7 @@ function CnOrdersPage() {
                         </td>
                         <td className="px-4 py-3">
                           <span
-                            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${p.status === "Completed" ? "bg-emerald-50 text-emerald-700" : p.status === "Inbound Warehouse" ? "bg-signal-blue/5 text-signal-blue" : "bg-mist-100 text-ink-800"}`}
+                            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${statusToneClass(p.status) || "bg-mist-100 text-ink-800"}`}
                           >
                             {p.status || "Unknown"}
                           </span>
