@@ -1935,6 +1935,18 @@ const MODULES = {
             </span>
           ),
       }),
+      col("type", "Type", {
+        render: (row) =>
+          row.cn_order_id ? (
+            <span className="inline-flex items-center rounded-full bg-violet-50 text-violet-700 px-2.5 py-1 text-[11px] font-semibold">
+              Parse Link
+            </span>
+          ) : (
+            <span className="inline-flex items-center rounded-full bg-sky-50 text-sky-700 px-2.5 py-1 text-[11px] font-semibold">
+              Shipment
+            </span>
+          ),
+      }),
       col("cargo", "Cargo"),
       col("weight", "Weight"),
       col("cbm", "CBM"),
@@ -3598,6 +3610,9 @@ function decoratePackageRow(p) {
     source: p.cn_order_id
       ? CN_ORDER_NO_BY_ID[p.cn_order_id] || "CN Order"
       : "Direct",
+    // Type: "Parse Link" = we bought it for the customer (CN Purchase Order),
+    // "Shipment" = customer bought it and sent it to us. Display-only.
+    type: p.cn_order_id ? "Parse Link" : "Shipment",
   };
 }
 
@@ -5131,8 +5146,11 @@ function PackageTrackingProvider({ children }) {
           label,
           state: statusIndex === PACKAGE_STAGES.length - 1 ? "done" : "active",
           time: loggedTime || previous?.time || now,
+          // Who really processed THIS stage: the shared log entry first,
+          // then the package's last editor. The per-browser cache is only a
+          // last resort (it can still hold the first person's name).
           proceedBy:
-            loggedBy || previous?.proceedBy || dbPackage?.updated_by || null,
+            loggedBy || dbPackage?.updated_by || previous?.proceedBy || null,
         };
       }
       return { label, state: "pending", time: null, proceedBy: null };
@@ -5438,10 +5456,12 @@ function PackageTrackingProvider({ children }) {
         // with no date until some later step marks it "done".
         const carriedTime =
           current[i]?.state === "active" ? current[i]?.time || now : now;
+        // The person who just processed this stage is who gets recorded;
+        // only fall back to the earlier name when none was passed in.
         const carriedProceedBy =
-          current[i]?.state === "active" && current[i]?.proceedBy
-            ? current[i].proceedBy
-            : proceedBy || null;
+          proceedBy ||
+          (current[i]?.state === "active" ? current[i]?.proceedBy : null) ||
+          null;
         return {
           label,
           time: carriedTime,
@@ -16841,9 +16861,11 @@ function WorkQueueRow({
 
 // ------------------------------------------------------------
 // Financial & Business Overview — values are loaded from Supabase.
-// Revenue = CN customer charges + AIR charges (when a known charge field
-// exists) + shipping fees on package rows. Collections use recorded paid
-// amounts only. No package/order totals are inferred from status counts.
+// Revenue = CN Purchase Order totals (payment already totalled on the order)
+// + shipping fees of Shipment packages (customer sent the goods, no CN order).
+// TKs that belong to a CN order are NOT added again. AIR is no longer used.
+// Collections use recorded paid amounts only. No totals are inferred from
+// status counts.
 // ------------------------------------------------------------
 const FINANCIAL_RANGE_OPTIONS = [
   ["date", "Date"],
@@ -17083,8 +17105,7 @@ function FinancialRevenueChart({ points, currency = "USD", onSelectPoint }) {
             </div>
             {[
               ["CN Purchase Orders", hovered.cn || 0],
-              ["AIR Shipment", hovered.air || 0],
-              ["Shipping fees", hovered.shipping || 0],
+              ["Shipping fees (Shipment)", hovered.shipping || 0],
             ].map(([label, amount]) => (
               <div
                 key={label}
@@ -17527,7 +17548,7 @@ function FinancialPeriodPicker({ range, from, to, setRange, setFrom, setTo }) {
   );
 }
 
-function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
+function FinancialDashboard({ showChina, onRefresh, refreshing }) {
   const localToday = () => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -17538,9 +17559,9 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
   const [view, setView] = useState("chart");
   const [rows, setRows] = useState({
     cn: [],
-    air: [],
     packages: [],
     wallet: [],
+    costs: [],
   });
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState([]);
@@ -17563,18 +17584,11 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
             .order("created_at", { ascending: false })
             .limit(10000)
         : Promise.resolve({ data: [], error: null }),
-      showAir
-        ? supabase
-            .from("air_orders")
-            .select("*")
-            .order("created_at", { ascending: false })
-            .limit(10000)
-        : Promise.resolve({ data: [], error: null }),
       showChina
         ? supabase
             .from("packages")
             .select(
-              "id,tk,status,freight_fee,paid_amount,created_at,updated_at,customer_id",
+              "id,tk,status,freight_fee,paid_amount,created_at,updated_at,customer_id,cn_order_id",
             )
             .order("created_at", { ascending: false })
             .limit(20000)
@@ -17584,30 +17598,38 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
         .select("*")
         .order("created_at", { ascending: false })
         .limit(10000),
+      // Internal actual cost (USD) per CN order. Staff-only table; a missing
+      // table / no permission just means "no costs recorded yet".
+      showChina
+        ? supabase
+            .from("cn_order_costs")
+            .select("cn_order_id,actual_cost_usd")
+            .limit(20000)
+        : Promise.resolve({ data: [], error: null }),
     ]);
     const labels = [
       "CN Purchase Orders",
-      "AIR Shipment",
       "Shipping fees",
       "Wallet activity",
+      "CN order costs",
     ];
     const nextErrors = tasks
       .map((r, i) =>
-        r?.error
+        r?.error && i !== 3
           ? `${labels[i]}: ${r.error.message || "Unable to load data"}`
           : null,
       )
       .filter(Boolean);
     setRows({
       cn: tasks[0]?.data || [],
-      air: tasks[1]?.data || [],
-      packages: tasks[2]?.data || [],
-      wallet: tasks[3]?.data || [],
+      packages: tasks[1]?.data || [],
+      wallet: tasks[2]?.data || [],
+      costs: tasks[3]?.error ? [] : tasks[3]?.data || [],
     });
     setErrors(nextErrors);
     setLastUpdated(new Date());
     setLoading(false);
-  }, [showChina, showAir]);
+  }, [showChina]);
 
   useEffect(() => {
     load();
@@ -17618,16 +17640,15 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
   const [start, end] = financialRangeBounds(range, from, to);
   const scoped = (list) => list.filter((r) => finDateInRange(r, start, end));
   const cn = scoped(rows.cn);
-  const air = scoped(rows.air);
   const packages = scoped(rows.packages);
   const wallet = scoped(rows.wallet);
   const activeCn = cn.filter((r) => !finIsRefunded(r));
-  const activeAir = air.filter((r) => !finIsRefunded(r));
   const cnRevenue = activeCn.reduce((s, r) => s + finCharge(r), 0);
-  const airRevenueRows = activeAir.filter(finHasCharge);
-  const airRevenue = airRevenueRows.reduce((s, r) => s + finCharge(r), 0);
+  // Shipping fee revenue = Shipment packages only. A TK linked to a CN order
+  // (Parse Link) is already inside that order's total, so it is skipped.
   const shippingRows = packages.filter(
     (r) =>
+      !r.cn_order_id &&
       r.freight_fee !== null &&
       r.freight_fee !== undefined &&
       String(r.freight_fee).trim() !== "" &&
@@ -17637,10 +17658,9 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
     (s, r) => s + Math.max(0, Number(r.freight_fee) || 0),
     0,
   );
-  const totalRevenue = cnRevenue + airRevenue + shippingRevenue;
+  const totalRevenue = cnRevenue + shippingRevenue;
   const totalCollected =
     activeCn.reduce((s, r) => s + finPaid(r), 0) +
-    activeAir.reduce((s, r) => s + finPaid(r), 0) +
     shippingRows.reduce(
       (s, r) => s + Math.max(0, finNum(r.paid_amount) ?? 0),
       0,
@@ -17648,10 +17668,6 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
   const outstanding = Math.max(
     0,
     activeCn.reduce((s, r) => s + Math.max(0, finCharge(r) - finPaid(r)), 0) +
-      activeAir.reduce(
-        (s, r) => s + Math.max(0, finCharge(r) - finPaid(r)),
-        0,
-      ) +
       shippingRows.reduce(
         (s, r) =>
           s +
@@ -17675,39 +17691,32 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
         ) ?? 0),
       0,
     );
-  const refundedAir = air
-    .filter(finIsRefunded)
-    .reduce(
-      (s, r) =>
-        s +
-        (finNum(
-          r.refund_amount_usd,
-          r.refunded_amount_usd,
-          r.amount_refunded_usd,
-          r.amount_paid_usd,
-          r.paid_amount_usd,
-          r.amount_paid,
-        ) ?? 0),
-      0,
-    );
-  const refunds = refundedCn + refundedAir;
-  const purchaseCosts = activeCn.map((r) => finPurchaseCost(r));
-  const airCosts = activeAir.map((r) => finPurchaseCost(r));
-  // Shipping-fee revenue also needs a corresponding actual-cost field before
-  // we can safely call the result profit/loss. Missing cost is never zero.
-  const shippingCosts = shippingRows.map((r) =>
-    finNum(
-      r.actual_shipping_cost_usd,
-      r.shipping_cost_usd,
-      r.freight_cost_usd,
-      r.actual_freight_cost_usd,
-    ),
+  const refunds = refundedCn;
+  // Actual cost per CN order: the staff-only USD cost first, then the older
+  // CNY/rate fields. A missing cost is never treated as zero.
+  const costByOrder = new Map(
+    (rows.costs || []).map((c) => [
+      String(c.cn_order_id),
+      finNum(c.actual_cost_usd),
+    ]),
   );
-  const allCosts = [...purchaseCosts, ...airCosts, ...shippingCosts];
-  const costComplete = allCosts.length > 0 && allCosts.every((v) => v !== null);
-  const costCount = allCosts.filter((v) => v !== null).length;
-  const purchaseAmount = allCosts.reduce((s, v) => s + (v ?? 0), 0);
-  const profit = costComplete ? totalRevenue - purchaseAmount : null;
+  const purchaseCosts = activeCn.map(
+    (r) => costByOrder.get(String(r.id)) ?? finPurchaseCost(r),
+  );
+  const costComplete =
+    purchaseCosts.length > 0 && purchaseCosts.every((v) => v !== null);
+  const costCount = purchaseCosts.filter((v) => v !== null).length;
+  const purchaseAmount = purchaseCosts.reduce((s, v) => s + (v ?? 0), 0);
+  // Purchase Profit = billed charge - actual cost, only for orders whose
+  // cost is known. Shipment shipping fees have no cost field yet, so they
+  // are not part of this profit figure.
+  const purchaseProfit =
+    costCount > 0
+      ? activeCn.reduce((sum, r, i) => {
+          const cost = purchaseCosts[i];
+          return cost === null ? sum : sum + (finCharge(r) - cost);
+        }, 0)
+      : null;
   const walletTopups = wallet
     .filter((r) =>
       ["top_up", "deposit", "credit", "topup"].includes(
@@ -17738,13 +17747,6 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
           amount: finCharge(r),
           source: "cn",
         })),
-      ...air
-        .filter((r) => !finIsRefunded(r) && finHasCharge(r))
-        .map((r) => ({
-          date: r.created_at,
-          amount: finCharge(r),
-          source: "air",
-        })),
       ...shippingRows.map((r) => ({
         date: r.created_at,
         amount: Math.max(0, Number(r.freight_fee) || 0),
@@ -17757,7 +17759,7 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
       const d = new Date(r.date);
       if (Number.isNaN(d.getTime())) return;
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      const item = map.get(key) || { value: 0, cn: 0, air: 0, shipping: 0 };
+      const item = map.get(key) || { value: 0, cn: 0, shipping: 0 };
       item.value += r.amount;
       item[r.source] += r.amount;
       map.set(key, item);
@@ -17773,7 +17775,6 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
         const amounts = map.get(key) || {
           value: 0,
           cn: 0,
-          air: 0,
           shipping: 0,
         };
         days.push({
@@ -17792,7 +17793,7 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
       );
     }
     return days;
-  }, [rows, range, from, to, showChina, showAir]);
+  }, [rows, range, from, to, showChina]);
 
   const dateText =
     start && end
@@ -17802,7 +17803,7 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
     {
       label: "Total Revenue",
       value: finMoney(totalRevenue),
-      detail: "CN orders + AIR + shipping fees",
+      detail: "CN orders + Shipment shipping fees",
       tone: "blue",
       icon: "TrendingUp",
     },
@@ -17825,27 +17826,35 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
       value: finMoney(purchaseAmount),
       detail: costComplete
         ? "Actual costs available"
-        : `${costCount} of ${allCosts.length} order costs available`,
+        : `${costCount} of ${purchaseCosts.length} CN orders have cost`,
       tone: "violet",
       icon: "ShoppingCart",
     },
     {
       label: "Refunds",
       value: finMoney(refunds),
-      detail: "Refunded CN + AIR orders",
+      detail: "Refunded CN orders",
       tone: "red",
       icon: "RotateCcw",
     },
     {
-      label: "Profit / Loss",
-      value: profit === null ? "Incomplete data" : finMoney(profit),
+      label: "Purchase Profit (CN Orders)",
+      value:
+        purchaseProfit === null ? "Cost pending" : finMoney(purchaseProfit),
       detail:
-        profit === null
-          ? "Actual purchase costs are missing for some orders"
-          : profit >= 0
-            ? "Revenue less recorded purchase costs"
-            : "Recorded costs exceed revenue",
-      tone: profit === null ? "slate" : profit >= 0 ? "green" : "red",
+        purchaseProfit === null
+          ? "No actual cost recorded yet"
+          : costComplete
+            ? purchaseProfit >= 0
+              ? "Billed amount less actual cost"
+              : "Actual cost exceeds billed amount"
+            : `Only the ${costCount} orders that have cost`,
+      tone:
+        purchaseProfit === null
+          ? "slate"
+          : purchaseProfit >= 0
+            ? "green"
+            : "red",
       icon: "Scale",
     },
   ];
@@ -17957,11 +17966,13 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
         <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-900">
           <Icon name="Info" size={18} className="mt-0.5 shrink-0" />
           <div>
-            <p className="font-semibold">Profit / Loss is not yet final.</p>
+            <p className="font-semibold">
+              Purchase Profit counts only orders with a recorded cost.
+            </p>
             <p className="mt-0.5 text-xs leading-5">
-              Only recorded actual purchase costs with a valid conversion rate
-              are counted. Missing cost data is not treated as zero, so the
-              dashboard avoids presenting an unreliable profit figure.
+              Orders without an actual cost are left out, not treated as zero.
+              Record it later from CN Purchase Orders, Actual Cost. Shipping
+              profit is not included until a shipping cost is tracked.
             </p>
           </div>
         </div>
@@ -17973,8 +17984,7 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
             <div>
               <h2 className="font-semibold text-ink-900">Revenue Trend</h2>
               <p className="mt-0.5 text-xs text-ink-600/55">
-                Daily billed revenue from CN orders, AIR charges and shipping
-                fees
+                Daily billed revenue from CN orders and Shipment shipping fees
               </p>
             </div>
             <div className="inline-flex rounded-lg border border-mist-200 p-1">
@@ -18137,25 +18147,8 @@ function FinancialDashboard({ showChina, showAir, onRefresh, refreshing }) {
               </tr>
               <tr>
                 <td className="px-4 py-3 font-medium">
-                  AIR Shipment{" "}
-                  {airRevenueRows.length !== air.length ? (
-                    <span className="ml-1 text-xs text-amber-700">
-                      (some charge fields unavailable)
-                    </span>
-                  ) : null}
+                  Shipping Fees (Shipment)
                 </td>
-                <td className="px-4 py-3 text-right tabular-nums">
-                  {air.length.toLocaleString("en-US")}
-                </td>
-                <td className="px-4 py-3 text-right tabular-nums">
-                  {finMoney(airRevenue)}
-                </td>
-                <td className="px-4 py-3 text-right tabular-nums">
-                  {finMoney(activeAir.reduce((s, r) => s + finPaid(r), 0))}
-                </td>
-              </tr>
-              <tr>
-                <td className="px-4 py-3 font-medium">Shipping Fees</td>
                 <td className="px-4 py-3 text-right tabular-nums">
                   {shippingRows.length.toLocaleString("en-US")}
                 </td>
@@ -18184,7 +18177,6 @@ function Dashboard() {
   const { refetch } = usePackageTracking();
   const [refreshing, setRefreshing] = useState(false);
   const showChina = hasPermission(user, "dashboard.china");
-  const showAir = !CHINA_ONLY && hasPermission(user, "dashboard.air");
   const handleRefresh = async () => {
     if (refreshing) return;
     setRefreshing(true);
@@ -18194,7 +18186,7 @@ function Dashboard() {
       setRefreshing(false);
     }
   };
-  if (!showChina && !showAir) {
+  if (!showChina) {
     return (
       <div className="cb-surface p-8 text-center">
         <Icons.LayoutDashboard
@@ -18214,7 +18206,6 @@ function Dashboard() {
   return (
     <FinancialDashboard
       showChina={showChina}
-      showAir={showAir}
       onRefresh={handleRefresh}
       refreshing={refreshing}
     />
@@ -18279,6 +18270,7 @@ function normalizeAirLookupRow(r) {
   return {
     ...a,
     source: "AIR",
+    type_display: "Shipment",
     order_display: a.order_id || "—",
     tk_display: a.tk || "—",
     product_display: a.product_name || "—",
@@ -18295,6 +18287,44 @@ function normalizeAirLookupRow(r) {
 }
 const lookupOriginOf = (row) => (row.source === "AIR" ? "Indonesia" : "China");
 
+// A CN Purchase Order that has no TK yet (Order Processing, Purchased, ...)
+// still has to be findable. Shown as a row with no tracking number.
+function normalizeCnOrderLookupRow(o) {
+  const customerLabel = o.customer || "";
+  return {
+    id: o.id,
+    source: "CN",
+    order_id: o.order_id,
+    type_display: "Parse Link",
+    cn_order_display: o.order_id || "",
+    order_display: o.order_id || "—",
+    tk_display: "—",
+    product_display: o.product_name || "—",
+    shop_display: o.shop_name || "",
+    warehouse_display: "—",
+    shipping_method_display: "—",
+    status_display: o.status || "—",
+    customer_display: customerLabel || "—",
+    customer_code_display: String(customerLabel).split(" · ")[0].trim() || "—",
+  };
+}
+
+// Search-by options for the Shipment Lookup dropdown.
+const LOOKUP_FIELDS = [
+  { key: "customer_id", label: "Customer ID" },
+  { key: "customer_name", label: "Customer Name" },
+  { key: "phone", label: "Phone Number" },
+  { key: "tk", label: "Tracking Number" },
+  { key: "order_id", label: "Order ID" },
+];
+// Only used for old links like /shipment-lookup?q=... that carry no field.
+function inferLookupField(q) {
+  const v = String(q || "").trim();
+  if (/^KH-/i.test(v)) return "customer_id";
+  if (/^(THN|CN|JZE|AIR)/i.test(v)) return "order_id";
+  return "tk";
+}
+
 function ShipmentLookup() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -18307,6 +18337,10 @@ function ShipmentLookup() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [originFilter, setOriginFilter] = useState(""); // "" | "China" | "Indonesia"
+  const [searchField, setSearchField] = useState("customer_id");
+  const [fieldOpen, setFieldOpen] = useState(false);
+  const activeField =
+    LOOKUP_FIELDS.find((f) => f.key === searchField) || LOOKUP_FIELDS[0];
 
   const normalize = React.useCallback(
     (pkg, containerMap, warehouseMap, orderMap) => {
@@ -18323,6 +18357,12 @@ function ShipmentLookup() {
       return {
         ...pkg,
         source: "CHINA",
+        // Parse Link = we bought it for the customer (CN Purchase Order);
+        // Shipment = customer sent the goods to us.
+        type_display: pkg.cn_order_id ? "Parse Link" : "Shipment",
+        cn_order_display: pkg.cn_order_id
+          ? CN_ORDER_NO_BY_ID[pkg.cn_order_id] || ""
+          : "",
         order_display: pkg.order_no || order?.order_no || pkg.order_id || "—",
         tk_display: pkg.tk || "—",
         product_display: pkg.product_name || pkg.cargo_type || "—",
@@ -18356,7 +18396,9 @@ function ShipmentLookup() {
     [],
   );
 
-  async function runSearch(rawValue) {
+  // Each search field only searches its own data, so picking
+  // "Customer Name" can never be confused with a Customer ID / TK / Order ID.
+  async function runSearch(rawValue, fieldKey = searchField) {
     const query = String(rawValue || "").trim();
     if (!query) return;
 
@@ -18367,105 +18409,179 @@ function ShipmentLookup() {
     setOriginFilter("");
 
     try {
-      // Search the live package/order/warehouse/container sources in parallel.
-      // This keeps the result fresh and lets the UI show one animated loading
-      // state while all sources are being resolved.
       if (supabase) {
         const q = query.replace(/[%_]/g, "\\$&");
-        const [pkgRes, orderRes, containerRes, customerRes] = await Promise.all(
-          [
-            supabase
+        const qa = q.replace(/[,()]/g, " ").trim();
+        const isCustomerField = [
+          "customer_id",
+          "customer_name",
+          "phone",
+        ].includes(fieldKey);
+
+        // 1) Customer fields: resolve matching customers first (text columns
+        //    only - never ILIKE a UUID), then fetch records by exact UUID.
+        let customerIds = [];
+        if (isCustomerField) {
+          const customerCol =
+            fieldKey === "customer_id"
+              ? "customer_code"
+              : fieldKey === "customer_name"
+                ? "name"
+                : "phone";
+          const { data: custs, error: custErr } = await supabase
+            .from("customers")
+            .select("id")
+            .ilike(customerCol, `%${qa}%`)
+            .limit(100);
+          if (custErr) throw custErr;
+          customerIds = (custs || []).map((c) => c.id).filter(Boolean);
+        }
+        const ids100 = customerIds.slice(0, 100);
+
+        // 2) China packages (TK)
+        let matchedPackages = [];
+        if (isCustomerField) {
+          if (ids100.length) {
+            const { data, error: e } = await supabase
               .from("packages")
               .select("*")
-              .or(
-                `tk.ilike.%${q}%,order_no.ilike.%${q}%,customer.ilike.%${q}%,product_name.ilike.%${q}%,dest_branch_code.ilike.%${q}%`,
-              )
+              .in("customer_id", ids100)
               .order("created_at", { ascending: false })
-              .limit(500),
-            supabase
-              .from("orders")
+              .limit(500);
+            if (e) throw e;
+            matchedPackages = data || [];
+          }
+        } else {
+          const col = fieldKey === "tk" ? "tk" : "order_no";
+          const { data, error: e } = await supabase
+            .from("packages")
+            .select("*")
+            .ilike(col, `%${qa}%`)
+            .order("created_at", { ascending: false })
+            .limit(500);
+          if (e) throw e;
+          matchedPackages = data || [];
+        }
+
+        // 3) CN Purchase Orders (any status, with or without TK)
+        let cnOrders = [];
+        try {
+          const cnCalls = [];
+          if (isCustomerField) {
+            if (ids100.length) {
+              cnCalls.push(
+                supabase
+                  .from("cn_orders")
+                  .select("*")
+                  .in("customer_id", ids100)
+                  .order("created_at", { ascending: false })
+                  .limit(500),
+              );
+            }
+          } else if (fieldKey === "order_id") {
+            cnCalls.push(
+              supabase
+                .from("cn_orders")
+                .select("*")
+                .ilike("order_id", `%${qa}%`)
+                .order("created_at", { ascending: false })
+                .limit(500),
+            );
+          } else if (fieldKey === "tk") {
+            // a CN order not yet linked to a TK is found by its domestic
+            // tracking number (cn_order_parcels)
+            const { data: parcels } = await supabase
+              .from("cn_order_parcels")
+              .select("cn_order_id")
+              .ilike("domestic_tracking", `%${qa}%`)
+              .limit(200);
+            const pIds = [
+              ...new Set(
+                (parcels || []).map((x) => x.cn_order_id).filter(Boolean),
+              ),
+            ].slice(0, 100);
+            if (pIds.length) {
+              cnCalls.push(
+                supabase.from("cn_orders").select("*").in("id", pIds),
+              );
+            }
+          }
+          const cnRes = await Promise.all(cnCalls);
+          const cnById = new Map();
+          cnRes.forEach((r) =>
+            (r.data || []).forEach((x) => cnById.set(String(x.id), x)),
+          );
+          cnOrders = [...cnById.values()];
+          cnOrders.forEach((o) => {
+            if (o.id && o.order_id) CN_ORDER_NO_BY_ID[o.id] = o.order_id;
+          });
+          // TKs that belong to the matched CN orders
+          const cnIds = cnOrders
+            .map((o) => o.id)
+            .filter(Boolean)
+            .slice(0, 100);
+          if (cnIds.length) {
+            const { data: cnPkgs } = await supabase
+              .from("packages")
               .select("*")
-              .or(`order_no.ilike.%${q}%,customer.ilike.%${q}%`)
-              .order("created_at", { ascending: false })
-              .limit(100),
-            CHINA_ONLY
-              ? Promise.resolve({ data: [], error: null })
-              : supabase
-                  .from("containers")
-                  .select("container_number, container_type, shipping_method")
-                  .limit(1000),
-            supabase
-              .from("customers")
-              .select("id, customer_code, name, phone")
-              .or(
-                `customer_code.ilike.%${q}%,name.ilike.%${q}%,phone.ilike.%${q}%`,
-              )
-              .limit(100),
-          ],
-        );
-
-        if (pkgRes.error) throw pkgRes.error;
-
-        const orderMap = {};
-        for (const order of orderRes.data || []) {
-          const keys = [order.order_no, order.id].filter(Boolean);
-          keys.forEach((key) => {
-            orderMap[String(key).trim().toLowerCase()] = order;
+              .in("cn_order_id", cnIds)
+              .limit(500);
+            const byTk = new Map(matchedPackages.map((p) => [String(p.tk), p]));
+            (cnPkgs || []).forEach((p) => byTk.set(String(p.tk), p));
+            matchedPackages = [...byTk.values()];
+          }
+        } catch (cnErr) {
+          console.warn("[shipment-lookup] CN order search skipped", cnErr);
+        }
+        // make sure Parse Link TKs show their CN order number
+        const unknownCn = [
+          ...new Set(
+            matchedPackages
+              .map((p) => p.cn_order_id)
+              .filter((id) => id && !CN_ORDER_NO_BY_ID[id]),
+          ),
+        ].slice(0, 100);
+        if (unknownCn.length) {
+          const { data: cns } = await supabase
+            .from("cn_orders")
+            .select("id,order_id")
+            .in("id", unknownCn);
+          (cns || []).forEach((c) => {
+            CN_ORDER_NO_BY_ID[c.id] = c.order_id;
           });
         }
 
-        // If the search matched an order/customer but not the package query,
-        // fetch the packages belonging to those matched orders as well.
-        let matchedPackages = pkgRes.data || [];
-
-        // Customer ID search: customer_code is text, while customers.id is UUID.
-        // Never use ILIKE against UUID columns; use the text customer_code to
-        // discover matching customers, then fetch packages by exact UUID.
-        const customerIds = (customerRes.data || [])
-          .map((c) => c.id)
-          .filter(Boolean);
-        if (customerIds.length) {
-          const { data: customerPackages, error: customerPkgError } =
-            await supabase
-              .from("packages")
-              .select("*")
-              .in("customer_id", customerIds.slice(0, 100))
-              .limit(500);
-          if (!customerPkgError && customerPackages?.length) {
-            const byTk = new Map(matchedPackages.map((p) => [String(p.tk), p]));
-            customerPackages.forEach((p) => byTk.set(String(p.tk), p));
-            matchedPackages = [...byTk.values()];
-          }
+        // 4) Lookup tables for the package rows (orders, containers, branches)
+        const orderNos = [
+          ...new Set(
+            matchedPackages
+              .map((p) => p.order_no || p.order_id)
+              .filter(Boolean),
+          ),
+        ].slice(0, 200);
+        const [orderRes, containerRes] = await Promise.all([
+          orderNos.length
+            ? supabase.from("orders").select("*").in("order_no", orderNos)
+            : Promise.resolve({ data: [], error: null }),
+          CHINA_ONLY || !matchedPackages.length
+            ? Promise.resolve({ data: [], error: null })
+            : supabase
+                .from("containers")
+                .select("container_number, container_type, shipping_method")
+                .limit(1000),
+        ]);
+        const orderMap = {};
+        for (const order of orderRes.data || []) {
+          [order.order_no, order.id].filter(Boolean).forEach((key) => {
+            orderMap[String(key).trim().toLowerCase()] = order;
+          });
         }
-
-        const orderIds = (orderRes.data || [])
-          .flatMap((o) => [o.order_no, o.id])
-          .filter(Boolean);
-        if (orderIds.length) {
-          const safeOrderIds = [...new Set(orderIds)].slice(0, 100);
-          const { data: orderPackages, error: orderPkgError } = await supabase
-            .from("packages")
-            .select("*")
-            .or(
-              safeOrderIds
-                .map((id) => `order_no.eq.${String(id).replace(/[,()]/g, "")}`)
-                .join(","),
-            )
-            .limit(500);
-          if (!orderPkgError && orderPackages?.length) {
-            const byTk = new Map(matchedPackages.map((p) => [String(p.tk), p]));
-            orderPackages.forEach((p) => byTk.set(String(p.tk), p));
-            matchedPackages = [...byTk.values()];
-          }
-        }
-
         const containerMap = {};
         for (const c of containerRes.data || []) {
           if (c.container_number) {
             containerMap[String(c.container_number).trim().toLowerCase()] = c;
           }
         }
-
         const branchCodes = [
           ...new Set(
             matchedPackages
@@ -18488,83 +18604,72 @@ function ShipmentLookup() {
             warehouseMap[String(wh.code).trim().toLowerCase()] = wh;
           }
         }
-
         const chinaRows = matchedPackages.map((pkg) =>
           normalize(pkg, containerMap, warehouseMap, orderMap),
         );
 
-        // AIR (Indonesia): search air_orders by Shop Order ID, TK, customer
-        // label (code + name), shop, product, and by matched customer ids.
-        // A failure here (e.g. table missing) must never break the China search.
+        // CN orders that have no TK yet become their own rows
+        const withTk = new Set(
+          matchedPackages.map((p) => p.cn_order_id).filter(Boolean),
+        );
+        const cnOnlyRows = cnOrders
+          .filter((o) => !withTk.has(o.id))
+          .map(normalizeCnOrderLookupRow);
+
+        // 5) AIR (Indonesia). A failure here must never break China search.
         let airRows = [];
         try {
           if (!canAir) throw new Error("no-air-permission");
-          const qa = q.replace(/[,()]/g, " ").trim();
-          const airCalls = [
-            supabase
-              .from("air_orders")
-              .select("*")
-              .or(
-                `order_id.ilike.%${qa}%,tk.ilike.%${qa}%,customer.ilike.%${qa}%,shop_name.ilike.%${qa}%,product_name.ilike.%${qa}%`,
-              )
-              .order("created_at", { ascending: false })
-              .limit(500),
-          ];
-          if (customerIds.length) {
-            airCalls.push(
-              supabase
-                .from("air_orders")
-                .select("*")
-                .in("customer_id", customerIds.slice(0, 100))
-                .order("created_at", { ascending: false })
-                .limit(500),
+          let airQuery = supabase.from("air_orders").select("*");
+          if (isCustomerField) {
+            if (!ids100.length) throw new Error("no-air-match");
+            airQuery = airQuery.in("customer_id", ids100);
+          } else {
+            airQuery = airQuery.ilike(
+              fieldKey === "tk" ? "tk" : "order_id",
+              `%${qa}%`,
             );
           }
-          const airRes = await Promise.all(airCalls);
-          const byId = new Map();
-          airRes.forEach((r) =>
-            (r.data || []).forEach((x) => byId.set(String(x.id), x)),
-          );
-          airRows = [...byId.values()].map(normalizeAirLookupRow);
+          const { data: airData } = await airQuery
+            .order("created_at", { ascending: false })
+            .limit(500);
+          airRows = (airData || []).map(normalizeAirLookupRow);
         } catch (airErr) {
-          if (airErr?.message !== "no-air-permission")
+          if (!["no-air-permission", "no-air-match"].includes(airErr?.message))
             console.warn("[shipment-lookup] AIR search skipped", airErr);
         }
-        setRows([...chinaRows, ...airRows]);
+        setRows([...chinaRows, ...cnOnlyRows, ...airRows]);
       } else {
-        // UI-only fallback: keep the existing local package registry working.
+        // UI-only fallback: same per-field rule over the local registry.
         const upper = query.toUpperCase();
-        const matches = packages.filter((p) => {
-          const haystack = [
-            p.tk,
-            p.order_no,
-            p.order_id,
-            p.customer,
-            p.customer_id,
-            p.product_name,
-            p.dest_branch_code,
-          ]
-            .filter(Boolean)
-            .join(" ")
-            .toUpperCase();
-          return haystack.includes(upper);
-        });
+        const labelName = (v) =>
+          String(v || "")
+            .split(" · ")
+            .slice(1)
+            .join(" · ");
+        const labelCode = (v) => String(v || "").split(" · ")[0];
+        const pick = (r, isAir) => {
+          switch (fieldKey) {
+            case "customer_id":
+              return labelCode(r.customer) || r.customer_id;
+            case "customer_name":
+              return labelName(r.customer);
+            case "phone":
+              return r.customer_phone || r.phone;
+            case "tk":
+              return r.tk;
+            default:
+              return isAir ? r.order_id : r.order_no || r.order_id;
+          }
+        };
+        const hit = (r, isAir) =>
+          String(pick(r, isAir) || "")
+            .toUpperCase()
+            .includes(upper);
+        const matches = packages.filter((p) => hit(p, false));
         const airMatches = (canAir ? airOrderLocalRows() : [])
           .map(normalizeAirRow)
-          .filter((r) =>
-            [
-              r.order_id,
-              r.tk,
-              r.customer,
-              r.customer_id,
-              r.shop_name,
-              r.product_name,
-            ]
-              .filter(Boolean)
-              .join(" ")
-              .toUpperCase()
-              .includes(upper),
-          )
+          .filter((r) => hit(r, true))
           .map(normalizeAirLookupRow);
         setRows([
           ...matches.map((pkg) => normalize(pkg, {}, {}, {})),
@@ -18583,8 +18688,13 @@ function ShipmentLookup() {
   useEffect(() => {
     const q = searchParams.get("q");
     if (q) {
+      const by = searchParams.get("by");
+      const field = LOOKUP_FIELDS.some((f) => f.key === by)
+        ? by
+        : inferLookupField(q);
+      setSearchField(field);
       setSearchValue(q);
-      runSearch(q);
+      runSearch(q, field);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
@@ -18617,38 +18727,82 @@ function ShipmentLookup() {
           Shipment Lookup
         </h1>
         <p className="text-sm text-ink-600/55 mt-1">
-          Search Customer ID, TK, Order ID, customer name, or Shipment ID and
-          view the related orders and packages — China (Land / Sea) and
-          Indonesia (AIR).
+          Choose what to search by, then enter it. Results cover China (Land /
+          Sea), CN Purchase Orders and Indonesia (AIR).
         </p>
       </div>
 
-      <div className="bg-white border border-mist-200 rounded-xl shadow-panel p-5">
-        <div className="flex gap-3 items-center flex-wrap">
-          <div className="relative flex-1 min-w-[280px]">
-            <Search
-              size={17}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-600/40"
-            />
-            <input
-              type="text"
-              value={searchValue}
-              onChange={(e) => setSearchValue(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-              placeholder="Search Order ID, TK, Customer..."
-              className="w-full pl-10 pr-4 py-3 border border-mist-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-signal-blue/30 focus:border-signal-blue"
-            />
-          </div>
+      <div className="bg-white border border-mist-200 rounded-xl shadow-panel p-3">
+        <div className="relative inline-flex w-full max-w-[460px] items-stretch rounded-lg border border-mist-300 bg-white focus-within:border-signal-blue focus-within:ring-2 focus-within:ring-signal-blue/20">
           <button
+            type="button"
+            onClick={() => setFieldOpen((o) => !o)}
+            className="flex shrink-0 items-center gap-1.5 rounded-l-lg border-r border-mist-200 px-3 py-2 text-sm font-medium text-ink-800 hover:bg-mist-50"
+          >
+            {activeField.label}
+            <Icons.ChevronDown size={14} className="text-ink-600/50" />
+          </button>
+          {fieldOpen && (
+            <>
+              <div
+                className="fixed inset-0 z-20"
+                onClick={() => setFieldOpen(false)}
+              />
+              <div className="absolute left-0 top-full z-30 mt-1 w-52 rounded-lg border border-mist-200 bg-white py-1 shadow-lg">
+                {LOOKUP_FIELDS.map((f) => (
+                  <button
+                    key={f.key}
+                    type="button"
+                    onClick={() => {
+                      setSearchField(f.key);
+                      setFieldOpen(false);
+                      setRows([]);
+                      setSearched(false);
+                      setError("");
+                    }}
+                    className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-mist-50 ${f.key === searchField ? "font-semibold text-signal-blue" : "text-ink-800"}`}
+                  >
+                    {f.label}
+                    {f.key === searchField && <Icons.Check size={14} />}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          <input
+            type="text"
+            value={searchValue}
+            onChange={(e) => setSearchValue(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+            placeholder={`Search ${activeField.label}`}
+            className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none"
+          />
+          <button
+            type="button"
             onClick={handleSearch}
             disabled={loading || !searchValue.trim()}
-            className="px-6 py-3 bg-signal-blue text-white rounded-lg text-sm font-semibold hover:bg-signal-blue/90 disabled:opacity-50 transition flex items-center gap-2"
+            aria-label="Search"
+            className="flex shrink-0 items-center rounded-r-lg border-l border-mist-200 px-3 text-ink-600/60 hover:bg-mist-50 hover:text-signal-blue disabled:opacity-40"
           >
             <Search size={16} />
-            {loading ? "Searching..." : "Search"}
           </button>
         </div>
       </div>
+
+      {!searched && !loading && (
+        <div className="bg-white border border-mist-200 rounded-xl p-10 text-center">
+          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-signal-blue/10 text-signal-blue">
+            <Search size={20} />
+          </div>
+          <p className="font-medium text-ink-800">
+            Look up a customer's orders
+          </p>
+          <p className="mx-auto mt-1 max-w-md text-sm text-ink-600/55">
+            Pick Customer ID, Customer Name, Phone Number, Tracking Number or
+            Order ID, then search to see the orders and packages.
+          </p>
+        </div>
+      )}
 
       {error && (
         <div className="bg-signal-red/5 border border-signal-red/20 rounded-xl px-4 py-3 text-sm text-signal-red">
@@ -18678,7 +18832,8 @@ function ShipmentLookup() {
           <Search size={28} className="mx-auto text-ink-600/20 mb-3" />
           <p className="font-medium text-ink-700">No results found</p>
           <p className="text-sm text-ink-600/45 mt-1">
-            Try another Order ID, TK, Customer ID, or customer name.
+            Nothing matched this {activeField.label}. Check the selected search
+            field and try again.
           </p>
         </div>
       )}
@@ -18720,12 +18875,13 @@ function ShipmentLookup() {
 
           <div className="cb-surface cb-card overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1350px] text-sm">
+              <table className="w-full min-w-[1450px] text-sm">
                 <thead>
                   <tr className="bg-mist-50 border-b border-mist-200 text-left">
                     {[
                       "Order ID",
                       "Origin",
+                      "Type",
                       "Tracking Number",
                       "Product",
                       "Customer",
@@ -18760,18 +18916,49 @@ function ShipmentLookup() {
                           >
                             {row.order_display}
                           </button>
-                        ) : (
-                          <div className="font-semibold text-ink-900">
+                        ) : row.source === "CN" ? (
+                          <button
+                            onClick={() =>
+                              navigate(
+                                `/cn-orders/${encodeURIComponent(row.order_id || row.cn_order_display)}`,
+                              )
+                            }
+                            className="font-semibold text-ink-900 hover:text-signal-blue hover:underline"
+                          >
                             {row.order_display}
-                          </div>
+                          </button>
+                        ) : (
+                          <>
+                            <div className="font-semibold text-ink-900">
+                              {row.order_display}
+                            </div>
+                            {row.cn_order_display && (
+                              <div className="text-xs text-violet-700 mt-0.5">
+                                {row.cn_order_display}
+                              </div>
+                            )}
+                          </>
                         )}
                       </td>
                       <td className="px-5 py-4 whitespace-nowrap">
                         <OriginBadge origin={lookupOriginOf(row)} />
                       </td>
                       <td className="px-5 py-4 whitespace-nowrap">
-                        {row.source === "AIR" ? (
-                          <span className="font-semibold text-signal-blue">
+                        <span
+                          className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${row.type_display === "Parse Link" ? "bg-violet-50 text-violet-700" : "bg-sky-50 text-sky-700"}`}
+                        >
+                          {row.type_display || "Shipment"}
+                        </span>
+                      </td>
+                      <td className="px-5 py-4 whitespace-nowrap">
+                        {row.source === "AIR" || row.source === "CN" ? (
+                          <span
+                            className={
+                              row.source === "AIR"
+                                ? "font-semibold text-signal-blue"
+                                : "text-ink-600/45"
+                            }
+                          >
                             {row.tk_display}
                           </span>
                         ) : (
@@ -18795,7 +18982,11 @@ function ShipmentLookup() {
                             ? row.shop_display
                               ? `Shop: ${row.shop_display}`
                               : "AIR Order"
-                            : row.cargo_type || row.package_type || "Package"}
+                            : row.source === "CN"
+                              ? row.shop_display
+                                ? `Shop: ${row.shop_display}`
+                                : "CN Purchase Order"
+                              : row.cargo_type || row.package_type || "Package"}
                         </div>
                       </td>
                       <td className="px-5 py-4 max-w-[210px]">
@@ -20751,7 +20942,9 @@ function PackageDetail() {
                   <Package size={22} />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-xs text-ink-600/50">Tracking Number</div>
+                  <div className="text-xs text-ink-600/50">
+                    Package · Tracking Number
+                  </div>
                   <div className="flex items-center gap-2">
                     <h1 className="font-display font-bold text-2xl text-ink-900 break-all">
                       {data.tk}
@@ -20769,13 +20962,20 @@ function PackageDetail() {
                       )}
                     </button>
                   </div>
-                  <div className="mt-1.5">
+                  <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
                     <StatusBadge
-                      label={pkgDisplayStatus({
-                        ...data,
-                        status: currentStage,
-                      })}
+                      label={tkUnifiedLabel(
+                        pkgDisplayStatus({
+                          ...data,
+                          status: currentStage,
+                        }),
+                      )}
                     />
+                    <span
+                      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${data.cn_order_id ? "bg-violet-50 text-violet-700" : "bg-sky-50 text-sky-700"}`}
+                    >
+                      {data.cn_order_id ? "Parse Link" : "Shipment"}
+                    </span>
                   </div>
                   <div className="text-[11px] text-ink-600/45 mt-1.5">
                     Last Updated: {lastUpdated}
@@ -20914,7 +21114,18 @@ function PackageDetail() {
                   <div className="min-w-0">
                     <div className="text-xs text-ink-600/50">{label}</div>
                     <div className="text-sm font-semibold text-ink-900 truncate">
-                      {value}
+                      {label === "Purchase Order" &&
+                      data.cn_order_id &&
+                      CN_ORDER_NO_BY_ID[data.cn_order_id] ? (
+                        <Link
+                          to={`/cn-orders/${encodeURIComponent(CN_ORDER_NO_BY_ID[data.cn_order_id])}`}
+                          className="text-signal-blue hover:underline"
+                        >
+                          {value}
+                        </Link>
+                      ) : (
+                        value
+                      )}
                     </div>
                     {sub && (
                       <div className="text-xs text-ink-600/45">{sub}</div>
@@ -21031,60 +21242,60 @@ function PackageDetail() {
                 </div>
               )}
 
-              {/* Horizontal stepper */}
+              {/* Vertical timeline - same look as the CN Order timeline */}
               <div className={`${CARD} p-5`}>
-                <div className="overflow-x-auto">
-                  <ol className="flex min-w-[560px]">
-                    {timeline.map((step, i) => {
-                      const done = step.state === "done";
-                      const active = step.state === "active";
-                      return (
-                        <li
-                          key={step.label}
-                          className="flex-1 flex flex-col items-center text-center relative"
-                        >
-                          {i < timeline.length - 1 && (
-                            <span
-                              className={`absolute top-4 left-1/2 w-full h-0.5 ${
-                                done ? "bg-signal-teal" : "bg-mist-200"
-                              }`}
-                            />
-                          )}
+                <h2 className="font-bold text-sm mb-5 text-ink-900">
+                  Package Timeline
+                </h2>
+                <div>
+                  {timeline.map((step, i) => {
+                    const done = step.state === "done";
+                    const active = step.state === "active";
+                    const isLast = i === timeline.length - 1;
+                    return (
+                      <div key={step.label} className="flex gap-3">
+                        <div className="flex flex-col items-center">
                           <span
-                            className={`relative z-10 w-8 h-8 rounded-full border-2 flex items-center justify-center ${
+                            className={`w-6 h-6 rounded-full grid place-items-center shrink-0 ${
                               done
-                                ? "bg-signal-teal border-signal-teal text-white"
+                                ? "bg-emerald-500 text-white"
                                 : active
-                                  ? "bg-signal-blue border-signal-blue text-white ring-4 ring-signal-blue/15"
-                                  : "bg-white border-mist-200 text-ink-600/30"
+                                  ? "bg-blue-600 text-white animate-pulse"
+                                  : "bg-white border-2 border-slate-200 text-transparent"
                             }`}
                           >
                             {done ? (
-                              <Check size={15} strokeWidth={3} />
+                              <Check size={13} />
                             ) : active ? (
-                              <Icons.MapPin size={14} />
-                            ) : (
-                              <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                            )}
+                              <span className="w-1.5 h-1.5 rounded-full bg-white" />
+                            ) : null}
                           </span>
-                          <span
-                            className={`mt-2 text-xs px-1 ${
-                              active
-                                ? "font-semibold text-signal-blue"
-                                : done
-                                  ? "font-medium text-ink-900"
-                                  : "text-ink-600/45"
-                            }`}
+                          {!isLast && (
+                            <span
+                              className={`w-0.5 flex-1 min-h-6 ${done ? "bg-emerald-300" : "bg-slate-200"}`}
+                            />
+                          )}
+                        </div>
+                        <div className="pb-5">
+                          <p
+                            className={`text-sm font-semibold ${done || active ? "text-slate-900" : "text-slate-400"}`}
                           >
-                            {step.label}
-                          </span>
-                          <span className="text-[10px] text-ink-600/40 mt-0.5">
-                            {step.time || "Pending"}
-                          </span>
-                        </li>
-                      );
-                    })}
-                  </ol>
+                            {tkUnifiedLabel(step.label)}
+                          </p>
+                          {(done || active) && step.time && (
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              {step.time}
+                            </p>
+                          )}
+                          {(done || active) && step.proceedBy && (
+                            <p className="text-xs text-slate-400 mt-0.5">
+                              Proceed By: {step.proceedBy}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
                 <div className="mt-4 pt-3 border-t border-mist-100 flex items-center justify-between gap-3 flex-wrap">
                   <span className="text-xs text-ink-600/45">
@@ -21187,7 +21398,7 @@ function PackageDetail() {
                         <div className="flex-1 flex items-start justify-between gap-3 pb-4 min-w-0">
                           <div>
                             <div className="text-sm font-medium text-ink-900">
-                              {s.label}
+                              {tkUnifiedLabel(s.label)}
                             </div>
                             <div className="text-xs text-ink-600/45">
                               Proceed By: {s.proceedBy || "NA"}
@@ -31345,7 +31556,14 @@ const CustomerApp = (() => {
                 {tr("Order status", "ស្ថានភាពការបញ្ជាទិញ")}
               </h2>
               <div className="mb-4">
-                <CnStatusBadge status={cnNormalizeStatus(row.status)} />
+                {/* Same customer-facing name as the timeline below. */}
+                <CnStatusBadge
+                  status={
+                    cnOrderTableStatus(row) === "Approve Purchase"
+                      ? "Order Processing"
+                      : cnOrderTableStatus(row)
+                  }
+                />
               </div>
               <CnStatusTimeline
                 row={row}
@@ -31378,7 +31596,15 @@ const CustomerApp = (() => {
                     <b className="font-mono text-slate-900 break-all">
                       {x.tracking}
                     </b>
-                    <CnStatusBadge status={x.status} />
+                    {/* TK stage names are staff-only; show the customer name. */}
+                    <CnStatusBadge
+                      status={cnOrderTableStatus({
+                        status:
+                          TK_TO_CN_STATUS[String(x.status || "").trim()] ||
+                          x.status,
+                        order_type: "direct",
+                      })}
+                    />
                   </div>
                 ))}
               </div>
@@ -37810,6 +38036,12 @@ const TK_TO_CN_STATUS = {
   Complete: "Complete Order",
 };
 
+// Display-only: the TK stage name as the CN Purchase Order shows it
+// (Inbound Origin -> Inbound, Completed -> Complete Order, ...). Used on the
+// Package/TK detail page so a TK and its CN order read the same. Never
+// written to the database; unknown / payment-derived labels pass through.
+const tkUnifiedLabel = (label) => TK_TO_CN_STATUS[label] || label;
+
 const CN_PLATFORMS = [
   "Taobao",
   "1688",
@@ -40141,7 +40373,26 @@ function CnStatusUpdateModal({ open, row, parcels = [], onClose, onSaved }) {
             created_by: by,
           })),
         );
-        if (pe) throw pe;
+        if (pe) {
+          // Do not leave the order in "Shipping to China WH" with 0 TKs:
+          // put the status back so the move can simply be retried.
+          if (next !== row.status) {
+            await supabase
+              .from("cn_orders")
+              .update({
+                status: row.status,
+                updated_by: by,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", row.id)
+              .eq("status", next);
+          }
+          throw new Error(
+            /row-level security/i.test(pe.message || "")
+              ? "Your role is not allowed to save China tracking numbers (cn_order_parcels). The status was not changed. Ask an admin to run the cn_order_parcels_staff SQL."
+              : pe.message,
+          );
+        }
       }
       await supabase.from("cn_order_history").insert({
         cn_order_id: row.id,
@@ -40413,6 +40664,39 @@ function CnStatusTimeline({
   // Customer detail uses the simplified Order Table statuses after purchase;
   // Admin/Staff keeps the original operational CN/TK workflow unchanged.
   const row = rowProp || { status };
+  // Staff view only: the real person who scanned each linked TK stage
+  // (Inbound / Outbound / Arrived ...), so those steps no longer say "System".
+  const [tkScanners, setTkScanners] = useState({});
+  useEffect(() => {
+    let alive = true;
+    if (customerView || !supabase || !row?.id) return undefined;
+    (async () => {
+      const { data: pkgs } = await supabase
+        .from("packages")
+        .select("tk")
+        .eq("cn_order_id", row.id)
+        .limit(200);
+      const tks = (pkgs || []).map((p) => p.tk).filter(Boolean);
+      if (!tks.length) return;
+      const { data: hist } = await supabase
+        .from("status_history")
+        .select("tk,status,created_by,created_at")
+        .in("tk", tks)
+        .order("created_at", { ascending: true })
+        .limit(2000);
+      const map = {};
+      (hist || []).forEach((h) => {
+        const stage = TK_TO_CN_STATUS[String(h.status || "").trim()];
+        if (!stage || !h.created_by || /^system/i.test(h.created_by)) return;
+        // ascending order: the latest scan of a stage wins
+        map[stage] = { by: h.created_by, tk: h.tk };
+      });
+      if (alive) setTkScanners(map);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [row?.id, row?.status, row?.updated_at, customerView]);
   const normalizedStatus = cnNormalizeStatus(row.status);
   const refunded = normalizedStatus === CN_ORDER_TERMINAL;
   const isDirect = (orderType ?? row.order_type) === "direct";
@@ -40476,6 +40760,10 @@ function CnStatusTimeline({
   const timeOf = (s) => historyEntryOf(s)?.created_at;
   const processorOf = (s) => {
     const entry = historyEntryOf(s);
+    const scanned = tkScanners[s];
+    // Automatic rows are written as "System — TK ...": show who scanned.
+    if (scanned && (!entry?.created_by || /^system/i.test(entry.created_by)))
+      return `${scanned.by} — TK ${scanned.tk}`;
     if (entry?.created_by) return entry.created_by;
     if (s === normalizedStatus || s === timelineCurrent) {
       return row.updated_by || row.created_by || null;
@@ -40687,9 +40975,32 @@ function CnActualCostModal({ row, onClose, onSaved }) {
       ? ""
       : String(row.actual_domestic_shipping_cny),
   );
+  // 0 / empty on the order must not become the default rate.
   const [rate, setRate] = useState(
-    String(row.purchase_exchange_rate ?? row.cny_per_usd ?? "6.1"),
+    String(
+      [row.purchase_exchange_rate, row.cny_per_usd, 6.1].find(
+        (v) => Number(v) > 0,
+      ),
+    ),
   );
+  // Internal actual cost in USD (staff only, stored in cn_order_costs).
+  const [usdCost, setUsdCost] = useState("");
+  useEffect(() => {
+    let alive = true;
+    if (!supabase) return undefined;
+    supabase
+      .from("cn_order_costs")
+      .select("actual_cost_usd")
+      .eq("cn_order_id", row.id)
+      .maybeSingle()
+      .then(({ data: c }) => {
+        if (alive && c?.actual_cost_usd != null)
+          setUsdCost(String(c.actual_cost_usd));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [row.id]);
   const [supplierNo, setSupplierNo] = useState(row.supplier_order_no || "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -40737,7 +41048,13 @@ function CnActualCostModal({ row, onClose, onSaved }) {
         !hasPermission(user, "cn_order.edit")
       )
         throw new Error("You do not have permission to record purchase costs.");
-      if (!Number.isFinite(fx) || fx <= 0)
+      const usdCostNum = usdCost === "" ? null : Number(usdCost);
+      if (usdCost !== "" && (!Number.isFinite(usdCostNum) || usdCostNum < 0))
+        throw new Error("Actual cost (USD) must be 0 or more.");
+      if (
+        (totalGoodsCny !== "" || shippingCny !== "") &&
+        (!Number.isFinite(fx) || fx <= 0)
+      )
         throw new Error("Purchase exchange rate must be greater than 0.");
       if (
         totalGoodsCny !== "" &&
@@ -40754,11 +41071,29 @@ function CnActualCostModal({ row, onClose, onSaved }) {
         actual_cost_cny: goodsCny,
         actual_cost_method: "total",
         actual_domestic_shipping_cny: ship,
-        purchase_exchange_rate: fx,
+        purchase_exchange_rate: fx > 0 ? fx : null,
         supplier_order_no: supplierNo.trim() || row.supplier_order_no || null,
         updated_at: now,
         updated_by: cnBy(user),
       };
+      // Save the internal USD cost first; if it fails nothing else changes.
+      if (usdCostNum != null) {
+        const { error: costErr } = await supabase.from("cn_order_costs").upsert(
+          {
+            cn_order_id: row.id,
+            actual_cost_usd: usdCostNum,
+            updated_by: cnBy(user),
+            updated_at: now,
+          },
+          { onConflict: "cn_order_id" },
+        );
+        if (costErr)
+          throw new Error(
+            /does not exist|schema cache/i.test(costErr.message || "")
+              ? "Table cn_order_costs is missing. Run the cn_order_costs SQL migration in Supabase first."
+              : costErr.message,
+          );
+      }
       // Deliberately do not rewrite cn_order_items. Existing product pricing and
       // any previously recorded per-item actual-cost metadata stay untouched.
       const { data, error: saveError } = await supabase
@@ -40905,11 +41240,28 @@ function CnActualCostModal({ row, onClose, onSaved }) {
             </div>
           </div>
 
+          <label className="block text-sm font-semibold text-slate-700">
+            Actual Cost (USD, internal, optional)
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={usdCost}
+              onChange={(e) => setUsdCost(e.target.value)}
+              className={`${INPUT_CLS} mt-1`}
+              placeholder="Total real cost in USD (goods + China shipping)"
+            />
+            <span className="block mt-1 text-xs font-normal text-slate-500">
+              Staff only. Customers never see this. Leave blank if the cost is
+              not known yet; the dashboard will show it as pending, not zero.
+              The Dashboard uses this value for Purchase Profit.
+            </span>
+          </label>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="text-sm font-semibold text-slate-700">
-              Purchase Exchange Rate (CNY per USD)
+              Purchase Exchange Rate (CNY per USD, only for the CNY fields)
               <input
-                required
                 type="number"
                 min="0.0001"
                 step="0.0001"
@@ -42761,6 +43113,12 @@ function CnOrderDetailPage() {
             <Icons.ShoppingCart size={21} />
           </span>
           <div>
+            <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-400">
+              <span>Purchase Order</span>
+              <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-violet-700">
+                Parse Link
+              </span>
+            </div>
             <h1 className="font-bold text-2xl text-slate-900">
               {row.order_id}
             </h1>
@@ -42925,10 +43283,16 @@ function CnOrderDetailPage() {
                       </b>
                       <span className="text-xs text-slate-400">
                         {p.courier ? ` · ${p.courier}` : ""}
-                        {p.tk
-                          ? ` · linked to ${row.order_id}`
-                          : " · not scanned yet"}
+                        {p.tk ? " · " : " · not scanned yet"}
                       </span>
+                      {p.tk && (
+                        <Link
+                          to={`/packages/${encodeURIComponent(p.tk)}`}
+                          className="text-xs font-semibold text-signal-blue hover:underline"
+                        >
+                          View TK {p.tk}
+                        </Link>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <CnStatusBadge
