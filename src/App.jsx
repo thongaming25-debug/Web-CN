@@ -20596,6 +20596,176 @@ function ChangeInternalWarehouseModal({
   );
 }
 
+// Change a TK number after Inbound Origin (the shop re-labelled the parcel).
+// The rename happens in one database function so the TK, its history, its
+// container rows and the CN order link all move together.
+function ChangeTkNumberModal({ open, pkg, onClose, onChanged }) {
+  const { user } = useAuth();
+  const [newTk, setNewTk] = useState("");
+  const [reason, setReason] = useState("");
+  const [updateCn, setUpdateCn] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (open) {
+      setNewTk("");
+      setReason("");
+      setUpdateCn(true);
+      setBusy(false);
+      setError("");
+    }
+  }, [open, pkg?.tk]);
+  if (!open || !pkg) return null;
+  const cnNo = pkg.cn_order_id ? CN_ORDER_NO_BY_ID[pkg.cn_order_id] : "";
+
+  async function submit(e) {
+    e.preventDefault();
+    const next = newTk.trim();
+    if (!next) return setError("Enter the new tracking number.");
+    if (next.toUpperCase() === String(pkg.tk).toUpperCase())
+      return setError("The new number is the same as the current one.");
+    if (!supabase)
+      return setError("Connect to Supabase to change a tracking number.");
+    setBusy(true);
+    setError("");
+    try {
+      const { data, error: rpcErr } = await supabase.rpc("change_tk_number", {
+        p_old: pkg.tk,
+        p_new: next,
+        p_reason: reason.trim() || null,
+        p_update_cn: !!(pkg.cn_order_id && updateCn),
+        p_by: cnBy(user),
+      });
+      if (rpcErr) {
+        throw new Error(
+          /could not find the function|schema cache/i.test(rpcErr.message || "")
+            ? "change_tk_number is missing. Run change_tk_number.sql in Supabase first."
+            : rpcErr.message,
+        );
+      }
+      // Visible audit trail on the linked CN order (who changed what).
+      if (pkg.cn_order_id) {
+        await supabase.from("cn_order_history").insert({
+          cn_order_id: pkg.cn_order_id,
+          event: "edit",
+          note: `Tracking number changed ${pkg.tk} → ${next}${reason.trim() ? ` · ${reason.trim()}` : ""}`,
+          created_by: cnBy(user),
+        });
+      }
+      emitCBToast("ok", "Tracking number changed", `${pkg.tk} → ${next}`);
+      onChanged(data?.new || next);
+      onClose();
+    } catch (err) {
+      setError(err.message || "Unable to change the tracking number.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <CnModalShell
+      title="Change Tracking Number"
+      subtitle="Use this when the label shows a different tracking number than the one scanned."
+      onClose={onClose}
+      onSubmit={submit}
+      error={error}
+      busy={busy}
+      submitLabel="Change Tracking Number"
+      busyLabel="Changing…"
+    >
+      <div>
+        <label className={LABEL_CLS}>Current tracking number</label>
+        <div className="font-mono font-semibold text-slate-900">{pkg.tk}</div>
+      </div>
+      <div>
+        <label className={LABEL_CLS}>New tracking number *</label>
+        <input
+          autoFocus
+          className={`${INPUT_CLS} font-mono`}
+          value={newTk}
+          onChange={(e) => setNewTk(e.target.value)}
+          placeholder="Number on the label"
+        />
+      </div>
+      {pkg.cn_order_id && (
+        <label className="flex items-start gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={updateCn}
+            onChange={(e) => setUpdateCn(e.target.checked)}
+          />
+          <span>
+            Also change the China tracking number on CN order{" "}
+            <b>{cnNo || "(linked order)"}</b> so the TK stays linked to it.
+          </span>
+        </label>
+      )}
+      <div>
+        <label className={LABEL_CLS}>Reason (optional)</label>
+        <input
+          className={INPUT_CLS}
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="e.g. shop re-labelled the parcel"
+        />
+      </div>
+    </CnModalShell>
+  );
+}
+
+// "Who changed the tracking number" for a TK. A TK can be renamed several
+// times (A -> B -> C), so the chain is followed back from the current number.
+function TkNumberChangesCard({ tk }) {
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    if (!supabase || !tk) return undefined;
+    (async () => {
+      const found = [];
+      let cursor = tk;
+      for (let i = 0; i < 10 && cursor; i++) {
+        const { data, error } = await supabase
+          .from("tk_number_changes")
+          .select("*")
+          .eq("new_tk", cursor)
+          .order("created_at", { ascending: false })
+          .limit(1);
+        if (error || !data?.length) break;
+        found.push(data[0]);
+        cursor = data[0].old_tk;
+      }
+      if (alive) setRows(found);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [tk]);
+  if (!rows.length) return null;
+  return (
+    <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
+      <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900 mb-3">
+        <Icons.ScanLine size={16} className="text-ink-600/60" />
+        Tracking Number Changes
+      </h2>
+      <div className="divide-y divide-mist-100">
+        {rows.map((r) => (
+          <div key={r.id} className="py-2.5 first:pt-0 last:pb-0 text-sm">
+            <div className="font-mono font-semibold text-ink-900">
+              {r.old_tk} → {r.new_tk}
+            </div>
+            <div className="text-xs text-ink-600/55 mt-0.5">
+              Changed by {r.changed_by || "—"} ·{" "}
+              {formatDbTimestamp(r.created_at)}
+              {r.reason ? ` · ${r.reason}` : ""}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function PackageDetail() {
   const { tk } = useParams();
   const { user } = useAuth();
@@ -20724,8 +20894,15 @@ function PackageDetail() {
     hasPermission(user, "order.change_branch") || canManageInbound;
   const { rows: packageWarehouses } = useWarehouses();
   const [showInternalWarehouse, setShowInternalWarehouse] = useState(false);
+  const [showChangeTk, setShowChangeTk] = useState(false);
   const isCustomerRole = user?.role === "Customer";
   const isInboundStage = currentStage === "Inbound Origin";
+  // Available from Inbound Origin onward (the TK exists once it is scanned).
+  const canChangeTk =
+    !isCustomerRole &&
+    hasPermission(user, "tk.edit") &&
+    PACKAGE_STAGES.indexOf(currentStage) >=
+      PACKAGE_STAGES.indexOf("Inbound Origin");
   // Print Label is available once the TK reaches Cambodia (Arrived Destination or later).
   const canPrintLabel =
     !isCustomerRole &&
@@ -21044,7 +21221,7 @@ function PackageDetail() {
                     <ChevronDown size={14} className="text-ink-600/50" />
                   </button>
                   {actionMenuOpen && (
-                    <div className="absolute right-0 mt-2 w-56 bg-white border border-mist-200 rounded-md shadow-lg py-1.5 z-50">
+                    <div className="absolute right-0 mt-2 w-64 bg-white border border-mist-200 rounded-md shadow-lg py-1.5 z-50">
                       <button
                         type="button"
                         onClick={() => {
@@ -21056,6 +21233,19 @@ function PackageDetail() {
                         <Icons.ArrowLeftRight size={15} />
                         Customer ID Transfer
                       </button>
+                      {canChangeTk && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActionMenuOpen(false);
+                            setShowChangeTk(true);
+                          }}
+                          className="w-full flex items-center gap-2.5 whitespace-nowrap px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
+                        >
+                          <Icons.ScanLine size={15} />
+                          Change Tracking Number
+                        </button>
+                      )}
                       {canProcessStatus && (
                         <>
                           <button
@@ -21418,6 +21608,8 @@ function PackageDetail() {
 
               <StatusHistoryCard pkg={data} timeline={timeline} />
 
+              <TkNumberChangesCard tk={tk} />
+
               <div className={`${CARD} p-5`}>
                 <div className="flex items-center justify-between gap-3 mb-4">
                   <div>
@@ -21639,6 +21831,18 @@ function PackageDetail() {
         onClose={() => setShowTrackingHistory(false)}
         steps={timeline}
       />
+      {canChangeTk && (
+        <ChangeTkNumberModal
+          open={showChangeTk}
+          pkg={data}
+          onClose={() => setShowChangeTk(false)}
+          onChanged={(next) =>
+            navigate(`/packages/${encodeURIComponent(next)}`, {
+              replace: true,
+            })
+          }
+        />
+      )}
       {canProcessStatus && (
         <>
           <EditPackageModal
@@ -29007,7 +29211,10 @@ const CustomerApp = (() => {
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
             <b className="text-[15px] truncate">{s.order_id}</b>
-            <CnStatusBadge status={cnCustomerDisplayStatus(s)} />
+            <CnStatusBadge
+              status={cnCustomerDisplayStatus(s)}
+              cancelled={cnIsCancelledUnpaid(s)}
+            />
           </div>
           <p className="text-[13px] text-slate-500 truncate">
             {tr("CN Order", "ការបញ្ជាទិញពីចិន")} ·{" "}
@@ -31340,7 +31547,10 @@ const CustomerApp = (() => {
                     />
                   </div>
                   <div className="flex items-center justify-between gap-2 mt-3">
-                    <CnStatusBadge status={cnCustomerDisplayStatus(r)} />
+                    <CnStatusBadge
+                      status={cnCustomerDisplayStatus(r)}
+                      cancelled={cnIsCancelledUnpaid(r)}
+                    />
                     {r.order_type !== "direct" && (
                       <span className="text-sm font-bold text-slate-900">
                         {money(r.total_due_usd)}
@@ -31563,6 +31773,7 @@ const CustomerApp = (() => {
                       ? "Order Processing"
                       : cnOrderTableStatus(row)
                   }
+                  cancelled={cnIsCancelledUnpaid(row)}
                 />
               </div>
               <CnStatusTimeline
@@ -31656,9 +31867,10 @@ const CustomerApp = (() => {
               </h2>
               {!waitingPayment && (
                 <div className="mb-3">
-                  {String(row.payment_status || "").toLowerCase() ===
-                    "refunded" ||
-                  cnNormalizeStatus(row.status) === "Refund Order" ? (
+                  {cnIsCancelledUnpaid(row) ? null : String(
+                      row.payment_status || "",
+                    ).toLowerCase() === "refunded" ||
+                    cnNormalizeStatus(row.status) === "Refund Order" ? (
                     <CnPaymentBadge status="Refunded" />
                   ) : String(row.payment_status || "").toLowerCase() ===
                       "paid" ||
@@ -38240,13 +38452,23 @@ const cnCny = (n) =>
     ? "—"
     : `¥${Number(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-function CnStatusBadge({ status, partial = false }) {
+// An order cancelled before any payment was received. It uses the same
+// terminal DB status as a refund, but nothing was paid, so it is shown as
+// "Cancelled" (staff views) instead of "Refund Order".
+const cnIsCancelledUnpaid = (row) =>
+  !!row &&
+  cnNormalizeStatus(row.status) === CN_ORDER_TERMINAL &&
+  row.amount_paid_usd != null &&
+  Number(row.amount_paid_usd) <= 0 &&
+  row.payment_status !== "Refunded";
+
+function CnStatusBadge({ status, partial = false, cancelled = false }) {
   return (
     <span className="inline-flex items-center gap-1.5">
       <span
-        className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-bold whitespace-nowrap ${cnStatusTone(status)}`}
+        className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-bold whitespace-nowrap ${cancelled ? "bg-slate-600 text-white" : cnStatusTone(status)}`}
       >
-        {cnNormalizeStatus(status)}
+        {cancelled ? "Cancelled" : cnNormalizeStatus(status)}
       </span>
       {partial && (
         <span className="rounded-full bg-amber-50 text-amber-700 px-2 py-0.5 text-[10px] font-bold">
@@ -40503,6 +40725,497 @@ function CnStatusUpdateModal({ open, row, parcels = [], onClose, onSaved }) {
 // ------------------------------------------------------------
 // Refund / cancel (only BEFORE Outbound Origin)
 // ------------------------------------------------------------
+// Fix a wrongly typed CN order. Text fields can always be corrected. Money
+// fields (qty, prices, rate, fee, shipping) are editable only while the
+// order is still Order Processing AND unpaid; after payment they are locked
+// because changing them would break what the customer already paid.
+function CnEditModal({ open, row, onClose, onSaved }) {
+  const { user } = useAuth();
+  const [platform, setPlatform] = useState(CN_PLATFORMS[0]);
+  const [shop, setShop] = useState("");
+  const [note, setNote] = useState("");
+  const [items, setItems] = useState([]);
+  const [rate, setRate] = useState("");
+  const [feePct, setFeePct] = useState("0");
+  const [domShip, setDomShip] = useState("");
+  const [domShipUsd, setDomShipUsd] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const isDirect = row?.order_type === "direct";
+  const pricingMode = row?.pricing_mode === "usd" ? "usd" : "cny";
+  const moneyLocked =
+    !row ||
+    isDirect ||
+    Number(row.amount_paid_usd || 0) > 0 ||
+    cnNormalizeStatus(row.status) !== "Order Processing";
+
+  useEffect(() => {
+    if (!open || !row) return;
+    const stored =
+      Array.isArray(row.cn_order_items) && row.cn_order_items.length
+        ? row.cn_order_items
+        : [
+            {
+              product_name: row.product_name,
+              product_url: row.product_url,
+              variant: row.variant,
+              quantity: row.quantity,
+              unit_price_cny: row.unit_price_cny,
+              unit_price_usd: row.unit_price_usd,
+            },
+          ];
+    setPlatform(row.platform || CN_PLATFORMS[0]);
+    setShop(row.shop_name || "");
+    setNote(row.note || "");
+    setItems(
+      stored.map((x) => ({
+        product_name: x.product_name || "",
+        product_url: x.product_url || "",
+        variant: x.variant || "",
+        quantity: String(x.quantity ?? 1),
+        unit_price_cny: String(x.unit_price_cny ?? ""),
+        unit_price_usd: String(x.unit_price_usd ?? ""),
+      })),
+    );
+    setRate(String(row.cny_per_usd ?? ""));
+    setFeePct(String(row.service_fee_pct ?? "0"));
+    setDomShip(String(row.domestic_shipping_cny ?? ""));
+    setDomShipUsd(String(row.domestic_shipping_usd ?? ""));
+    setBusy(false);
+    setError("");
+  }, [open, row?.id]);
+  if (!open || !row) return null;
+
+  const round = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const extrasUsd = Number(row.additional_services_total_usd) || 0;
+  const totals = (() => {
+    const r = Number(rate) || 0;
+    const lines = items.map((x) => ({
+      q: Number(x.quantity) || 0,
+      cny: Number(x.unit_price_cny) || 0,
+      usd: Number(x.unit_price_usd) || 0,
+    }));
+    const productTotalCny =
+      pricingMode === "cny" ? lines.reduce((t, x) => t + x.q * x.cny, 0) : 0;
+    const goodsUsd =
+      pricingMode === "usd"
+        ? lines.reduce((t, x) => t + x.q * x.usd, 0)
+        : r > 0
+          ? productTotalCny / r
+          : 0;
+    const shipUsd =
+      pricingMode === "usd"
+        ? Number(domShipUsd) || 0
+        : r > 0
+          ? (Number(domShip) || 0) / r
+          : 0;
+    const feeUsd = goodsUsd * ((Number(feePct) || 0) / 100);
+    return {
+      productTotalCny: round(productTotalCny),
+      serviceFeeUsd: round(feeUsd),
+      totalDueUsd: round(goodsUsd + shipUsd + feeUsd + extrasUsd),
+      quantity: lines.reduce((t, x) => t + x.q, 0),
+    };
+  })();
+
+  const setItem = (i, key, value) =>
+    setItems((list) =>
+      list.map((x, idx) => (idx === i ? { ...x, [key]: value } : x)),
+    );
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!supabase) return setError("Supabase is not connected.");
+    if (!items.length) return setError("Keep at least one product item.");
+    for (let i = 0; i < items.length; i++) {
+      const x = items[i];
+      if (!isDirect && !cnNz(x.product_name) && !cnNz(x.product_url))
+        return setError(`Enter a product name or link for Item ${i + 1}.`);
+      if (!moneyLocked) {
+        if (!Number.isInteger(Number(x.quantity)) || Number(x.quantity) <= 0)
+          return setError(
+            `Quantity for Item ${i + 1} must be a whole number above 0.`,
+          );
+        const price =
+          pricingMode === "usd"
+            ? Number(x.unit_price_usd)
+            : Number(x.unit_price_cny);
+        if (!Number.isFinite(price) || price <= 0)
+          return setError(`Unit price for Item ${i + 1} must be above 0.`);
+      }
+    }
+    if (!moneyLocked) {
+      if (pricingMode === "cny" && !(Number(rate) > 0))
+        return setError("Exchange rate (CNY per 1 USD) is required.");
+      const fee = Number(feePct);
+      if (!Number.isFinite(fee) || fee < 0 || fee > 100)
+        return setError("Service fee % must be between 0 and 100.");
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const by = cnBy(user);
+      const now = new Date().toISOString();
+      const rn = Number(rate) || 0;
+      const storedItems = items.map((x) => {
+        const q = Number(x.quantity) || 1;
+        const cny = pricingMode === "cny" ? Number(x.unit_price_cny) || 0 : 0;
+        const usd = pricingMode === "usd" ? Number(x.unit_price_usd) || 0 : 0;
+        return {
+          product_name: cnNz(x.product_name),
+          product_url: cnNz(x.product_url),
+          variant: cnNz(x.variant),
+          quantity: q,
+          pricing_mode: pricingMode,
+          unit_price_cny: cny,
+          unit_price_usd: usd,
+          line_total_cny: round(q * cny),
+          line_total_usd: round(
+            pricingMode === "usd" ? q * usd : rn > 0 ? (q * cny) / rn : 0,
+          ),
+        };
+      });
+      const first = storedItems[0] || {};
+      const patch = {
+        platform,
+        shop_name: cnNz(shop),
+        note: cnNz(note),
+        product_name: first.product_name,
+        product_url: first.product_url,
+        variant: first.variant,
+        cn_order_items: storedItems,
+        updated_by: by,
+        updated_at: now,
+      };
+      if (!moneyLocked) {
+        Object.assign(patch, {
+          quantity: totals.quantity,
+          unit_price_cny: pricingMode === "cny" ? first.unit_price_cny : 0,
+          unit_price_usd: pricingMode === "usd" ? first.unit_price_usd : 0,
+          cny_per_usd: rn,
+          product_total_cny: totals.productTotalCny,
+          domestic_shipping_cny:
+            pricingMode === "cny" ? Number(domShip) || 0 : 0,
+          domestic_shipping_usd:
+            pricingMode === "usd" ? Number(domShipUsd) || 0 : 0,
+          service_fee_pct: Number(feePct) || 0,
+          service_fee_usd: totals.serviceFeeUsd,
+          total_due_usd: totals.totalDueUsd,
+        });
+      }
+      const { data, error: upErr } = await supabase
+        .from("cn_orders")
+        .update(patch)
+        .eq("id", row.id)
+        .select()
+        .maybeSingle();
+      if (upErr) throw upErr;
+      if (!data)
+        throw new Error("Order was not updated. Check your permission.");
+      // Best-effort audit trail (never blocks the edit).
+      const changed =
+        !moneyLocked &&
+        Math.abs(totals.totalDueUsd - Number(row.total_due_usd || 0)) > 0.004
+          ? ` · total ${money(row.total_due_usd)} → ${money(totals.totalDueUsd)}`
+          : "";
+      await supabase.from("cn_order_history").insert({
+        cn_order_id: row.id,
+        event: "edit",
+        note: `Order details edited${changed}`,
+        created_by: by,
+      });
+      emitCBToast("ok", "Order updated", row.order_id);
+      onSaved(data);
+      onClose();
+    } catch (err) {
+      setError(err.message || "Unable to update order.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <CnModalShell
+      title="Edit CN Order"
+      subtitle={`${row.order_id} · ${
+        moneyLocked
+          ? "Prices are locked (paid or already purchased). You can correct names, links, shop and note."
+          : "Unpaid: you can correct items, prices, rate and fee. The total is recalculated."
+      }`}
+      maxW="max-w-2xl"
+      onClose={onClose}
+      onSubmit={submit}
+      error={error}
+      busy={busy}
+      submitLabel="Save Changes"
+      busyLabel="Saving…"
+    >
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label className={LABEL_CLS}>Platform</label>
+          <select
+            className={INPUT_CLS}
+            value={platform}
+            onChange={(e) => setPlatform(e.target.value)}
+          >
+            {[...new Set([platform, ...CN_PLATFORMS])].map((x) => (
+              <option key={x} value={x}>
+                {x}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={LABEL_CLS}>Shop</label>
+          <input
+            className={INPUT_CLS}
+            value={shop}
+            onChange={(e) => setShop(e.target.value)}
+          />
+        </div>
+      </div>
+
+      {items.map((x, i) => (
+        <div
+          key={i}
+          className="rounded-xl border border-slate-200 p-3 space-y-2"
+        >
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-bold text-slate-500">Item {i + 1}</p>
+            {!moneyLocked && items.length > 1 && (
+              <button
+                type="button"
+                onClick={() => setItems((l) => l.filter((_, idx) => idx !== i))}
+                className="text-xs font-semibold text-red-600"
+              >
+                Remove
+              </button>
+            )}
+          </div>
+          <input
+            className={INPUT_CLS}
+            placeholder="Product name"
+            value={x.product_name}
+            onChange={(e) => setItem(i, "product_name", e.target.value)}
+          />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <input
+              className={INPUT_CLS}
+              placeholder="Variant"
+              value={x.variant}
+              onChange={(e) => setItem(i, "variant", e.target.value)}
+            />
+            <input
+              className={INPUT_CLS}
+              placeholder="Product link"
+              value={x.product_url}
+              onChange={(e) => setItem(i, "product_url", e.target.value)}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-xs font-semibold text-slate-500">
+              Quantity
+              <input
+                type="number"
+                min="1"
+                step="1"
+                disabled={moneyLocked}
+                className={`${INPUT_CLS} mt-1 disabled:bg-slate-50`}
+                value={x.quantity}
+                onChange={(e) => setItem(i, "quantity", e.target.value)}
+              />
+            </label>
+            <label className="text-xs font-semibold text-slate-500">
+              Unit price ({pricingMode === "usd" ? "USD" : "CNY"})
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                disabled={moneyLocked}
+                className={`${INPUT_CLS} mt-1 disabled:bg-slate-50`}
+                value={
+                  pricingMode === "usd" ? x.unit_price_usd : x.unit_price_cny
+                }
+                onChange={(e) =>
+                  setItem(
+                    i,
+                    pricingMode === "usd" ? "unit_price_usd" : "unit_price_cny",
+                    e.target.value,
+                  )
+                }
+              />
+            </label>
+          </div>
+        </div>
+      ))}
+      {!moneyLocked && (
+        <button
+          type="button"
+          onClick={() =>
+            setItems((l) => [
+              ...l,
+              {
+                product_name: "",
+                product_url: "",
+                variant: "",
+                quantity: "1",
+                unit_price_cny: "",
+                unit_price_usd: "",
+              },
+            ])
+          }
+          className="text-sm font-semibold text-signal-blue"
+        >
+          + Add item
+        </button>
+      )}
+
+      {!isDirect && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {pricingMode === "cny" && (
+            <label className="text-xs font-semibold text-slate-500">
+              Rate (CNY per USD)
+              <input
+                type="number"
+                step="0.01"
+                disabled={moneyLocked}
+                className={`${INPUT_CLS} mt-1 disabled:bg-slate-50`}
+                value={rate}
+                onChange={(e) => setRate(e.target.value)}
+              />
+            </label>
+          )}
+          <label className="text-xs font-semibold text-slate-500">
+            China shipping ({pricingMode === "usd" ? "USD" : "CNY"})
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              disabled={moneyLocked}
+              className={`${INPUT_CLS} mt-1 disabled:bg-slate-50`}
+              value={pricingMode === "usd" ? domShipUsd : domShip}
+              onChange={(e) =>
+                pricingMode === "usd"
+                  ? setDomShipUsd(e.target.value)
+                  : setDomShip(e.target.value)
+              }
+            />
+          </label>
+          <label className="text-xs font-semibold text-slate-500">
+            Service fee %
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              disabled={moneyLocked}
+              className={`${INPUT_CLS} mt-1 disabled:bg-slate-50`}
+              value={feePct}
+              onChange={(e) => setFeePct(e.target.value)}
+            />
+          </label>
+        </div>
+      )}
+      {!isDirect && !moneyLocked && (
+        <p className="text-sm font-semibold text-slate-700">
+          New total due: {money(totals.totalDueUsd)}{" "}
+          <span className="font-normal text-slate-400">
+            (was {money(row.total_due_usd)})
+          </span>
+        </p>
+      )}
+      <div>
+        <label className={LABEL_CLS}>Note</label>
+        <textarea
+          className={`${INPUT_CLS} min-h-16 py-2`}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+        />
+      </div>
+    </CnModalShell>
+  );
+}
+
+// Cancel an order the customer has not paid for. No money moves, so there is
+// no wallet refund; the order just closes with a recorded reason.
+function CnCancelModal({ open, row, onClose, onSaved }) {
+  const { user } = useAuth();
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (open) {
+      setReason("");
+      setBusy(false);
+      setError("");
+    }
+  }, [open, row?.id]);
+  if (!open || !row) return null;
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!reason.trim()) return setError("Cancel reason is required.");
+    if (Number(row.amount_paid_usd || 0) > 0)
+      return setError("This order already has a payment. Use Refund Order.");
+    if (!cnCanRefund(row.status))
+      return setError(
+        "Goods already left China — this order can not be cancelled.",
+      );
+    setBusy(true);
+    setError("");
+    try {
+      const by = cnBy(user);
+      const now = new Date().toISOString();
+      const { data, error: upErr } = await supabase
+        .from("cn_orders")
+        .update({ status: CN_ORDER_TERMINAL, updated_by: by, updated_at: now })
+        .eq("id", row.id)
+        .eq("status", row.status)
+        .select()
+        .maybeSingle();
+      if (upErr) throw upErr;
+      if (!data)
+        throw new Error("The order changed meanwhile. Reload and try again.");
+      await supabase.from("cn_order_history").insert({
+        cn_order_id: row.id,
+        event: "status",
+        status: CN_ORDER_TERMINAL,
+        note: `Cancelled (unpaid): ${reason.trim()}`,
+        created_by: by,
+      });
+      emitCBToast("ok", "Order cancelled", row.order_id);
+      onSaved(data);
+      onClose();
+    } catch (err) {
+      setError(err.message || "Unable to cancel order.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <CnModalShell
+      title="Cancel CN Order"
+      titleCls="text-red-700"
+      subtitle={`${row.order_id} · not paid yet, so nothing is refunded.`}
+      onClose={onClose}
+      onSubmit={submit}
+      error={error}
+      busy={busy}
+      submitLabel="Confirm Cancel"
+      busyLabel="Cancelling…"
+      submitCls="bg-red-600"
+    >
+      <textarea
+        className={`${INPUT_CLS} min-h-24 py-2`}
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="Why is this order cancelled?"
+      />
+    </CnModalShell>
+  );
+}
+
 function CnRefundModal({ open, row, onClose, onSaved }) {
   const { user } = useAuth();
   const [amount, setAmount] = useState("");
@@ -40632,7 +41345,11 @@ function CnHistoryModal({ history, onClose }) {
             <div key={h.id} className="py-3 text-sm">
               <div className="flex items-center justify-between gap-3">
                 <span className="font-bold text-slate-900">
-                  {h.event === "payment" ? "Payment" : h.status || "Note"}
+                  {h.event === "payment"
+                    ? "Payment"
+                    : h.event === "edit"
+                      ? "Edited"
+                      : h.status || "Note"}
                 </span>
                 <span className="text-xs text-slate-400">
                   {formatDbTimestamp(h.created_at)}
@@ -40848,7 +41565,7 @@ function CnStatusTimeline({
           </span>
           <div>
             <p className="text-sm font-semibold text-red-700">
-              {CN_ORDER_TERMINAL}
+              {cnIsCancelledUnpaid(row) ? "Cancelled" : CN_ORDER_TERMINAL}
             </p>
             {refundEntry?.created_at && (
               <p className="text-xs text-slate-500 mt-0.5">
@@ -40858,6 +41575,14 @@ function CnStatusTimeline({
             {row.refund_reason && (
               <p className="mt-2 rounded-xl bg-red-50 border border-red-100 px-3 py-2 text-sm text-red-800 whitespace-pre-wrap">
                 {row.refund_reason}
+              </p>
+            )}
+            {!customerView && cnIsCancelledUnpaid(row) && refundEntry?.note && (
+              <p className="mt-2 rounded-xl bg-red-50 border border-red-100 px-3 py-2 text-sm text-red-800 whitespace-pre-wrap">
+                {String(refundEntry.note).replace(
+                  /^Cancelled \(unpaid\):\s*/i,
+                  "",
+                )}
               </p>
             )}
           </div>
@@ -42354,6 +43079,7 @@ function CnOrdersPage() {
                           <CnStatusBadge
                             status={cnOrderTableStatus(r)}
                             partial={r.is_partial}
+                            cancelled={cnIsCancelledUnpaid(r)}
                           />
                         </td>
                         <td className="px-4 py-3">
@@ -42791,6 +43517,12 @@ function CnOrderDetailPage() {
   const [cnInvoiceOpen, setCnInvoiceOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [refundOpen, setRefundOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [changeTkTarget, setChangeTkTarget] = useState(null); // TK being changed
+  const [pickTkOpen, setPickTkOpen] = useState(false);
+  const [editParcelId, setEditParcelId] = useState(null);
+  const [editParcelVal, setEditParcelVal] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
   const [newTrack, setNewTrack] = useState("");
   const [cnImages, setCnImages] = useState([]);
@@ -42914,6 +43646,40 @@ function CnOrderDetailPage() {
     });
     if (error) return emitCBToast("err", "Add failed", error.message);
     setNewTrack("");
+    load();
+  }
+  // Fix a mistyped China tracking number in place (only before it is
+  // scanned: after a TK is linked the number is the link, so it stays).
+  async function saveParcelEdit(p) {
+    const t = editParcelVal.trim();
+    if (!t) return emitCBToast("err", "Empty", "Tracking number is required.");
+    if (cnLinkKey(t) === cnLinkKey(p.domestic_tracking)) {
+      setEditParcelId(null);
+      return;
+    }
+    if (
+      parcels.some(
+        (x) => x.id !== p.id && cnLinkKey(x.domestic_tracking) === cnLinkKey(t),
+      )
+    )
+      return emitCBToast(
+        "err",
+        "Duplicate",
+        "This tracking number is already on the order.",
+      );
+    const { error } = await supabase
+      .from("cn_order_parcels")
+      .update({ domestic_tracking: t })
+      .eq("id", p.id);
+    if (error) return emitCBToast("err", "Change failed", error.message);
+    await supabase.from("cn_order_history").insert({
+      cn_order_id: row.id,
+      event: "edit",
+      note: `Tracking number changed ${p.domestic_tracking} → ${t}`,
+      created_by: cnBy(user),
+    });
+    emitCBToast("ok", "Tracking updated", t);
+    setEditParcelId(null);
     load();
   }
   async function removeParcel(p) {
@@ -43125,7 +43891,11 @@ function CnOrderDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          <CnStatusBadge status={row.status} partial={partial} />
+          <CnStatusBadge
+            status={row.status}
+            partial={partial}
+            cancelled={cnIsCancelledUnpaid(row)}
+          />
           {row.order_type !== "direct" && (
             <CnPaymentBadge status={row.payment_status} />
           )}
@@ -43174,7 +43944,7 @@ function CnOrderDetailPage() {
                 />
                 <div
                   role="menu"
-                  className="absolute right-0 top-11 z-40 w-52 rounded-xl border border-slate-200 bg-white p-1 shadow-lg"
+                  className="absolute right-0 top-11 z-40 w-60 rounded-xl border border-slate-200 bg-white p-1 shadow-lg"
                 >
                   <button
                     type="button"
@@ -43200,23 +43970,76 @@ function CnOrderDetailPage() {
                       <Icons.Image size={15} /> Product Images
                     </button>
                   )}
-                  {((canRefund && !terminal && cnCanRefund(row.status)) ||
-                    canDelete) && (
-                    <div className="my-1 border-t border-slate-100" />
-                  )}
-                  {canRefund && !terminal && cnCanRefund(row.status) && (
+                  {hasPermission(user, "tk.edit") &&
+                    parcels.some((x) => x.tk) && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setCnMenuOpen(false);
+                          const tks = parcels
+                            .filter((x) => x.tk)
+                            .map((x) => x.tk);
+                          CN_ORDER_NO_BY_ID[row.id] = row.order_id;
+                          if (tks.length === 1) setChangeTkTarget(tks[0]);
+                          else setPickTkOpen(true);
+                        }}
+                        className="flex w-full items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                      >
+                        <Icons.ScanLine size={15} /> Change Tracking Number
+                      </button>
+                    )}
+                  {canEdit && !terminal && (
                     <button
                       type="button"
                       role="menuitem"
                       onClick={() => {
                         setCnMenuOpen(false);
-                        setRefundOpen(true);
+                        setEditOpen(true);
                       }}
-                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-red-600 hover:bg-red-50"
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
                     >
-                      <Icons.RotateCcw size={15} /> Refund Order
+                      <Icons.Pencil size={15} /> Edit Order
                     </button>
                   )}
+                  {(((canRefund || canEdit) &&
+                    !terminal &&
+                    cnCanRefund(row.status)) ||
+                    canDelete) && (
+                    <div className="my-1 border-t border-slate-100" />
+                  )}
+                  {(canRefund || canEdit) &&
+                    !terminal &&
+                    cnCanRefund(row.status) &&
+                    paid <= 0 && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setCnMenuOpen(false);
+                          setCancelOpen(true);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-red-600 hover:bg-red-50"
+                      >
+                        <Icons.XCircle size={15} /> Cancel Order
+                      </button>
+                    )}
+                  {canRefund &&
+                    !terminal &&
+                    cnCanRefund(row.status) &&
+                    paid > 0 && (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setCnMenuOpen(false);
+                          setRefundOpen(true);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-red-600 hover:bg-red-50"
+                      >
+                        <Icons.RotateCcw size={15} /> Refund Order
+                      </button>
+                    )}
                   {canDelete && (
                     <button
                       type="button"
@@ -43275,9 +44098,43 @@ function CnOrderDetailPage() {
                     className="py-2.5 flex items-center justify-between gap-3 text-sm"
                   >
                     <div className="min-w-0">
-                      <b className="font-mono text-slate-900">
-                        {p.domestic_tracking}
-                      </b>
+                      {editParcelId === p.id ? (
+                        <span className="inline-flex items-center gap-1.5 mr-2">
+                          <input
+                            autoFocus
+                            className={`${INPUT_CLS} font-mono !h-8 !py-0 w-56`}
+                            value={editParcelVal}
+                            onChange={(e) => setEditParcelVal(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                saveParcelEdit(p);
+                              }
+                              if (e.key === "Escape") setEditParcelId(null);
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => saveParcelEdit(p)}
+                            className="text-emerald-600 hover:text-emerald-700"
+                            aria-label="Save"
+                          >
+                            <Icons.Check size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditParcelId(null)}
+                            className="text-slate-400 hover:text-slate-600"
+                            aria-label="Cancel"
+                          >
+                            <Icons.X size={15} />
+                          </button>
+                        </span>
+                      ) : (
+                        <b className="font-mono text-slate-900">
+                          {p.domestic_tracking}
+                        </b>
+                      )}
                       <span className="text-xs text-slate-400">
                         {p.courier ? ` · ${p.courier}` : ""}
                         {p.tk ? " · " : " · not scanned yet"}
@@ -43290,11 +44147,40 @@ function CnOrderDetailPage() {
                           View TK {p.tk}
                         </Link>
                       )}
+                      {p.tk && hasPermission(user, "tk.edit") && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            CN_ORDER_NO_BY_ID[row.id] = row.order_id;
+                            setChangeTkTarget(p.tk);
+                          }}
+                          className="ml-2 align-middle text-slate-400 hover:text-signal-blue"
+                          title="Change tracking number"
+                        >
+                          <Icons.Pencil size={12} />
+                        </button>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <CnStatusBadge
                         status={p.status || "Shipping to China WH"}
                       />
+                      {canEdit &&
+                        !p.tk &&
+                        !p.status &&
+                        editParcelId !== p.id && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditParcelId(p.id);
+                              setEditParcelVal(p.domestic_tracking || "");
+                            }}
+                            className="text-slate-400 hover:text-signal-blue"
+                            title="Change tracking number"
+                          >
+                            <Icons.Pencil size={14} />
+                          </button>
+                        )}
                       {canEdit && !p.tk && !p.status && (
                         <button
                           onClick={() => removeParcel(p)}
@@ -43609,6 +44495,58 @@ function CnOrderDetailPage() {
         open={refundOpen}
         row={row}
         onClose={() => setRefundOpen(false)}
+        onSaved={load}
+      />
+      {pickTkOpen && (
+        <CnModalShell
+          title="Change Tracking Number"
+          subtitle="This order has several TKs. Which one has the wrong number?"
+          onClose={() => setPickTkOpen(false)}
+          onSubmit={(e) => e.preventDefault()}
+          submitLabel="Close"
+          busyLabel="Close"
+          submitDisabled
+        >
+          <div className="space-y-2">
+            {parcels
+              .filter((x) => x.tk)
+              .map((x) => (
+                <button
+                  key={x.tk}
+                  type="button"
+                  onClick={() => {
+                    setPickTkOpen(false);
+                    setChangeTkTarget(x.tk);
+                  }}
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2 text-left font-mono text-sm font-semibold hover:bg-slate-50"
+                >
+                  {x.tk}
+                </button>
+              ))}
+          </div>
+        </CnModalShell>
+      )}
+      <ChangeTkNumberModal
+        open={!!changeTkTarget}
+        pkg={
+          changeTkTarget ? { tk: changeTkTarget, cn_order_id: row.id } : null
+        }
+        onClose={() => setChangeTkTarget(null)}
+        onChanged={() => {
+          setChangeTkTarget(null);
+          load();
+        }}
+      />
+      <CnEditModal
+        open={editOpen}
+        row={row}
+        onClose={() => setEditOpen(false)}
+        onSaved={load}
+      />
+      <CnCancelModal
+        open={cancelOpen}
+        row={row}
+        onClose={() => setCancelOpen(false)}
         onSaved={load}
       />
       {historyOpen && (
