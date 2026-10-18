@@ -48629,7 +48629,14 @@ function AirInvoiceModal({ row, onClose }) {
 // Sidebar card on the TK detail page.
 // CN Purchase Order invoice: same select -> preview -> print flow as AIR Indo,
 // but it reads only CN orders and keeps the AIR invoice implementation untouched.
-function cnInvoiceHtml({ company, customer, orders, issuedBy, when }) {
+function cnInvoiceHtml({
+  company,
+  customer,
+  orders,
+  issuedBy,
+  when,
+  tksByOrder = {},
+}) {
   const e = htmlEsc;
   const logo = company?.logoUrl || company?.logoDataUrl || "";
   const usd = (n) => `$${(Number(n) || 0).toFixed(2)}`;
@@ -48637,6 +48644,7 @@ function cnInvoiceHtml({ company, customer, orders, issuedBy, when }) {
     (sum, order) => sum + (Number(order.total_due_usd) || 0),
     0,
   );
+  let lineNo = 0; // running 1, 2, 3 ... per real product line
   return `<!doctype html><html><head><meta charset="utf-8"><title>CN Invoice ${e(customer.code)}</title>
 <style>
 @page{size:A4;margin:16mm 14mm}*{box-sizing:border-box}body{font-family:'Inter','Noto Sans Khmer',Arial,sans-serif;font-size:14px;color:#111;margin:0}
@@ -48644,7 +48652,7 @@ function cnInvoiceHtml({ company, customer, orders, issuedBy, when }) {
 table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:13px}th,td{border:1px solid #9aa3b5;padding:9px 8px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f1f3f6;font-weight:700}.left{text-align:left}.total{text-align:right;font-weight:700;padding-right:14px}.sum{font-weight:700}.sign{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;margin-top:34px;font-size:14px;font-weight:600}.sign div{padding-bottom:48px}.line{border-top:1px solid #d5d9e0;margin-top:18px}
 </style></head><body><div class="top"><div class="logo">${logo ? `<img src="${e(logo)}" alt="">` : `<b>${e(company?.name || "")}</b>`}</div><h1>CN Order Invoice</h1><div class="meta"><div><b>Date:</b> ${e(when)}</div><div><b>Issued By:</b> ${e(issuedBy)}</div></div></div>
 <div class="cust"><div><b>Customer ID:</b> ${e(customer.code)}</div><div><b>Customer Name:</b> ${e(customer.name)}</div><div><b>Phone Number:</b> ${e(customer.phone)}</div><div><b>Total Order:</b> ${orders.length}</div></div>
-<table><colgroup><col style="width:7%"><col style="width:22%"><col style="width:31%"><col style="width:9%"><col style="width:15%"><col style="width:16%"></colgroup><tr><th>#</th><th>CN Order ID</th><th>Product / Variant</th><th>Qty</th><th>Unit Price (USD)</th><th>Amount (USD)</th></tr>
+<table><colgroup><col style="width:6%"><col style="width:16%"><col style="width:19%"><col style="width:25%"><col style="width:7%"><col style="width:13%"><col style="width:14%"></colgroup><tr><th>#</th><th>CN Order ID</th><th>TK</th><th>Product / Variant</th><th>Qty</th><th>Unit Price (USD)</th><th>Amount (USD)</th></tr>
 ${orders
   .map((o, i) => {
     const mode = o.pricing_mode || "cny";
@@ -48689,7 +48697,10 @@ ${orders
       ]
         .filter(Boolean)
         .join(" · ");
-      return `<tr><td>${i + 1}.${j + 1}</td><td>${e(o.order_id || "—")}</td><td class="left">${e(product)}</td><td>${e(q)}</td><td>${usd(unitUsd)}</td><td>${usd(amount)}</td></tr>`;
+      lineNo += 1;
+      const tkCell =
+        (tksByOrder[String(o.id)] || []).map((t) => e(t)).join("<br>") || "—";
+      return `<tr><td>${lineNo}</td><td>${e(o.order_id || "—")}</td><td>${tkCell}</td><td class="left">${e(product)}</td><td>${e(q)}</td><td>${usd(unitUsd)}</td><td>${usd(amount)}</td></tr>`;
     });
     const extra = [];
     const shipUsd =
@@ -48700,11 +48711,11 @@ ${orders
           : 0;
     if (shipUsd > 0)
       extra.push(
-        `<tr><td>—</td><td>${e(o.order_id || "—")}</td><td class="left">China Shipping</td><td>—</td><td>—</td><td>${usd(shipUsd)}</td></tr>`,
+        `<tr><td>—</td><td>${e(o.order_id || "—")}</td><td>—</td><td class="left">China Shipping</td><td>—</td><td>—</td><td>${usd(shipUsd)}</td></tr>`,
       );
     if ((Number(o.service_fee_usd) || 0) > 0)
       extra.push(
-        `<tr><td>—</td><td>${e(o.order_id || "—")}</td><td class="left">Service Fee</td><td>—</td><td>—</td><td>${usd(o.service_fee_usd)}</td></tr>`,
+        `<tr><td>—</td><td>${e(o.order_id || "—")}</td><td>—</td><td class="left">Service Fee</td><td>—</td><td>—</td><td>${usd(o.service_fee_usd)}</td></tr>`,
       );
     (Array.isArray(o.additional_services) ? o.additional_services : []).forEach(
       (service) => {
@@ -48712,14 +48723,14 @@ ${orders
         const unit = Number(service.unit_price_usd) || 0;
         if (q * unit > 0)
           extra.push(
-            `<tr><td>—</td><td>${e(o.order_id || "—")}</td><td class="left">${e(service.name || "Additional Service")}${service.description ? ` · ${e(service.description)}` : ""}</td><td>${q}</td><td>${usd(unit)}</td><td>${usd(q * unit)}</td></tr>`,
+            `<tr><td>—</td><td>${e(o.order_id || "—")}</td><td>—</td><td class="left">${e(service.name || "Additional Service")}${service.description ? ` · ${e(service.description)}` : ""}</td><td>${q}</td><td>${usd(unit)}</td><td>${usd(q * unit)}</td></tr>`,
           );
       },
     );
     return [...lines, ...extra].join("");
   })
   .join("")}
-<tr><td colspan="5" class="total">Total Amount</td><td class="sum">${usd(total)}</td></tr></table><div class="sign"><div>Customer Signature</div><div>Employee Signature</div><div>Authorized Signature</div></div><div class="line"></div></body></html>`;
+<tr><td colspan="6" class="total">Total Amount</td><td class="sum">${usd(total)}</td></tr></table><div class="sign"><div>Customer Signature</div><div>Employee Signature</div><div>Authorized Signature</div></div><div class="line"></div></body></html>`;
 }
 
 function CnInvoiceModal({ row, onClose }) {
@@ -48799,10 +48810,24 @@ function CnInvoiceModal({ row, onClose }) {
         name: record?.name || nameParts.join(" · ") || first.customer || "—",
         phone: record?.phone || "—",
       };
+      // TKs linked to the chosen orders (shown next to each product line).
+      const tksByOrder = {};
+      if (supabase) {
+        const { data: pk } = await supabase
+          .from("packages")
+          .select("tk,cn_order_id")
+          .in("cn_order_id", chosen.map((o) => o.id).filter(Boolean))
+          .order("created_at", { ascending: true });
+        (pk || []).forEach((x) => {
+          const key = String(x.cn_order_id);
+          (tksByOrder[key] = tksByOrder[key] || []).push(x.tk);
+        });
+      }
       setPreviewHtml(
         cnInvoiceHtml({
           company,
           customer,
+          tksByOrder,
           orders: chosen,
           issuedBy: user?.name || user?.email || "—",
           when: invoiceStamp(),
