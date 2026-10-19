@@ -2757,6 +2757,27 @@ function shippingFeeOf(p) {
   return { state: due > 0 ? "due" : "paid", total, paid, due };
 }
 
+// Cambodia shipping fee of a CN order's TKs. It is shown once the TK has been
+// confirmed at Arrived Destination (or later) and has a freight fee.
+const CN_SHIP_FEE_STAGES = [
+  "Arrived Destination",
+  "Shipping To Branch",
+  "Inbound Warehouse",
+  "Completed",
+];
+function cnShippingFeeRows(tks) {
+  return (tks || [])
+    .filter(
+      (x) =>
+        x?.tk &&
+        CN_SHIP_FEE_STAGES.includes(
+          String(x.tk_status || x.status || "").trim(),
+        ),
+    )
+    .map((x) => ({ tk: x.tk, fee: shippingFeeOf(x) }))
+    .filter((x) => x.fee.state !== "none" && x.fee.total > 0);
+}
+
 function shippingFeeText(p) {
   const f = shippingFeeOf(p);
   if (f.state === "none") return "—";
@@ -12440,6 +12461,7 @@ function useCurrentTitle() {
 }
 
 function Layout() {
+  const { pathname } = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] =
     useState(readSidebarCollapsed);
@@ -12468,7 +12490,9 @@ function Layout() {
         <SlaAirNotificationSync />
         <Topbar title={title} onMenuClick={() => setSidebarOpen(true)} />
         <main className="flex-1 overflow-y-auto p-4 lg:p-6 xl:p-7">
-          <Outlet />
+          <div key={pathname} className="cb-page-enter">
+            <Outlet />
+          </div>
         </main>
       </div>
     </div>
@@ -31568,16 +31592,22 @@ const CustomerApp = (() => {
 
   function CustomerCnOrderDetail() {
     const { id } = useParams();
-    const { me, tr, wallet, payCnOrder } = useApp();
+    const { me, tr, wallet, payCnOrder, payShipping } = useApp();
     const nav = useNavigate();
     const customerFeatureOn = useCustomerFeatures();
     const canPayCnOrder = customerFeatureOn("pay_cn_order");
+    // Cambodia shipping fee of this order's TKs (after Arrived Destination).
+    const [shipFees, setShipFees] = useState([]);
+    const [shipPayTk, setShipPayTk] = useState(null);
+    const [shipPayBusy, setShipPayBusy] = useState(false);
+    const [shipPayError, setShipPayError] = useState("");
     const [row, setRow] = useState(null);
     const [history, setHistory] = useState([]);
     const [walletPayConfirm, setWalletPayConfirm] = useState(false);
     const [walletPayBusy, setWalletPayBusy] = useState(false);
     const [walletPayError, setWalletPayError] = useState("");
     const [parcels, setParcels] = useState([]);
+    const [priceExtra, setPriceExtra] = useState(null);
     const [cnImages, setCnImages] = useState([]);
     const [cnImagesLoading, setCnImagesLoading] = useState(true);
     const [loading, setLoading] = useState(true);
@@ -31599,6 +31629,20 @@ const CustomerApp = (() => {
       setRow(data || null);
 
       if (data?.id) {
+        // Price breakdown (separate query: never breaks the page if a column
+        // is not readable by customers).
+        try {
+          const { data: ex } = await supabase
+            .from("cn_orders")
+            .select(
+              "domestic_shipping_usd,service_fee_usd,additional_services_total_usd",
+            )
+            .eq("id", data.id)
+            .maybeSingle();
+          setPriceExtra(ex || null);
+        } catch (_e) {
+          setPriceExtra(null);
+        }
         setCnImagesLoading(true);
         loadCnImages(data.id).then((imgs) => {
           setCnImages(imgs);
@@ -31622,6 +31666,20 @@ const CustomerApp = (() => {
             .select("tk,status")
             .eq("cn_order_id", data.id),
         ]);
+        // Shipping fee per TK (server function: customers never read prices
+        // from the packages table directly).
+        const { data: feeRows } = await supabase.rpc("customer_shipping_fees");
+        const feeByTk = new Map((feeRows || []).map((r) => [r.tk, r]));
+        setShipFees(
+          cnShippingFeeRows(
+            (pk || []).map((x) => ({
+              tk: x.tk,
+              tk_status: x.status,
+              freight_fee: feeByTk.get(x.tk)?.freight_fee,
+              paid_amount: feeByTk.get(x.tk)?.paid_amount,
+            })),
+          ),
+        );
         const tkByKey = new Map((pk || []).map((x) => [cnLinkKey(x.tk), x]));
         setParcels(
           (pr || []).map((x) => {
@@ -31707,6 +31765,17 @@ const CustomerApp = (() => {
       }
     }
 
+    async function confirmShippingPayment(r) {
+      if (shipPayBusy) return;
+      setShipPayBusy(true);
+      setShipPayError("");
+      const error = await payShipping(r.tk);
+      setShipPayBusy(false);
+      if (error) return setShipPayError(error);
+      setShipPayTk(null);
+      await load();
+    }
+
     if (loading) {
       return (
         <div className="min-h-screen bg-slate-50 p-4">
@@ -31737,6 +31806,39 @@ const CustomerApp = (() => {
         </div>
       );
     }
+
+    // ---- one combined price summary (goods + fees + shipping) ----
+    const r2c = (v) => Math.round((Number(v) || 0) * 100) / 100;
+    const priceDom = Number(priceExtra?.domestic_shipping_usd) || 0;
+    const priceSvc = Number(priceExtra?.service_fee_usd) || 0;
+    const priceAddl = Number(priceExtra?.additional_services_total_usd) || 0;
+    const orderTotalUsd = Number(row.total_due_usd) || 0;
+    const priceGoods = Math.max(
+      0,
+      r2c(orderTotalUsd - priceDom - priceSvc - priceAddl),
+    );
+    const priceQty =
+      Array.isArray(row.cn_order_items) && row.cn_order_items.length
+        ? row.cn_order_items.reduce(
+            (s, it) => s + (Number(it.quantity) || 1),
+            0,
+          )
+        : Number(row.quantity) || 1;
+    const shipTotalUsd = shipFees.reduce(
+      (s, r) => s + (Number(r.fee.total) || 0),
+      0,
+    );
+    const shipPaidUsd = shipFees.reduce(
+      (s, r) => s + (Number(r.fee.paid) || 0),
+      0,
+    );
+    const priceGrand = r2c(orderTotalUsd + shipTotalUsd);
+    const pricePaid = r2c((Number(row.amount_paid_usd) || 0) + shipPaidUsd);
+    const priceRemain = Math.max(0, r2c(priceGrand - pricePaid));
+    const priceVoid =
+      cnIsCancelledUnpaid(row) ||
+      String(row.payment_status || "").toLowerCase() === "refunded" ||
+      cnNormalizeStatus(row.status) === "Refund Order";
 
     return (
       <div className="min-h-screen bg-slate-50 px-4 pt-5 pb-8">
@@ -31822,43 +31924,182 @@ const CustomerApp = (() => {
             </Card>
           )}
 
-          <Card className="p-4">
-            <h2 className="font-bold text-slate-900">
-              {tr("Order Information", "ព័ត៌មានការបញ្ជាទិញ")}
-            </h2>
-            <div className="mt-3 space-y-2 text-sm">
-              <div className="flex justify-between gap-3">
-                <span className="text-slate-500">{tr("Product", "ទំនិញ")}</span>
-                <span className="font-medium text-right">
-                  {row.product_name || row.product_url || "—"}
-                </span>
+          {(row.order_type !== "direct" || shipFees.length > 0) && (
+            <Card className="p-5">
+              <h2 className="font-bold mb-3">
+                {tr("Order Price Information", "ព័ត៌មានតម្លៃ Order")}
+              </h2>
+              <div className="space-y-2 text-sm">
+                <CnPriceRow
+                  label={tr("Quantity", "ចំនួន")}
+                  value={`${priceQty} ${tr("Items", "មុខ")}`}
+                />
+                {row.order_type !== "direct" && (
+                  <>
+                    <CnPriceRow
+                      label={tr("Product price", "តម្លៃទំនិញ")}
+                      value={money(priceGoods)}
+                    />
+                    {priceDom > 0 && (
+                      <CnPriceRow
+                        label={tr("China shipping", "ថ្លៃដឹកក្នុងប្រទេសចិន")}
+                        value={money(priceDom)}
+                      />
+                    )}
+                    {priceAddl > 0 && (
+                      <CnPriceRow
+                        label={tr("Additional services", "សេវាបន្ថែម")}
+                        value={money(priceAddl)}
+                      />
+                    )}
+                    {priceSvc > 0 && (
+                      <CnPriceRow
+                        label={tr("Service fee", "ថ្លៃសេវា")}
+                        value={money(priceSvc)}
+                      />
+                    )}
+                  </>
+                )}
               </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-slate-500">
-                  {tr("Quantity", "ចំនួន")}
-                </span>
-                <span className="font-medium">{row.quantity ?? "—"}</span>
-              </div>
-              {row.order_type !== "direct" && (
-                <>
-                  <div className="flex justify-between gap-3">
-                    <span className="text-slate-500">
-                      {tr("Payment", "ការទូទាត់")}
-                    </span>
-                    <CnPaymentBadge status={row.payment_status} />
+
+              {shipFees.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-slate-100">
+                  <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-slate-500">
+                    <Icons.Truck size={14} className="text-blue-600" />
+                    {tr("Shipping Fee (Cambodia)", "ថ្លៃដឹកជញ្ជូន (កម្ពុជា)")}
+                  </p>
+                  <div className="divide-y divide-slate-100 text-sm">
+                    {shipFees.map((r) => {
+                      const canPay =
+                        Number(wallet?.balance || 0) + 0.005 >= r.fee.due;
+                      return (
+                        <div key={r.tk} className="py-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <b className="font-mono text-slate-900 break-all">
+                              {r.tk}
+                            </b>
+                            <span className="flex items-center gap-2">
+                              <b>{money(r.fee.total)}</b>
+                              <CnPaymentBadge
+                                status={
+                                  r.fee.state === "paid" ? "Paid" : "Unpaid"
+                                }
+                              />
+                            </span>
+                          </div>
+                          {r.fee.state === "due" && (
+                            <div className="mt-2">
+                              <div className="flex justify-between gap-3 text-xs text-slate-500">
+                                <span>
+                                  {tr("Amount due", "ទឹកប្រាក់ត្រូវបង់")}
+                                </span>
+                                <b className="text-red-600">
+                                  {money(r.fee.due)}
+                                </b>
+                              </div>
+                              <div className="flex justify-between gap-3 text-xs text-slate-500 mt-1">
+                                <span>{tr("My wallet", "កាបូបរបស់ខ្ញុំ")}</span>
+                                <b
+                                  className={
+                                    canPay ? "text-slate-900" : "text-red-600"
+                                  }
+                                >
+                                  {money(wallet?.balance || 0)}
+                                </b>
+                              </div>
+                              {!canPay && (
+                                <p className="mt-2 rounded-xl bg-amber-50 text-amber-700 text-xs px-3 py-2.5">
+                                  {tr(
+                                    `Your wallet balance is not enough. You need ${money(r.fee.due - Number(wallet?.balance || 0))} more — please top up your wallet with our staff, then come back to pay.`,
+                                    `សមតុល្យកាបូបរបស់អ្នកមិនគ្រប់គ្រាន់ទេ។ អ្នកត្រូវការបន្ថែម ${money(r.fee.due - Number(wallet?.balance || 0))} — សូមបញ្ចូលទឹកប្រាក់ក្នុងកាបូបជាមួយបុគ្គលិក រួចត្រឡប់មកបង់ម្តងទៀត។`,
+                                  )}
+                                </p>
+                              )}
+                              {shipPayTk === r.tk ? (
+                                <div className="mt-3 space-y-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+                                  <p className="text-sm text-slate-600">
+                                    {tr(
+                                      `${money(r.fee.due)} will be deducted from your wallet.`,
+                                      `${money(r.fee.due)} នឹងត្រូវកាត់ចេញពីកាបូបរបស់អ្នក។`,
+                                    )}
+                                  </p>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <Btn
+                                      ghost
+                                      disabled={shipPayBusy}
+                                      onClick={() => setShipPayTk(null)}
+                                    >
+                                      {tr("Cancel", "បោះបង់")}
+                                    </Btn>
+                                    <Btn
+                                      disabled={shipPayBusy || !canPay}
+                                      loading={shipPayBusy}
+                                      onClick={() => confirmShippingPayment(r)}
+                                    >
+                                      {shipPayBusy
+                                        ? tr("Paying…", "កំពុងបង់…")
+                                        : tr("Confirm", "បញ្ជាក់")}
+                                    </Btn>
+                                  </div>
+                                </div>
+                              ) : (
+                                <Btn
+                                  className="mt-3"
+                                  disabled={!canPay}
+                                  onClick={() => {
+                                    setShipPayError("");
+                                    setShipPayTk(r.tk);
+                                  }}
+                                >
+                                  {tr(
+                                    `Pay ${money(r.fee.due)} from Wallet`,
+                                    `បង់ ${money(r.fee.due)} ពីកាបូប`,
+                                  )}
+                                </Btn>
+                              )}
+                              {shipPayError && shipPayTk === r.tk && (
+                                <p
+                                  role="alert"
+                                  className="mt-2 text-xs font-semibold text-red-600"
+                                >
+                                  {shipPayError}
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
-                  <div className="flex justify-between gap-3 pt-2 border-t border-slate-100">
-                    <span className="text-slate-500">
-                      {tr("Total", "សរុប")}
-                    </span>
-                    <span className="font-bold">
-                      {money(row.total_due_usd)}
-                    </span>
-                  </div>
-                </>
+                </div>
               )}
-            </div>
-          </Card>
+
+              <div className="mt-4 pt-3 border-t border-slate-200 flex items-center justify-between gap-3">
+                <span className="font-bold text-slate-900">
+                  {tr("Grand Total", "សរុបទាំងអស់")}
+                </span>
+                <span className="text-lg font-extrabold text-slate-900">
+                  {money(priceGrand)}
+                </span>
+              </div>
+              {pricePaid > 0.005 && (
+                <div className="mt-2 space-y-1.5 text-sm">
+                  <CnPriceRow
+                    label={tr("Paid", "បានបង់")}
+                    value={money(pricePaid)}
+                  />
+                  {priceRemain > 0.005 && !priceVoid && (
+                    <CnPriceRow
+                      label={tr("Remaining", "នៅសល់")}
+                      value={
+                        <b className="text-red-600">{money(priceRemain)}</b>
+                      }
+                    />
+                  )}
+                </div>
+              )}
+            </Card>
+          )}
           {row.order_type !== "direct" && (
             <Card className="p-5">
               <h2 className="font-bold mb-3 flex items-center gap-2">
@@ -38504,9 +38745,13 @@ function CnModalShell({
   submitDisabled = false,
   children,
 }) {
-  return (
+  // Render into <body> (portal) so the overlay + blur always cover the WHOLE
+  // viewport, including the topbar. Inside the app shell, parents with
+  // transform/overflow/backdrop-filter clipped the blur and left a strip.
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4"
+      className="cb-modal-backdrop fixed inset-0 z-[120] bg-slate-950/45 backdrop-blur-md flex items-center justify-center p-4"
+      style={{ top: 0, left: 0, right: 0, bottom: 0, minHeight: "100dvh" }}
       onClick={onClose}
     >
       <form
@@ -38549,7 +38794,8 @@ function CnModalShell({
           </button>
         </div>
       </form>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -38612,7 +38858,13 @@ function validateCnImage(file) {
 }
 
 // Returns { ok, failed:[messages] }. Never throws for a single bad file.
-async function uploadCnImages(cnOrderId, files, user, startOrder = 0) {
+async function uploadCnImages(
+  cnOrderId,
+  files,
+  user,
+  startOrder = 0,
+  itemNo = null,
+) {
   let ok = 0;
   const failed = [];
   let order = startOrder;
@@ -38635,6 +38887,7 @@ async function uploadCnImages(cnOrderId, files, user, startOrder = 0) {
         cn_order_id: cnOrderId,
         storage_path: path,
         sort_order: order++,
+        item_no: itemNo,
         created_by: user?.name || user?.email || "Admin",
       });
       if (error) {
@@ -38651,7 +38904,12 @@ async function uploadCnImages(cnOrderId, files, user, startOrder = 0) {
 
 // Same look as the AIR create screen: full-width dashed "+ Upload Image"
 // box, helper text, thumbnails with a remove (x) button.
-function CnImagePicker({ files, setFiles }) {
+function CnImagePicker({
+  files,
+  setFiles,
+  label = "Product / Package Image",
+  compact = false,
+}) {
   const [previews, setPreviews] = useState([]);
   const inputRef = useRef(null);
   useEffect(() => {
@@ -38678,12 +38936,12 @@ function CnImagePicker({ files, setFiles }) {
   }
   return (
     <div>
-      <label className={LABEL_CLS}>Product / Package Image</label>
+      <label className={LABEL_CLS}>{label}</label>
       {files.length < CN_IMG_MAX_COUNT && (
         <button
           type="button"
           onClick={() => inputRef.current?.click()}
-          className="w-full h-20 rounded-xl border-2 border-dashed border-blue-200 bg-blue-50/40 text-blue-600 grid place-items-center hover:border-blue-400 hover:bg-blue-50 transition-colors"
+          className={`w-full ${compact ? "h-16" : "h-20"} rounded-xl border-2 border-dashed border-blue-200 bg-blue-50/40 text-blue-600 grid place-items-center hover:border-blue-400 hover:bg-blue-50 transition-colors`}
         >
           <span className="flex flex-col items-center gap-1 text-xs font-semibold">
             <Icons.Image size={20} />+ Upload Image
@@ -38762,7 +39020,7 @@ async function loadCnImages(cnOrderId) {
   try {
     const { data, error } = await supabase
       .from("cn_order_images")
-      .select("id,cn_order_id,storage_path,sort_order,created_at")
+      .select("id,cn_order_id,storage_path,sort_order,item_no,created_at")
       .eq("cn_order_id", cnOrderId)
       .order("sort_order", { ascending: true })
       .order("created_at", { ascending: true });
@@ -38772,6 +39030,28 @@ async function loadCnImages(cnOrderId) {
   } catch {
     return [];
   }
+}
+
+// Splits an order's images by item: byItem[0] = Item 1 photos, ...
+// `loose` = photos with no item (older orders) or pointing to a removed item.
+function groupCnImages(images, itemCount) {
+  const byItem = Array.from({ length: itemCount }, () => []);
+  const loose = [];
+  (images || []).forEach((im) => {
+    const n = Number(im.item_no);
+    if (n >= 1 && n <= itemCount) byItem[n - 1].push(im);
+    else loose.push(im);
+  });
+  return { byItem, loose };
+}
+
+async function assignCnImageItem(img, itemNo, user) {
+  requirePermission(user, "cn_order.edit");
+  const { error } = await supabase
+    .from("cn_order_images")
+    .update({ item_no: itemNo, updated_at: new Date().toISOString() })
+    .eq("id", img.id);
+  if (error) throw error;
 }
 
 // Adds cover_url + image_count to the first `limit` rows (2 small queries).
@@ -38836,18 +39116,15 @@ async function makeCnImagePrimary(images, img, user) {
   }
 }
 
-// Customer card (same look as AIR "Product Information"): image(s) +
-// name / variant / qty / total. View only.
+// Customer card: one clear block per product (photo + name + variant +
+// price × qty), grouped under the shop they were bought from. View only.
+// Photos are stored per order (not per item): item #1 gets photo #1, item #2
+// gets photo #2 … ; the rest stay reachable from "View all photos".
 function CnProductInfoCard({ row, images, loading, tr, Card }) {
-  const [idx, setIdx] = useState(0);
   const [viewer, setViewer] = useState(false);
-  const touchX = useRef(null);
+  const [start, setStart] = useState(0);
   const n = images.length;
-  const cur = images[Math.min(idx, Math.max(n - 1, 0))];
-  const qty = Number(row.quantity);
-  const total = Number(row.total_due_usd);
-  const showTotal =
-    row.order_type !== "direct" && Number.isFinite(total) && total > 0;
+  const isDirect = row.order_type === "direct";
   const itemRows =
     Array.isArray(row.cn_order_items) && row.cn_order_items.length
       ? row.cn_order_items
@@ -38861,102 +39138,105 @@ function CnProductInfoCard({ row, images, loading, tr, Card }) {
             unit_price_usd: row.unit_price_usd,
           },
         ];
+  // Photos are tagged with the item they belong to (item_no). Older orders
+  // have no tag, so they keep the old "photo #N = item #N" fallback.
+  const hasAssign = images.some((i) => Number(i.item_no) >= 1);
+  const grouped = groupCnImages(images, itemRows.length);
+  const rate = Number(row.cny_per_usd) || 0;
+  const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+  const priceOf = (it) => {
+    const q = Number(it.quantity) || 1;
+    let unit = 0;
+    if (row.pricing_mode === "usd") unit = Number(it.unit_price_usd) || 0;
+    else if (rate > 0) unit = (Number(it.unit_price_cny) || 0) / rate;
+    let line = r2(unit * q);
+    if (
+      row.pricing_mode !== "usd" &&
+      Number.isFinite(Number(it.line_total_usd))
+    )
+      line = r2(it.line_total_usd);
+    return { q, unit: r2(line / q), line };
+  };
+  const open = (i) => {
+    setStart(Math.min(i, Math.max(n - 1, 0)));
+    setViewer(true);
+  };
   return (
     <Card className="p-5">
-      <h2 className="font-bold mb-4">
-        {tr("Product Information", "ព័ត៌មានផលិតផល")}
-      </h2>
-      <div className="flex gap-4">
-        <div className="shrink-0">
-          {loading ? (
-            <div className="w-28 h-28 rounded-2xl bg-slate-200/70 animate-pulse" />
-          ) : (
-            <div
-              onTouchStart={(e) => (touchX.current = e.touches[0].clientX)}
-              onTouchEnd={(e) => {
-                if (touchX.current == null || n < 2) return;
-                const dx = e.changedTouches[0].clientX - touchX.current;
-                touchX.current = null;
-                if (Math.abs(dx) > 40)
-                  setIdx((v) => (v + (dx < 0 ? 1 : -1) + n) % n);
-              }}
-            >
-              <AirImg
-                src={cur?.url}
-                alt={row.product_name || "Product"}
-                onClick={n ? () => setViewer(true) : undefined}
-                className="w-28 h-28 rounded-2xl"
-                fallbackSize={30}
-                FallbackIcon={Icons.ShoppingCart}
-              />
-            </div>
-          )}
-          {n > 1 && (
-            <div className="flex justify-center gap-1.5 mt-2">
-              {images.map((im, k) => (
-                <button
-                  key={im.id}
-                  type="button"
-                  aria-label={`Image ${k + 1}`}
-                  onClick={() => setIdx(k)}
-                  className={`h-1.5 rounded-full transition-all ${k === idx ? "w-4 bg-blue-600" : "w-1.5 bg-slate-300"}`}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="flex-1 min-w-0 flex flex-col">
-          <p className="font-bold text-[15px] leading-snug break-words">
-            {row.product_name || row.product_url || "—"}
-          </p>
-          {(row.variant || qty > 0) && (
-            <p className="text-[13px] text-slate-500 mt-1 break-words">
-              {[row.variant, qty > 0 ? `${qty}pcs` : ""]
-                .filter(Boolean)
-                .join(" · ")}
-            </p>
-          )}
-          {showTotal && (
-            <p className="font-bold text-[15px] mt-2">{money(total)}</p>
-          )}
-          {itemRows.length > 1 && (
-            <p className="text-xs text-slate-500 mt-1">
-              {itemRows.length} {tr("product items", "មុខទំនិញ")}
-            </p>
-          )}
-          {n > 0 && (
-            <button
-              type="button"
-              onClick={() => setViewer(true)}
-              className="mt-auto self-start h-8 px-3 rounded-full bg-blue-600 text-white text-xs font-bold inline-flex items-center gap-1"
-            >
-              {tr("View All", "មើលទាំងអស់")} ({n})
-              <Icons.ArrowRight size={13} />
-            </button>
-          )}
-        </div>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="font-bold">
+          {tr("Product Information", "ព័ត៌មានផលិតផល")}
+        </h2>
+        {itemRows.length > 1 && (
+          <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-bold text-blue-700">
+            {itemRows.length} {tr("items", "មុខទំនិញ")}
+          </span>
+        )}
       </div>
-      {itemRows.length > 0 && (
-        <div className="mt-4 rounded-xl border border-slate-200 divide-y divide-slate-100 overflow-hidden">
-          {itemRows.map((item, index) => (
+      {(row.shop_name || row.platform) && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl bg-slate-50 px-3 py-2 text-xs">
+          <Icons.ShoppingCart size={14} className="text-blue-600" />
+          <span className="text-slate-500">{tr("Shop", "ហាង")}</span>
+          <b className="text-slate-800 break-words">{row.shop_name || "—"}</b>
+          {row.platform && (
+            <span className="rounded-full bg-white px-2 py-0.5 font-semibold text-slate-600 border border-slate-200">
+              {row.platform}
+            </span>
+          )}
+        </div>
+      )}
+      <div className="mt-3 space-y-3">
+        {itemRows.map((item, index) => {
+          const { q, unit, line } = priceOf(item);
+          const itemImgs = hasAssign
+            ? grouped.byItem[index]
+            : images[index]
+              ? [images[index]]
+              : [];
+          const img = itemImgs[0];
+          return (
             <div
               key={`${row.id || row.order_id}-customer-item-${index}`}
-              className="px-3 py-3 flex items-start justify-between gap-3"
+              className="flex gap-3 rounded-2xl border border-slate-200 p-3"
             >
-              <div className="min-w-0">
-                <p className="text-sm font-semibold text-slate-800 break-words">
+              <div className="shrink-0 relative">
+                {loading ? (
+                  <div className="w-20 h-20 rounded-xl bg-slate-200/70 animate-pulse" />
+                ) : (
+                  <AirImg
+                    src={img?.url}
+                    alt={item.product_name || "Product"}
+                    onClick={img ? () => open(images.indexOf(img)) : undefined}
+                    className="w-20 h-20 rounded-xl"
+                    fallbackSize={24}
+                    FallbackIcon={Icons.ShoppingCart}
+                  />
+                )}
+                {itemRows.length > 1 && (
+                  <span className="absolute -top-1.5 -left-1.5 h-5 min-w-5 px-1 rounded-full bg-slate-900 text-white text-[10px] font-bold grid place-items-center">
+                    {index + 1}
+                  </span>
+                )}
+                {itemImgs.length > 1 && (
+                  <span className="absolute -bottom-1.5 -right-1.5 h-5 min-w-5 px-1 rounded-full bg-blue-600 text-white text-[10px] font-bold grid place-items-center">
+                    +{itemImgs.length - 1}
+                  </span>
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-bold text-slate-900 leading-snug break-words">
                   {item.product_name ||
                     item.product_url ||
                     `${tr("Item", "មុខទំនិញ")} ${index + 1}`}
                 </p>
                 {item.variant && (
-                  <p className="text-xs text-slate-500 mt-0.5">
+                  <span className="mt-1 inline-block max-w-full rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600 break-words">
                     {item.variant}
-                  </p>
+                  </span>
                 )}
                 {item.product_url && item.product_name && (
                   <a
-                    className="text-xs text-blue-600 break-all"
+                    className="mt-1 block text-xs text-blue-600 truncate"
                     href={item.product_url}
                     target="_blank"
                     rel="noreferrer"
@@ -38964,34 +39244,66 @@ function CnProductInfoCard({ row, images, loading, tr, Card }) {
                     {item.product_url}
                   </a>
                 )}
-                <p className="text-xs text-slate-500 mt-1">
-                  {tr("Quantity", "ចំនួន")}: {item.quantity || 1}
-                </p>
-              </div>
-              {row.order_type !== "direct" && (
-                <div className="text-right shrink-0">
-                  <p className="text-sm font-bold text-slate-800">
-                    {row.pricing_mode === "usd"
-                      ? money(item.unit_price_usd || 0)
-                      : cnCny(item.unit_price_cny || 0)}
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    {tr("per item", "ក្នុងមួយដុំ")}
-                  </p>
+                <div className="mt-2 flex items-end justify-between gap-3">
+                  <span className="text-xs text-slate-500">
+                    {tr("Qty", "ចំនួន")}: <b className="text-slate-800">{q}</b>
+                  </span>
+                  {!isDirect && (
+                    <span className="text-right">
+                      <span className="block text-sm font-bold text-slate-900">
+                        {money(unit)}
+                      </span>
+                      {q > 1 && (
+                        <span className="block text-[11px] text-slate-500">
+                          {q} × {money(unit)} = {money(line)}
+                        </span>
+                      )}
+                    </span>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
-          ))}
-        </div>
+          );
+        })}
+      </div>
+      {n > 0 && (
+        <button
+          type="button"
+          onClick={() => open(0)}
+          className="mt-3 h-8 px-3 rounded-full bg-blue-600 text-white text-xs font-bold inline-flex items-center gap-1"
+        >
+          {tr("View all photos", "មើលរូបភាពទាំងអស់")} ({n})
+          <Icons.ArrowRight size={13} />
+        </button>
       )}
       {viewer && (
         <AirImageViewerFull
           images={images}
-          start={idx}
+          start={start}
           onClose={() => setViewer(false)}
         />
       )}
     </Card>
+  );
+}
+
+// One "label ........ value" line of the customer price card.
+function CnPriceRow({ label, value, strong }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span
+        className={strong ? "font-semibold text-slate-800" : "text-slate-500"}
+      >
+        {label}
+      </span>
+      <span
+        className={
+          strong ? "font-bold text-slate-900" : "font-medium text-slate-800"
+        }
+      >
+        {value}
+      </span>
+    </div>
   );
 }
 
@@ -39002,6 +39314,7 @@ function CnImagesModal({ open, row, onClose }) {
   const [images, setImages] = useState([]);
   const [busy, setBusy] = useState(false);
   const fileRef = useRef(null);
+  const targetRef = useRef(null); // item_no the next upload belongs to
   const refresh = React.useCallback(async () => {
     if (row?.id) setImages(await loadCnImages(row.id));
   }, [row?.id]);
@@ -39009,22 +39322,41 @@ function CnImagesModal({ open, row, onClose }) {
     if (open && row) refresh();
   }, [open, row, refresh]);
   if (!open || !row) return null;
+  const items =
+    Array.isArray(row.cn_order_items) && row.cn_order_items.length
+      ? row.cn_order_items
+      : [{ product_name: row.product_name, variant: row.variant }];
+  const grouped = groupCnImages(images, items.length);
+  function pickFor(itemNo) {
+    targetRef.current = itemNo;
+    fileRef.current?.click();
+  }
   async function addFiles(list) {
     const files = Array.from(list || []);
+    const itemNo = targetRef.current;
     if (fileRef.current) fileRef.current.value = "";
     if (!files.length) return;
-    if (images.length + files.length > CN_IMG_MAX_COUNT)
+    const already = itemNo
+      ? grouped.byItem[itemNo - 1].length
+      : grouped.loose.length;
+    if (already + files.length > CN_IMG_MAX_COUNT)
       return emitCBToast(
         "err",
         "Too many images",
-        `Maximum ${CN_IMG_MAX_COUNT} images per order.`,
+        `Maximum ${CN_IMG_MAX_COUNT} images per item.`,
       );
     setBusy(true);
     try {
       requirePermission(user, "cn_order.edit");
       const start =
         Math.max(-1, ...images.map((i) => Number(i.sort_order) || 0)) + 1;
-      const { ok, failed } = await uploadCnImages(row.id, files, user, start);
+      const { ok, failed } = await uploadCnImages(
+        row.id,
+        files,
+        user,
+        start,
+        itemNo,
+      );
       if (ok) emitCBToast("ok", "Image uploaded", `${ok} image(s) saved.`);
       if (failed.length) emitCBToast("err", "Upload failed", failed[0]);
       await refresh();
@@ -39063,6 +39395,73 @@ function CnImagesModal({ open, row, onClose }) {
       setBusy(false);
     }
   }
+  async function assign(img, itemNo) {
+    setBusy(true);
+    try {
+      await assignCnImageItem(img, itemNo, user);
+      await refresh();
+    } catch (err) {
+      emitCBToast("err", "Update failed", err.message || "Not allowed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  const thumbs = (list, canAssign) => (
+    <div className="flex flex-wrap gap-3">
+      {list.map((im) => (
+        <div key={im.id} className="w-24">
+          <div className="relative w-24 h-24">
+            <AirImg
+              src={im.url}
+              className="w-24 h-24 rounded-xl border border-slate-200"
+              fallbackSize={18}
+              FallbackIcon={Icons.ShoppingCart}
+            />
+            {images[0]?.id === im.id ? (
+              <span className="absolute left-1 bottom-1 text-[9px] font-bold bg-blue-600 text-white rounded px-1">
+                Primary
+              </span>
+            ) : (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => primary(im)}
+                className="absolute left-1 bottom-1 text-[9px] font-bold bg-white/90 text-slate-700 rounded px-1"
+              >
+                Set primary
+              </button>
+            )}
+            <button
+              type="button"
+              aria-label="Delete image"
+              disabled={busy}
+              onClick={() => remove(im)}
+              className="absolute -right-1.5 -top-1.5 w-5 h-5 rounded-full bg-red-600 text-white grid place-items-center"
+            >
+              <Icons.Trash2 size={11} />
+            </button>
+          </div>
+          {canAssign && (
+            <select
+              disabled={busy}
+              value=""
+              onChange={(e) =>
+                e.target.value && assign(im, Number(e.target.value))
+              }
+              className="mt-1 w-full h-7 rounded-lg border border-amber-300 bg-amber-50 text-[11px] font-semibold text-amber-800"
+            >
+              <option value="">Assign to…</option>
+              {items.map((_, i) => (
+                <option key={i} value={i + 1}>
+                  Item {i + 1}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+      ))}
+    </div>
+  );
   return (
     <div
       className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4"
@@ -39081,62 +39480,59 @@ function CnImagesModal({ open, row, onClose }) {
             <Icons.X size={18} />
           </button>
         </div>
-        <div className="p-5 space-y-3 max-h-[70vh] overflow-y-auto">
-          {images.length < CN_IMG_MAX_COUNT && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => fileRef.current?.click()}
-              className="w-full h-20 rounded-xl border-2 border-dashed border-blue-200 bg-blue-50/40 text-blue-600 grid place-items-center hover:border-blue-400 hover:bg-blue-50 transition-colors disabled:opacity-50"
-            >
-              {busy ? (
-                <Loader2 size={20} className="animate-spin" />
-              ) : (
-                <span className="flex flex-col items-center gap-1 text-xs font-semibold">
-                  <Icons.Image size={20} />+ Upload Image
-                </span>
-              )}
-            </button>
-          )}
+        <div className="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
           <p className="text-[11px] text-slate-400">
             Supported: JPG, PNG, WEBP · Max 5MB each · up to {CN_IMG_MAX_COUNT}{" "}
-            images. Changes are saved immediately.
+            images per item. Changes are saved immediately.
           </p>
-          <div className="flex flex-wrap gap-3">
-            {images.map((im, k) => (
-              <div key={im.id} className="relative w-24 h-24">
-                <AirImg
-                  src={im.url}
-                  className="w-24 h-24 rounded-xl border border-slate-200"
-                  fallbackSize={18}
-                  FallbackIcon={Icons.ShoppingCart}
-                />
-                {k === 0 ? (
-                  <span className="absolute left-1 bottom-1 text-[9px] font-bold bg-blue-600 text-white rounded px-1">
-                    Primary
+          {items.map((it, i) => (
+            <div
+              key={i}
+              className="rounded-xl border border-slate-200 bg-slate-50/70 p-3 space-y-2"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2 text-sm">
+                  <span className="h-5 min-w-5 px-1.5 rounded-full bg-slate-900 text-white text-[11px] font-bold grid place-items-center">
+                    {i + 1}
                   </span>
-                ) : (
+                  <b className="truncate text-slate-800">
+                    {it.product_name || `Item ${i + 1}`}
+                  </b>
+                </div>
+                {grouped.byItem[i].length < CN_IMG_MAX_COUNT && (
                   <button
                     type="button"
                     disabled={busy}
-                    onClick={() => primary(im)}
-                    className="absolute left-1 bottom-1 text-[9px] font-bold bg-white/90 text-slate-700 rounded px-1"
+                    onClick={() => pickFor(i + 1)}
+                    className="shrink-0 h-8 px-3 rounded-lg border border-blue-200 bg-white text-blue-600 text-xs font-semibold inline-flex items-center gap-1.5 disabled:opacity-50"
                   >
-                    Set primary
+                    {busy ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <Icons.Image size={13} />
+                    )}
+                    + Upload
                   </button>
                 )}
-                <button
-                  type="button"
-                  aria-label="Delete image"
-                  disabled={busy}
-                  onClick={() => remove(im)}
-                  className="absolute -right-1.5 -top-1.5 w-5 h-5 rounded-full bg-red-600 text-white grid place-items-center"
-                >
-                  <Icons.Trash2 size={11} />
-                </button>
               </div>
-            ))}
-          </div>
+              {grouped.byItem[i].length ? (
+                thumbs(grouped.byItem[i], false)
+              ) : (
+                <p className="text-xs text-slate-400">No photo yet.</p>
+              )}
+            </div>
+          ))}
+          {grouped.loose.length > 0 && (
+            <div className="rounded-xl border border-amber-300 bg-amber-50/50 p-3 space-y-2">
+              <b className="text-sm text-amber-800">
+                Not assigned to an item ({grouped.loose.length})
+              </b>
+              <p className="text-xs text-amber-700">
+                Choose which item each photo belongs to.
+              </p>
+              {thumbs(grouped.loose, true)}
+            </div>
+          )}
           <input
             ref={fileRef}
             type="file"
@@ -39182,6 +39578,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
       quantity: "1",
       unit_price_cny: "",
       unit_price_usd: "",
+      files: [],
     },
   ]);
   const [pricingMode, setPricingMode] = useState("cny");
@@ -39196,7 +39593,6 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
   const [method, setMethod] = useState(CN_PAYMENT_METHODS[0]);
   const [ref, setRef] = useState("");
   const [note, setNote] = useState("");
-  const [imgFiles, setImgFiles] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const { results: customerResults, loading: customerLoading } =
@@ -39223,6 +39619,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
         quantity: "1",
         unit_price_cny: "",
         unit_price_usd: "",
+        files: [],
       },
     ]);
     setPricingMode("cny");
@@ -39238,7 +39635,6 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
     setMethod(CN_PAYMENT_METHODS[0]);
     setRef("");
     setNote("");
-    setImgFiles([]);
     setBusy(false);
     setError("");
   }, [open]);
@@ -39469,10 +39865,27 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
           note: `Payment received ${money(totals.totalDueUsd)} via ${method}${cnNz(ref) ? ` · ${ref.trim()}` : ""}`,
         });
       await supabase.from("cn_order_history").insert(hist);
-      if (imgFiles.length) {
+      const imgJobs = lineItems
+        .map((it, i) => ({ files: it.files || [], no: i + 1 }))
+        .filter((j) => j.files.length);
+      if (imgJobs.length) {
         // The order is already saved; an image problem never undoes it.
         try {
-          const { ok, failed } = await uploadCnImages(data.id, imgFiles, user);
+          let ok = 0;
+          const failed = [];
+          let offset = 0;
+          for (const job of imgJobs) {
+            const r = await uploadCnImages(
+              data.id,
+              job.files,
+              user,
+              offset,
+              job.no,
+            );
+            offset += job.files.length;
+            ok += r.ok;
+            failed.push(...r.failed);
+          }
           if (ok) emitCBToast("ok", "Image uploaded", `${ok} image(s) saved.`);
           if (failed.length)
             emitCBToast("err", "Image upload failed", failed[0]);
@@ -39698,6 +40111,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
                   quantity: "1",
                   unit_price_cny: "",
                   unit_price_usd: "",
+                  files: [],
                 },
               ])
             }
@@ -39822,6 +40236,12 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
                   </div>
                 )}
               </div>
+              <CnImagePicker
+                label={`Item ${index + 1} Photo`}
+                compact
+                files={item.files || []}
+                setFiles={(f) => setField("files", f)}
+              />
             </div>
           );
         })}
@@ -39830,7 +40250,6 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
           <b className="text-slate-900">{totals.totalQuantity || 0}</b>
         </div>
       </section>
-      <CnImagePicker files={imgFiles} setFiles={setImgFiles} />
 
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <div className={isDirect || pricingMode !== "cny" ? "hidden" : ""}>
@@ -43521,6 +43940,41 @@ function CnOrderDetailPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [changeTkTarget, setChangeTkTarget] = useState(null); // TK being changed
   const [pickTkOpen, setPickTkOpen] = useState(false);
+  // Staff can take the Cambodia shipping fee on behalf of the customer.
+  const [feePay, setFeePay] = useState(null); // { tk, method: "wallet" | "cash" }
+  const [feeBusy, setFeeBusy] = useState(false);
+  const [custBal, setCustBal] = useState(null);
+  const canPayShip = hasPermission(user, "payment.manage");
+  useEffect(() => {
+    let alive = true;
+    if (!supabase || !row?.customer_id || !canPayShip) return undefined;
+    supabase
+      .from("customers")
+      .select("balance")
+      .eq("id", row.customer_id)
+      .maybeSingle()
+      .then(({ data }) => alive && setCustBal(Number(data?.balance) || 0));
+    return () => {
+      alive = false;
+    };
+  }, [row?.customer_id, canPayShip, parcels]);
+  async function confirmFeePay() {
+    if (!feePay || feeBusy) return;
+    setFeeBusy(true);
+    const { error } = await supabase.rpc("pay_shipping_fee", {
+      p_tk: feePay.tk,
+      p_method: feePay.method,
+    });
+    setFeeBusy(false);
+    if (error) return emitCBToast("err", "Payment failed", walletErr(error));
+    emitCBToast(
+      "ok",
+      "Shipping Paid",
+      `${feePay.tk} shipping fee marked as paid.`,
+    );
+    setFeePay(null);
+    load();
+  }
   const [editParcelId, setEditParcelId] = useState(null);
   const [editParcelVal, setEditParcelVal] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -43558,14 +44012,21 @@ function CnOrderDetailPage() {
         // Physical TKs linked to this order (packages.cn_order_id)
         supabase
           .from("packages")
-          .select("tk,status")
+          .select("tk,status,freight_fee,paid_amount")
           .eq("cn_order_id", data.id),
       ]);
       const tkByKey = new Map((pk || []).map((x) => [cnLinkKey(x.tk), x]));
       const merged = (p || []).map((x) => {
         const m = tkByKey.get(cnLinkKey(x.domestic_tracking));
         return m
-          ? { ...x, tk: m.tk, status: TK_TO_CN_STATUS[m.status] || m.status }
+          ? {
+              ...x,
+              tk: m.tk,
+              status: TK_TO_CN_STATUS[m.status] || m.status,
+              tk_status: m.status,
+              freight_fee: m.freight_fee,
+              paid_amount: m.paid_amount,
+            }
           : x;
       });
       setParcels(merged);
@@ -44263,6 +44724,99 @@ function CnOrderDetailPage() {
               />
             </div>
           )}
+          {cnShippingFeeRows(parcels).length > 0 && (
+            <div className="cb-surface p-5">
+              <h2 className="font-bold text-sm mb-3">
+                Shipping Fee (Cambodia)
+              </h2>
+              <div className="divide-y divide-slate-100 text-sm">
+                {cnShippingFeeRows(parcels).map((r) => (
+                  <div
+                    key={r.tk}
+                    className="py-2.5 flex flex-wrap items-center justify-between gap-3"
+                  >
+                    <Link
+                      to={`/packages/${encodeURIComponent(r.tk)}`}
+                      className="font-mono font-semibold text-signal-blue hover:underline"
+                    >
+                      {r.tk}
+                    </Link>
+                    <span className="flex items-center gap-2">
+                      <b>{money(r.fee.total)}</b>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${r.fee.state === "paid" ? "bg-emerald-100 text-emerald-700" : "bg-red-50 text-red-600"}`}
+                      >
+                        {r.fee.state === "paid"
+                          ? "Paid"
+                          : `Due ${money(r.fee.due)}`}
+                      </span>
+                    </span>
+                    {r.fee.state === "due" && canPayShip && (
+                      <div className="basis-full">
+                        {feePay?.tk === r.tk ? (
+                          <div className="mt-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3 space-y-2">
+                            <p className="text-sm text-slate-600">
+                              {feePay.method === "wallet"
+                                ? `${money(r.fee.due)} will be deducted from the customer's wallet.`
+                                : `Mark ${money(r.fee.due)} as received in cash / bank transfer. The wallet is not touched.`}
+                            </p>
+                            <div className="flex gap-2">
+                              <button
+                                type="button"
+                                disabled={feeBusy}
+                                onClick={() => setFeePay(null)}
+                                className="h-9 px-4 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                disabled={feeBusy}
+                                onClick={confirmFeePay}
+                                className="h-9 px-4 rounded-lg bg-blue-600 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+                              >
+                                {feeBusy ? "Saving…" : "Confirm"}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              disabled={
+                                custBal === null || custBal + 0.005 < r.fee.due
+                              }
+                              onClick={() =>
+                                setFeePay({ tk: r.tk, method: "wallet" })
+                              }
+                              className="h-9 px-3 rounded-lg bg-blue-600 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                            >
+                              Pay from Wallet
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setFeePay({ tk: r.tk, method: "cash" })
+                              }
+                              className="h-9 px-3 rounded-lg border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                            >
+                              Received Cash / Bank
+                            </button>
+                            {custBal !== null &&
+                              custBal + 0.005 < r.fee.due && (
+                                <span className="self-center text-[11px] text-slate-500">
+                                  Wallet {money(custBal)} is lower than the fee.
+                                </span>
+                              )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {(cnImages.length > 0 || canEdit) && (
             <div className="cb-surface p-5">
               <div className="flex items-center justify-between mb-3">
@@ -44282,17 +44836,64 @@ function CnOrderDetailPage() {
                 )}
               </div>
               {cnImages.length > 0 ? (
-                <div className="flex flex-wrap gap-3">
-                  {cnImages.map((im, k) => (
-                    <AirImg
-                      key={im.id}
-                      src={im.url}
-                      onClick={() => setCnViewer(k)}
-                      className="w-24 h-24 rounded-xl border border-slate-200"
-                      FallbackIcon={Icons.ShoppingCart}
-                    />
-                  ))}
-                </div>
+                (() => {
+                  const its =
+                    Array.isArray(row.cn_order_items) &&
+                    row.cn_order_items.length
+                      ? row.cn_order_items
+                      : [{ product_name: row.product_name }];
+                  const g = groupCnImages(cnImages, its.length);
+                  const thumbs = (list) => (
+                    <div className="flex flex-wrap gap-3">
+                      {list.map((im) => (
+                        <AirImg
+                          key={im.id}
+                          src={im.url}
+                          onClick={() => setCnViewer(cnImages.indexOf(im))}
+                          className="w-24 h-24 rounded-xl border border-slate-200"
+                          FallbackIcon={Icons.ShoppingCart}
+                        />
+                      ))}
+                    </div>
+                  );
+                  return (
+                    <div className="space-y-4">
+                      {its.map((it, i) => (
+                        <div key={i}>
+                          <div className="mb-2 flex items-center gap-2 text-xs">
+                            <span className="h-5 min-w-5 px-1.5 rounded-full bg-slate-900 text-white font-bold grid place-items-center">
+                              {i + 1}
+                            </span>
+                            <b className="text-slate-800 truncate">
+                              {it.product_name || `Item ${i + 1}`}
+                            </b>
+                            {it.variant && (
+                              <span className="text-slate-500 truncate">
+                                · {it.variant}
+                              </span>
+                            )}
+                          </div>
+                          {g.byItem[i].length ? (
+                            thumbs(g.byItem[i])
+                          ) : (
+                            <p className="text-xs text-slate-400">
+                              No photo for this item.
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                      {g.loose.length > 0 && (
+                        <div>
+                          <div className="mb-2 text-xs font-bold text-amber-700">
+                            Not assigned to an item ({g.loose.length}) — open
+                            Manage to assign
+                          </div>
+                          {thumbs(g.loose)}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()
               ) : (
                 <p className="text-xs text-slate-400">No images yet.</p>
               )}
@@ -44307,54 +44908,78 @@ function CnOrderDetailPage() {
                     Product Items ({row.cn_order_items.length})
                   </div>
                   <div className="divide-y divide-slate-100">
-                    {row.cn_order_items.map((item, index) => (
-                      <div
-                        key={`${row.id}-item-${index}`}
-                        className="grid grid-cols-12 gap-2 px-3 py-3 text-sm"
-                      >
-                        <div className="col-span-8 min-w-0">
-                          <b className="block text-slate-800">
-                            {item.product_name || `Item ${index + 1}`}
-                          </b>
-                          {item.variant && (
-                            <span className="block text-xs text-slate-500">
-                              {item.variant}
-                            </span>
-                          )}
-                          {item.product_url && (
-                            <a
-                              href={item.product_url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="block truncate text-xs text-blue-600 hover:underline"
-                            >
-                              {item.product_url}
-                            </a>
-                          )}
-                        </div>
-                        <div className="col-span-4 text-right">
-                          <b>
-                            {item.quantity} ×{" "}
-                            {row.pricing_mode === "usd"
-                              ? money(item.unit_price_usd || 0)
-                              : cnCny(item.unit_price_cny || 0)}
-                          </b>
-                          <span className="block text-xs text-slate-500">
-                            {row.pricing_mode === "usd"
-                              ? money(
-                                  item.line_total_usd ??
-                                    (Number(item.quantity) || 0) *
-                                      (Number(item.unit_price_usd) || 0),
-                                )
-                              : cnCny(
-                                  item.line_total_cny ??
-                                    (Number(item.quantity) || 0) *
-                                      (Number(item.unit_price_cny) || 0),
+                    {row.cn_order_items.map((item, index) => {
+                      const itemPhotos = cnImages.filter(
+                        (im) => Number(im.item_no) === index + 1,
+                      );
+                      return (
+                        <div
+                          key={`${row.id}-item-${index}`}
+                          className="grid grid-cols-12 gap-2 px-3 py-3 text-sm"
+                        >
+                          <div className="col-span-8 min-w-0 flex gap-3">
+                            {itemPhotos[0] && (
+                              <div className="relative shrink-0">
+                                <AirImg
+                                  src={itemPhotos[0].url}
+                                  onClick={() =>
+                                    setCnViewer(cnImages.indexOf(itemPhotos[0]))
+                                  }
+                                  className="w-12 h-12 rounded-lg border border-slate-200"
+                                  FallbackIcon={Icons.ShoppingCart}
+                                />
+                                {itemPhotos.length > 1 && (
+                                  <span className="absolute -bottom-1 -right-1 h-4 min-w-4 px-1 rounded-full bg-blue-600 text-white text-[9px] font-bold grid place-items-center">
+                                    +{itemPhotos.length - 1}
+                                  </span>
                                 )}
-                          </span>
+                              </div>
+                            )}
+                            <div className="min-w-0">
+                              <b className="block text-slate-800">
+                                {item.product_name || `Item ${index + 1}`}
+                              </b>
+                              {item.variant && (
+                                <span className="block text-xs text-slate-500">
+                                  {item.variant}
+                                </span>
+                              )}
+                              {item.product_url && (
+                                <a
+                                  href={item.product_url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="block truncate text-xs text-blue-600 hover:underline"
+                                >
+                                  {item.product_url}
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                          <div className="col-span-4 text-right">
+                            <b>
+                              {item.quantity} ×{" "}
+                              {row.pricing_mode === "usd"
+                                ? money(item.unit_price_usd || 0)
+                                : cnCny(item.unit_price_cny || 0)}
+                            </b>
+                            <span className="block text-xs text-slate-500">
+                              {row.pricing_mode === "usd"
+                                ? money(
+                                    item.line_total_usd ??
+                                      (Number(item.quantity) || 0) *
+                                        (Number(item.unit_price_usd) || 0),
+                                  )
+                                : cnCny(
+                                    item.line_total_cny ??
+                                      (Number(item.quantity) || 0) *
+                                        (Number(item.unit_price_cny) || 0),
+                                  )}
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -49571,101 +50196,149 @@ function cnInvoiceHtml({
   issuedBy,
   when,
   tksByOrder = {},
+  feesByOrder = {},
 }) {
   const e = htmlEsc;
   const logo = company?.logoUrl || company?.logoDataUrl || "";
   const usd = (n) => `$${(Number(n) || 0).toFixed(2)}`;
-  const total = orders.reduce(
-    (sum, order) => sum + (Number(order.total_due_usd) || 0),
-    0,
-  );
+  const feesOf = (o) => feesByOrder[String(o.id)] || [];
+  // Once the goods are in Cambodia (shipping fee exists) the order itself was
+  // paid long before, so the invoice bills ONLY the unpaid shipping fee and
+  // does not show the goods amount. Orders without a shipping fee yet are
+  // billed for their goods as before.
+  const showGoods = orders.some((o) => !feesOf(o).length);
+  // Only show the TK / Shipping Fee columns once at least one order actually
+  // has a TK / a Cambodia shipping fee, so early-stage invoices stay compact.
+  const hasTk = orders.some((o) => (tksByOrder[String(o.id)] || []).length);
+  const hasFee = orders.some((o) => feesOf(o).length);
   let lineNo = 0; // running 1, 2, 3 ... per real product line
+  let grand = 0;
+  const dash = "—";
+  const rowsHtml = orders
+    .map((o) => {
+      const mode = o.pricing_mode || "cny";
+      const rate = Number(o.cny_per_usd) || 0;
+      const fees = feesOf(o);
+      const shipOnly = fees.length > 0;
+      const feeTotal = fees.reduce((t, f) => t + f.fee.total, 0);
+      const feeDue = fees.reduce((t, f) => t + f.fee.due, 0);
+      const feeAllPaid = shipOnly && feeDue <= 0.004;
+      const rawItems =
+        Array.isArray(o.cn_order_items) && o.cn_order_items.length
+          ? o.cn_order_items
+          : [
+              {
+                product_name: o.product_name,
+                product_url: o.product_url,
+                variant: o.variant,
+                quantity: o.quantity ?? 1,
+                unit_price_cny: o.unit_price_cny,
+                unit_price_usd: o.unit_price_usd,
+                line_total_cny: o.product_total_cny,
+                line_total_usd:
+                  mode === "usd"
+                    ? (Number(o.quantity) || 1) *
+                      (Number(o.unit_price_usd) || 0)
+                    : rate > 0
+                      ? ((Number(o.quantity) || 1) *
+                          (Number(o.unit_price_cny) || 0)) /
+                        rate
+                      : 0,
+              },
+            ];
+      const tkCell =
+        (tksByOrder[String(o.id)] || []).map((t) => e(t)).join("<br>") || dash;
+      const feeCell = (first) =>
+        first && shipOnly
+          ? `${usd(feeTotal)}<div style="font-size:10px;color:${feeAllPaid ? "#15803d" : "#b91c1c"}">${feeAllPaid ? "Paid" : "Unpaid"}</div>`
+          : dash;
+      const cells = (lead, unit, amount, fee, total) =>
+        `${lead}${showGoods ? `<td>${unit}</td><td>${amount}</td>` : ""}${hasFee ? `<td>${fee}</td>` : ""}<td>${usd(total)}</td></tr>`;
+
+      const lines = rawItems.map((item, j) => {
+        const q = Number(item.quantity) || 1;
+        const unitUsd =
+          mode === "usd"
+            ? Number(item.unit_price_usd) || 0
+            : rate > 0
+              ? (Number(item.unit_price_cny) || 0) / rate
+              : 0;
+        const amount = Number(item.line_total_usd) || q * unitUsd;
+        const product = [
+          item.product_name || item.product_url || o.shop_name || "Product",
+          item.variant,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+        lineNo += 1;
+        const total = shipOnly ? (j === 0 ? feeDue : 0) : amount;
+        grand += total;
+        // TK belongs to the order/package, not to each product: print it once
+        // and merge it down across this order's product lines.
+        const tdTk =
+          hasTk && j === 0
+            ? `<td rowspan="${rawItems.length}">${tkCell}</td>`
+            : "";
+        return `<tr><td>${lineNo}</td><td>${e(o.order_id || dash)}</td>${tdTk}<td class="left">${e(product)}</td><td>${e(q)}</td>${cells("", shipOnly ? dash : usd(unitUsd), shipOnly ? dash : usd(amount), feeCell(j === 0), total)}`;
+      });
+      if (shipOnly) return lines.join(""); // goods extras were paid with the order
+      const extra = [];
+      const addExtra = (label, qty, unit, amount) => {
+        grand += amount;
+        extra.push(
+          `<tr><td>${dash}</td><td>${e(o.order_id || dash)}</td>${hasTk ? `<td>${dash}</td>` : ""}<td class="left">${label}</td><td>${qty}</td>${cells("", unit, usd(amount), dash, amount)}`,
+        );
+      };
+      const shipUsd =
+        mode === "usd"
+          ? Number(o.domestic_shipping_usd) || 0
+          : rate > 0
+            ? (Number(o.domestic_shipping_cny) || 0) / rate
+            : 0;
+      if (shipUsd > 0) addExtra("China Shipping", dash, dash, shipUsd);
+      if ((Number(o.service_fee_usd) || 0) > 0)
+        addExtra("Service Fee", dash, dash, Number(o.service_fee_usd));
+      (Array.isArray(o.additional_services)
+        ? o.additional_services
+        : []
+      ).forEach((service) => {
+        const q = Number(service.quantity) || 1;
+        const unit = Number(service.unit_price_usd) || 0;
+        if (q * unit > 0)
+          addExtra(
+            `${e(service.name || "Additional Service")}${service.description ? ` · ${e(service.description)}` : ""}`,
+            q,
+            usd(unit),
+            q * unit,
+          );
+      });
+      return [...lines, ...extra].join("");
+    })
+    .join("");
+  // Columns are built from what the invoice actually has; widths are scaled to 100%.
+  const cols = [
+    ["#", 5],
+    ["CN Order ID", 14],
+    hasTk && ["TK", 15],
+    ["Product / Variant", 19],
+    ["Qty", 6],
+    showGoods && ["Unit Price (USD)", 10],
+    showGoods && ["Amount (USD)", 10],
+    hasFee && ["Shipping Fee (USD)", 11],
+    ["Total (USD)", 10],
+  ].filter(Boolean);
+  const wSum = cols.reduce((t, c) => t + c[1], 0);
+  const widths = cols.map((c) => (c[1] / wSum) * 100);
+  const head = cols.map((c) => `<th>${c[0]}</th>`).join("");
   return `<!doctype html><html><head><meta charset="utf-8"><title>CN Invoice ${e(customer.code)}</title>
 <style>
 @page{size:A4;margin:16mm 14mm}*{box-sizing:border-box}body{font-family:'Inter','Noto Sans Khmer',Arial,sans-serif;font-size:14px;color:#111;margin:0}
 .top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;margin-bottom:22px}.logo img{max-height:60px;max-width:200px;object-fit:contain}.logo b{font-size:20px}.top h1{font-size:22px;font-weight:600;margin:0;text-align:center}.meta{text-align:right;line-height:1.55}.cust{line-height:1.8;margin-bottom:16px;font-size:15px}
-table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:13px}th,td{border:1px solid #9aa3b5;padding:9px 8px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f1f3f6;font-weight:700}.left{text-align:left}.total{text-align:right;font-weight:700;padding-right:14px}.sum{font-weight:700}.sign{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;margin-top:34px;font-size:14px;font-weight:600}.sign div{padding-bottom:48px}.line{border-top:1px solid #d5d9e0;margin-top:18px}
+table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:12px}th,td{border:1px solid #9aa3b5;padding:8px 5px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f1f3f6;font-weight:700}.left{text-align:left}.total{text-align:right;font-weight:700;padding-right:14px}.sum{font-weight:700}.sign{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;margin-top:34px;font-size:14px;font-weight:600}.sign div{padding-bottom:48px}.line{border-top:1px solid #d5d9e0;margin-top:18px}
 </style></head><body><div class="top"><div class="logo">${logo ? `<img src="${e(logo)}" alt="">` : `<b>${e(company?.name || "")}</b>`}</div><h1>CN Order Invoice</h1><div class="meta"><div><b>Date:</b> ${e(when)}</div><div><b>Issued By:</b> ${e(issuedBy)}</div></div></div>
 <div class="cust"><div><b>Customer ID:</b> ${e(customer.code)}</div><div><b>Customer Name:</b> ${e(customer.name)}</div><div><b>Phone Number:</b> ${e(customer.phone)}</div><div><b>Total Order:</b> ${orders.length}</div></div>
-<table><colgroup><col style="width:6%"><col style="width:16%"><col style="width:19%"><col style="width:25%"><col style="width:7%"><col style="width:13%"><col style="width:14%"></colgroup><tr><th>#</th><th>CN Order ID</th><th>TK</th><th>Product / Variant</th><th>Qty</th><th>Unit Price (USD)</th><th>Amount (USD)</th></tr>
-${orders
-  .map((o, i) => {
-    const mode = o.pricing_mode || "cny";
-    const rate = Number(o.cny_per_usd) || 0;
-    const rawItems =
-      Array.isArray(o.cn_order_items) && o.cn_order_items.length
-        ? o.cn_order_items
-        : [
-            {
-              product_name: o.product_name,
-              product_url: o.product_url,
-              variant: o.variant,
-              quantity: o.quantity ?? 1,
-              unit_price_cny: o.unit_price_cny,
-              unit_price_usd: o.unit_price_usd,
-              line_total_cny: o.product_total_cny,
-              line_total_usd:
-                mode === "usd"
-                  ? (Number(o.quantity) || 1) * (Number(o.unit_price_usd) || 0)
-                  : rate > 0
-                    ? ((Number(o.quantity) || 1) *
-                        (Number(o.unit_price_cny) || 0)) /
-                      rate
-                    : 0,
-            },
-          ];
-    const lines = rawItems.map((item, j) => {
-      const q = Number(item.quantity) || 1;
-      const unitUsd =
-        mode === "usd"
-          ? Number(item.unit_price_usd) || 0
-          : rate > 0
-            ? (Number(item.unit_price_cny) || 0) / rate
-            : 0;
-      const amount =
-        mode === "usd"
-          ? Number(item.line_total_usd) || q * unitUsd
-          : Number(item.line_total_usd) || q * unitUsd;
-      const product = [
-        item.product_name || item.product_url || o.shop_name || "Product",
-        item.variant,
-      ]
-        .filter(Boolean)
-        .join(" · ");
-      lineNo += 1;
-      const tkCell =
-        (tksByOrder[String(o.id)] || []).map((t) => e(t)).join("<br>") || "—";
-      return `<tr><td>${lineNo}</td><td>${e(o.order_id || "—")}</td><td>${tkCell}</td><td class="left">${e(product)}</td><td>${e(q)}</td><td>${usd(unitUsd)}</td><td>${usd(amount)}</td></tr>`;
-    });
-    const extra = [];
-    const shipUsd =
-      mode === "usd"
-        ? Number(o.domestic_shipping_usd) || 0
-        : rate > 0
-          ? (Number(o.domestic_shipping_cny) || 0) / rate
-          : 0;
-    if (shipUsd > 0)
-      extra.push(
-        `<tr><td>—</td><td>${e(o.order_id || "—")}</td><td>—</td><td class="left">China Shipping</td><td>—</td><td>—</td><td>${usd(shipUsd)}</td></tr>`,
-      );
-    if ((Number(o.service_fee_usd) || 0) > 0)
-      extra.push(
-        `<tr><td>—</td><td>${e(o.order_id || "—")}</td><td>—</td><td class="left">Service Fee</td><td>—</td><td>—</td><td>${usd(o.service_fee_usd)}</td></tr>`,
-      );
-    (Array.isArray(o.additional_services) ? o.additional_services : []).forEach(
-      (service) => {
-        const q = Number(service.quantity) || 1;
-        const unit = Number(service.unit_price_usd) || 0;
-        if (q * unit > 0)
-          extra.push(
-            `<tr><td>—</td><td>${e(o.order_id || "—")}</td><td>—</td><td class="left">${e(service.name || "Additional Service")}${service.description ? ` · ${e(service.description)}` : ""}</td><td>${q}</td><td>${usd(unit)}</td><td>${usd(q * unit)}</td></tr>`,
-          );
-      },
-    );
-    return [...lines, ...extra].join("");
-  })
-  .join("")}
-<tr><td colspan="6" class="total">Total Amount</td><td class="sum">${usd(total)}</td></tr></table><div class="sign"><div>Customer Signature</div><div>Employee Signature</div><div>Authorized Signature</div></div><div class="line"></div></body></html>`;
+<table><colgroup>${widths.map((w) => `<col style="width:${w}%">`).join("")}</colgroup><tr>${head}</tr>
+${rowsHtml}<tr><td colspan="${widths.length - 1}" class="total">Total Amount</td><td class="sum">${usd(grand)}</td></tr></table><div class="sign"><div>Customer Signature</div><div>Employee Signature</div><div>Authorized Signature</div></div><div class="line"></div></body></html>`;
 }
 
 function CnInvoiceModal({ row, onClose }) {
@@ -49747,15 +50420,20 @@ function CnInvoiceModal({ row, onClose }) {
       };
       // TKs linked to the chosen orders (shown next to each product line).
       const tksByOrder = {};
+      const feesByOrder = {};
       if (supabase) {
         const { data: pk } = await supabase
           .from("packages")
-          .select("tk,cn_order_id")
+          .select("tk,cn_order_id,status,freight_fee,paid_amount")
           .in("cn_order_id", chosen.map((o) => o.id).filter(Boolean))
           .order("created_at", { ascending: true });
         (pk || []).forEach((x) => {
           const key = String(x.cn_order_id);
           (tksByOrder[key] = tksByOrder[key] || []).push(x.tk);
+          // Cambodia shipping fee, once the TK is confirmed at Arrived.
+          cnShippingFeeRows([{ ...x, tk_status: x.status }]).forEach((r) => {
+            (feesByOrder[key] = feesByOrder[key] || []).push(r);
+          });
         });
       }
       setPreviewHtml(
@@ -49763,6 +50441,7 @@ function CnInvoiceModal({ row, onClose }) {
           company,
           customer,
           tksByOrder,
+          feesByOrder,
           orders: chosen,
           issuedBy: user?.name || user?.email || "—",
           when: invoiceStamp(),
@@ -51466,22 +52145,29 @@ function CustomerDetailPage() {
           top_up_reversal: "Top up reversed",
           shipping_payment: "Shipping payment",
           shipping_payment_cash: "Paid by admin",
+          shipping_payment_wallet: "Shipping payment (wallet)",
+          cn_order_payment_cash: "CN order paid by admin",
+          cn_order_payment_wallet: "CN order payment (wallet)",
         })[r.type] || r.type,
     },
     {
       key: "tk",
       label: "TK",
-      render: (r) =>
-        r.tk ? (
+      render: (r) => {
+        // shipping payments store the TK in `reference`
+        const tk =
+          r.tk || (/^shipping_payment/.test(r.type || "") ? r.reference : null);
+        return tk ? (
           <Link
-            to={`/packages/${encodeURIComponent(r.tk)}`}
+            to={`/packages/${encodeURIComponent(tk)}`}
             className="font-semibold text-blue-700 hover:underline"
           >
-            {r.tk}
+            {tk}
           </Link>
         ) : (
           "—"
-        ),
+        );
+      },
     },
     {
       key: "amount",
@@ -51489,6 +52175,20 @@ function CustomerDetailPage() {
       search: () => "",
       render: (r) => {
         const n = Number(r.amount) || 0;
+        // Cash / bank payments received by staff do not touch the wallet
+        // (amount = 0) — show the real amount that was received instead.
+        const cash = /_cash$/.test(r.type || "")
+          ? Number(r.cash_amount) || 0
+          : 0;
+        if (cash > 0)
+          return (
+            <span className="font-bold text-blue-600">
+              {money(cash)}
+              <span className="ml-1 text-[10px] font-semibold text-slate-400">
+                cash
+              </span>
+            </span>
+          );
         return (
           <span
             className={`font-bold ${n > 0 ? "text-emerald-600" : n < 0 ? "text-red-600" : "text-slate-400"}`}
@@ -56463,11 +57163,16 @@ const CB_DESIGN_CSS = `
 :root{--cb-primary:#2563eb;--cb-primary-dark:#1d4ed8;--cb-navy:#0f1f3d;--cb-bg:#f4f7fb;--cb-border:#e5eaf2;--cb-text:#10213f;--cb-muted:#6b7b96;}
 html,body,#root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
 body{background:var(--cb-bg);color:var(--cb-text);}
+/* No elastic page bounce: it shifts the page under fixed (blurred) overlays and leaves an unblurred strip at the top. */
+html,body{overscroll-behavior:none;}
 .cb-app{min-height:100vh;background:var(--cb-bg);}
+/* Admin shell follows the real visible viewport so fixed overlays and the shell stay aligned. */
+.cb-app.h-screen{height:100vh;height:100dvh;overflow:hidden;}
 .cb-app *{font-family:inherit;}
 .cb-surface{background:#fff;border:1px solid var(--cb-border);border-radius:16px;box-shadow:0 8px 30px rgba(15,31,61,.055);}
 .cb-sidebar{background:linear-gradient(180deg,#0b1b38 0%,#0f2346 100%);}
 .cb-sidebar .cb-active{background:linear-gradient(135deg,#2f75f4,#2563eb);box-shadow:0 8px 20px rgba(37,99,235,.22);}
+.cb-modal-backdrop,.fixed.inset-0[class*="backdrop-blur"]{-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);}
 .cb-topbar{background:rgba(255,255,255,.92);backdrop-filter:blur(14px);border-bottom:1px solid rgba(229,234,242,.9);}
 .cb-input{border:1px solid var(--cb-border);background:#fbfcfe;border-radius:12px;transition:.2s ease;}
 .cb-input:focus{border-color:#60a5fa;box-shadow:0 0 0 4px rgba(37,99,235,.09);background:#fff;outline:none;}
@@ -56570,6 +57275,60 @@ html.cb-admin-dark .cb-app :is(input,select,textarea){color:var(--cbx-text,#e2e8
 }
 @media(prefers-reduced-motion:reduce){
   .cb-app :is(.cb-table-row,[role="row"],.cb-input,.cbx-search){transition:none!important;}
+}
+
+/* ================= Smooth motion layer ================= */
+:root{--cb-ease:cubic-bezier(.22,.8,.24,1);}
+
+/* Page change: soft fade + rise. fill-mode "backwards" => no transform is
+   left behind afterwards (a lingering transform would break fixed modals). */
+@keyframes cb-page-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.cb-page-enter{animation:cb-page-in .34s var(--cb-ease) backwards;}
+
+/* Cards / sections / table rows glide in right after the page appears */
+@keyframes cb-rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.cb-page-enter :is(.cb-surface,.cb-card,.cbx-card){animation:cb-rise .42s var(--cb-ease) backwards;}
+.cb-page-enter :is(.cb-surface,.cb-card,.cbx-card):nth-child(2){animation-delay:.04s;}
+.cb-page-enter :is(.cb-surface,.cb-card,.cbx-card):nth-child(3){animation-delay:.08s;}
+.cb-page-enter :is(.cb-surface,.cb-card,.cbx-card):nth-child(4){animation-delay:.12s;}
+.cb-page-enter :is(.cb-surface,.cb-card,.cbx-card):nth-child(n+5){animation-delay:.16s;}
+.cb-page-enter tbody tr{animation:cb-rise .32s var(--cb-ease) backwards;}
+.cb-page-enter tbody tr:nth-child(2){animation-delay:.02s;}
+.cb-page-enter tbody tr:nth-child(3){animation-delay:.04s;}
+.cb-page-enter tbody tr:nth-child(4){animation-delay:.06s;}
+.cb-page-enter tbody tr:nth-child(5){animation-delay:.08s;}
+.cb-page-enter tbody tr:nth-child(6){animation-delay:.10s;}
+.cb-page-enter tbody tr:nth-child(7){animation-delay:.12s;}
+.cb-page-enter tbody tr:nth-child(8){animation-delay:.14s;}
+.cb-page-enter tbody tr:nth-child(n+9){animation-delay:.16s;}
+
+/* Modals / popups: backdrop fades, card pops in */
+@keyframes cb-backdrop-in{from{opacity:0}to{opacity:1}}
+@keyframes cb-modal-pop{from{opacity:0;transform:translateY(14px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes cb-sheet-up{from{opacity:0;transform:translateY(28px)}to{opacity:1;transform:translateY(0)}}
+.fixed.inset-0:is([class*="bg-slate-9"],[class*="bg-ink-900"]):not([class*="transition-opacity"]){animation:cb-backdrop-in .2s ease-out backwards;}
+.fixed.inset-0:is([class*="bg-slate-9"],[class*="bg-ink-900"]):not([class*="transition-opacity"]):not(.items-end)>*{animation:cb-modal-pop .28s var(--cb-ease) backwards;}
+.fixed.inset-0.items-end:is([class*="bg-slate-9"],[class*="bg-ink-900"])>*{animation:cb-sheet-up .3s var(--cb-ease) backwards;}
+
+/* Dropdown menus */
+@keyframes cb-menu-in{from{opacity:0;transform:translateY(-6px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+.cbx-menu{animation:cb-menu-in .16s var(--cb-ease) backwards;transform-origin:top right;}
+
+/* Buttons & links: smooth hover + tactile press */
+.cb-app :is(button,a,[role="button"],select,.cb-card,.cb-surface){transition:background-color .18s ease,border-color .18s ease,color .18s ease,box-shadow .22s ease,transform .18s var(--cb-ease),opacity .18s ease;}
+.cb-app :is(button,[role="button"]):not(:disabled):active{transform:scale(.96);}
+.cb-app button:disabled{transition:opacity .2s ease;}
+.cb-app tbody tr{transition:background-color .15s ease;}
+.cb-app :is(.cbx-nav-link,.cbx-icon-btn,.cbx-user-pill){transition:background-color .18s ease,color .18s ease,transform .18s var(--cb-ease);}
+.cb-app .cbx-nav-link:not(.is-active):hover{transform:translateX(2px);}
+
+/* Smooth scrolling inside the app */
+.cb-app main{scroll-behavior:smooth;}
+
+@media(prefers-reduced-motion:reduce){
+  .cb-page-enter,.cb-page-enter *,.cbx-menu,.fixed.inset-0,.fixed.inset-0>*{animation:none!important;}
+  .cb-app *{transition-duration:.01ms!important;}
+  .cb-app main{scroll-behavior:auto;}
 }
 
 `;
