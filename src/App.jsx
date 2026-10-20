@@ -3562,6 +3562,107 @@ function PaginationBar({ page, pageCount, total, shown, onPage }) {
 }
 
 // "KH-000005 · thon mvp"  ->  avatar + name (links to the customer) + code
+// Copy text with a fallback for non-secure contexts (http / older browsers).
+async function cnCopyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+// Tracking-number list for an order row, one click to copy each TK (or all).
+// Clicks are isolated so they never open the order row underneath.
+function CnTrackingCell({ tks }) {
+  const list = Array.isArray(tks) ? tks : [];
+  const [copied, setCopied] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  if (!list.length) return <span className="text-ink-600/40">—</span>;
+  const LIMIT = 3;
+  const shown = expanded ? list : list.slice(0, LIMIT);
+  const hidden = list.length - shown.length;
+  const doCopy = async (value, key) => {
+    const ok = await cnCopyText(value);
+    if (!ok) {
+      emitCBToast("error", "Copy failed", "Please copy the number manually.");
+      return;
+    }
+    setCopied(key);
+    setTimeout(() => setCopied((c) => (c === key ? "" : c)), 1400);
+    emitCBToast(
+      "success",
+      "Copied",
+      key === "__all" ? `${list.length} tracking numbers` : value,
+    );
+  };
+  return (
+    <div
+      className="flex flex-col gap-1.5 min-w-[190px]"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {shown.map((tk) => (
+        <div key={tk} className="flex items-center gap-2">
+          <span className="font-semibold text-ink-900 tabular-nums tracking-tight">
+            {tk}
+          </span>
+          <button
+            type="button"
+            title="Copy tracking number"
+            aria-label={`Copy ${tk}`}
+            onClick={() => doCopy(tk, tk)}
+            className={`shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md border transition-colors ${
+              copied === tk
+                ? "border-emerald-200 bg-emerald-50 text-emerald-600"
+                : "border-transparent text-signal-blue hover:bg-signal-blue/10 hover:border-signal-blue/20"
+            }`}
+          >
+            {copied === tk ? <Check size={14} /> : <Copy size={14} />}
+          </button>
+        </div>
+      ))}
+      {(hidden > 0 || (expanded && list.length > LIMIT) || list.length > 1) && (
+        <div className="flex items-center gap-3 text-xs font-semibold">
+          {list.length > LIMIT && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="text-signal-blue hover:underline"
+            >
+              {expanded ? "Show less" : `+${hidden} more`}
+            </button>
+          )}
+          {list.length > 1 && (
+            <button
+              type="button"
+              onClick={() => doCopy(list.join("\n"), "__all")}
+              className={`inline-flex items-center gap-1 hover:underline ${
+                copied === "__all" ? "text-emerald-600" : "text-ink-600/70"
+              }`}
+            >
+              {copied === "__all" ? <Check size={12} /> : <Copy size={12} />}
+              Copy all
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CnCustomerCell({ value }) {
   const raw = String(value || "").trim();
   if (!raw) return <span className="text-ink-600/40">—</span>;
@@ -42597,6 +42698,9 @@ function CnOrdersPage() {
     hasPermission(user, "cn_order.edit");
   const [rows, setRows] = useState([]);
   const [tkRows, setTkRows] = useState([]);
+  // China tracking numbers saved on the order itself (cn_order_parcels).
+  // Intransit orders have these even when no physical TK is linked yet.
+  const [parcelRows, setParcelRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tkLoading, setTkLoading] = useState(false);
   const [tkError, setTkError] = useState("");
@@ -42672,6 +42776,26 @@ function CnOrdersPage() {
     } else {
       setTkRows(data || []);
     }
+    // Tracking numbers recorded on the order (works for Intransit etc.).
+    // Best-effort: a failure here must never break the TK list itself.
+    try {
+      const { data: parcels, error: parcelErr } = await fetchAllRows(
+        ({ count, stable }) => {
+          const q = supabase
+            .from("cn_order_parcels")
+            .select(
+              "id,cn_order_id,domestic_tracking,created_at",
+              count ? { count: "exact" } : undefined,
+            )
+            .order("created_at", { ascending: true });
+          return stable ? q.order("id", { ascending: true }) : q;
+        },
+        { cap: CN_ORDERS_LIMIT },
+      );
+      setParcelRows(parcelErr ? [] : parcels || []);
+    } catch {
+      setParcelRows([]);
+    }
     setTkLoading(false);
   }, []);
   useEffect(() => {
@@ -42736,6 +42860,26 @@ function CnOrdersPage() {
     ["Total Orders", rows.length, "text-ink-900", ""],
     ...quickDefs.map((d) => [d.label, quickCounts[d.key], d.color, d.key]),
   ];
+  // Tracking numbers (TKs) per CN order, computed once for the table + search.
+  // Sources: physical TKs (packages.tk) first, then the China tracking numbers
+  // saved on the order (cn_order_parcels.domestic_tracking) — so Intransit
+  // orders show their tracking too. De-duplicated case-insensitively.
+  const tkNumbersByOrder = new Map();
+  const tkSeenByOrder = new Map();
+  const addTkNumber = (orderId, value) => {
+    const v = String(value || "").trim();
+    if (!orderId || !v) return;
+    const seen = tkSeenByOrder.get(orderId) || new Set();
+    const key = cnLinkKey(v);
+    if (seen.has(key)) return;
+    seen.add(key);
+    tkSeenByOrder.set(orderId, seen);
+    const arr = tkNumbersByOrder.get(orderId) || [];
+    arr.push(v);
+    tkNumbersByOrder.set(orderId, arr);
+  };
+  tkRows.forEach((p) => addTkNumber(p.cn_order_id, p.tk));
+  parcelRows.forEach((p) => addTkNumber(p.cn_order_id, p.domestic_tracking));
   const searchableOrder = (r) =>
     [
       r.order_id,
@@ -42744,6 +42888,7 @@ function CnOrdersPage() {
       r.product_name,
       r.supplier_order_no,
       r.status,
+      ...(tkNumbersByOrder.get(r.id) || []),
       ...(Array.isArray(r.cn_order_items)
         ? r.cn_order_items.flatMap((it) => [
             it.product_name,
@@ -43083,6 +43228,10 @@ function CnOrdersPage() {
           csv: (x) =>
             Array.isArray(x.cn_order_items) ? x.cn_order_items.length : "",
         },
+        {
+          label: "Tracking Numbers",
+          csv: (x) => (tkNumbersByOrder.get(x.id) || []).join(" | "),
+        },
         { label: "Linked TKs", csv: (x) => linkedTkCount.get(x.id) || 0 },
         { label: "Total (USD)", csv: (x) => Number(x.total_due_usd) || 0 },
         { label: "Paid (USD)", csv: (x) => paidOf(x) },
@@ -43356,11 +43505,12 @@ function CnOrdersPage() {
 
         {activeTab === "orders" && (
           <div className="overflow-auto">
-            <table className="min-w-[1300px] w-full text-sm">
+            <table className="min-w-[1500px] w-full text-sm">
               <thead>
                 <tr className="bg-mist-50 text-left text-xs uppercase tracking-wide text-ink-600/60">
                   {[
                     "Order ID",
+                    "Tracking Number",
                     "Customer",
                     "Product Items",
                     "Linked TKs",
@@ -43381,7 +43531,7 @@ function CnOrdersPage() {
                 {loading ? (
                   Array.from({ length: 6 }).map((_, i) => (
                     <tr key={`cn-sk-${i}`} aria-hidden="true">
-                      {Array.from({ length: 10 }).map((__, j) => (
+                      {Array.from({ length: 11 }).map((__, j) => (
                         <td key={j} className="px-4 py-3.5">
                           <Skeleton
                             className="h-3.5"
@@ -43395,7 +43545,7 @@ function CnOrdersPage() {
                 ) : !filtered.length ? (
                   <tr>
                     <td
-                      colSpan={10}
+                      colSpan={11}
                       className="px-4 py-10 text-center text-ink-600/40"
                     >
                       {loadError
@@ -43432,6 +43582,9 @@ function CnOrdersPage() {
                           >
                             {r.order_id}
                           </Link>
+                        </td>
+                        <td className="px-4 py-3">
+                          <CnTrackingCell tks={tkNumbersByOrder.get(r.id)} />
                         </td>
                         <td className="px-4 py-3">
                           <CnCustomerCell value={r.customer} />
@@ -57324,6 +57477,51 @@ html.cb-admin-dark .cb-app :is(input,select,textarea){color:var(--cbx-text,#e2e8
 
 /* Smooth scrolling inside the app */
 .cb-app main{scroll-behavior:smooth;}
+
+/* ================= Comfortable typography (larger, clearer, roomier) =================
+   Scoped to the admin shell (.cb-app) + the shared CN modal. Presentation only. */
+:root{--jz-font-xs:12.5px;--jz-font-sm:13.5px;--jz-font-body:14.5px;--jz-font-control:14.5px;--jz-font-section:18px;--jz-font-page:28px;}
+.cb-app{font-size:14.5px;line-height:1.55;}
+:is(.cb-app,.cb-modal-backdrop) .text-xs{font-size:13px;line-height:1.5;}
+:is(.cb-app,.cb-modal-backdrop) .text-sm{font-size:14.5px;line-height:1.55;}
+:is(.cb-app,.cb-modal-backdrop) .text-base{font-size:16px;}
+:is(.cb-app,.cb-modal-backdrop) .text-lg{font-size:18.5px;}
+:is(.cb-app,.cb-modal-backdrop) [class~="text-[9px]"]{font-size:10.5px;}
+:is(.cb-app,.cb-modal-backdrop) [class~="text-[10px]"]{font-size:11.5px;}
+:is(.cb-app,.cb-modal-backdrop) [class~="text-[10.5px]"]{font-size:12px;}
+:is(.cb-app,.cb-modal-backdrop) [class~="text-[11px]"]{font-size:12.5px;}
+:is(.cb-app,.cb-modal-backdrop) [class~="text-[11.5px]"]{font-size:13px;}
+:is(.cb-app,.cb-modal-backdrop) [class~="text-[12px]"]{font-size:13.5px;}
+:is(.cb-app,.cb-modal-backdrop) [class~="text-[13px]"]{font-size:14.5px;}
+:is(.cb-app,.cb-modal-backdrop) [class~="text-[14px]"]{font-size:15.5px;}
+:is(.cb-app,.cb-modal-backdrop) [class~="text-[15px]"]{font-size:16.5px;}
+.cb-app :is(button,[role="button"],input,select,textarea){font-size:14.5px;}
+.cb-app :is(input,select,textarea){min-height:42px;}
+.cb-modal-backdrop :is(input,select,textarea){font-size:14.5px;min-height:42px;}
+
+/* Tables: clearer header, readable cells, taller rows */
+.cb-app :is(th,[role="columnheader"]){font-size:12px;font-weight:650;letter-spacing:.04em;}
+.cb-app main table th{padding-top:14px;padding-bottom:14px;}
+.cb-app :is(td,[role="cell"]){font-size:14.5px;line-height:1.5;font-weight:450;}
+.cb-app main table td{padding-top:16px;padding-bottom:16px;}
+.cb-app main table td :is(.font-mono){font-size:14px;}
+
+/* Sidebar / topbar */
+.cb-app .cbx-nav-link{font-size:14.5px;}
+.cb-app :is(h1,.cb-page-title,.cbx-page-title){font-size:28px;}
+
+/* Muted text was too faint (text-ink-600/40..70). Lift contrast, keep hierarchy. */
+html:not(.cb-admin-dark) :is(.cb-app,.cb-modal-backdrop) :is([class~="text-ink-600/35"],[class~="text-ink-600/40"],[class~="text-ink-600/45"]){color:rgba(71,85,105,.66)!important;}
+html:not(.cb-admin-dark) :is(.cb-app,.cb-modal-backdrop) :is([class~="text-ink-600/50"],[class~="text-ink-600/55"]){color:rgba(71,85,105,.76)!important;}
+html:not(.cb-admin-dark) :is(.cb-app,.cb-modal-backdrop) :is([class~="text-ink-600/60"],[class~="text-ink-600/65"],[class~="text-ink-600/70"]){color:rgba(51,65,85,.86)!important;}
+html:not(.cb-admin-dark) :is(.cb-app,.cb-modal-backdrop) [class~="text-slate-400"]{color:#7b8aa3;}
+html:not(.cb-admin-dark) :is(.cb-app,.cb-modal-backdrop) [class~="text-slate-500"]{color:#56657d;}
+
+@media(max-width:767px){
+  :root{--jz-font-page:23px;--jz-font-section:16px;}
+  .cb-app :is(h1,.cb-page-title,.cbx-page-title){font-size:23px;}
+  .cb-app main table td{padding-top:12px;padding-bottom:12px;}
+}
 
 @media(prefers-reduced-motion:reduce){
   .cb-page-enter,.cb-page-enter *,.cbx-menu,.fixed.inset-0,.fixed.inset-0>*{animation:none!important;}
