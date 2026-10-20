@@ -782,6 +782,7 @@ const DEFAULT_SYSTEM_SETTINGS = {
     showQr: true,
     showFreight: true,
     showContainer: true,
+    showWeight: true,
   },
 };
 
@@ -7950,7 +7951,13 @@ function VerifyScanModal({
                 items={[
                   {
                     label: "Order ID",
-                    value: pkg.order_no || pkg.order || "—",
+                    // Parse Link (CN Purchase Order) → show the JZE… order ID,
+                    // not the THN… Shipment order ID, so the two never get mixed up.
+                    value: pkg.cn_order_id
+                      ? CN_ORDER_NO_BY_ID[pkg.cn_order_id] ||
+                        pkg.cn_order_no ||
+                        "—"
+                      : pkg.order_no || pkg.order || "—",
                   },
                   { label: "Tracking Number", value: pkg.tk },
                   { label: "Customer", value: pkg.customer || "—" },
@@ -19862,6 +19869,29 @@ async function getLabelContainer(no) {
   return row;
 }
 
+// Box ទី 3 នៅលើ Label:
+//  - Small Package (Size S / M / L) → បង្ហាញ "SIZE  M"
+//  - Dimension Based (> L / OVER)    → បង្ហាញ "CBM  0.123456 m³"
+function labelMeasure(x) {
+  const sc = String(x.size_class || "").toUpperCase();
+  const isDim =
+    sc === "OVER" ||
+    x.package_type === "dimension_based" ||
+    (!["S", "M", "L"].includes(sc) && x.cbm);
+  if (!isDim && ["S", "M", "L"].includes(sc)) {
+    return {
+      measureCap: "Size",
+      measureVal: sc,
+      measureSub: "Small Package",
+    };
+  }
+  return {
+    measureCap: "CBM",
+    measureVal: x.cbm ? Number(x.cbm).toFixed(6) + " m³" : "—",
+    measureSub: "Volume",
+  };
+}
+
 function labelWeight(w) {
   if (w === undefined || w === null || w === "") return "—";
   return /^\d+(\.\d+)?$/.test(String(w).trim())
@@ -19888,6 +19918,8 @@ const LABEL_CSS = `
   .top{display:flex;flex:1;min-height:0;padding:1.6mm 0;border-bottom:.3mm solid #c9d6f0}
   .lf{width:56%;padding-right:3mm;border-right:.3mm solid #c9d6f0;display:flex;flex-direction:column;justify-content:space-between}
   .uid{font-weight:800;font-size:9.5mm;line-height:1;letter-spacing:-.2mm}
+  .oid{background:#eef3fd;border-radius:1.5mm;padding:1mm 2mm;margin-top:1.2mm}
+  .oid .ov{font-weight:800;font-size:4.4mm;line-height:1.15;color:#1d5fe0;letter-spacing:.1mm}
   .bar svg{display:block;width:100%;height:11mm}
   .tk{text-align:center;font-weight:700;font-size:3.6mm;margin-top:.8mm}
   .rt{flex:1;padding-left:3mm;display:flex;flex-direction:column;justify-content:space-between}
@@ -19917,19 +19949,20 @@ function labelPageHtml(d, codes, brand = {}) {
   </div>
   <div class="top">
     <div class="lf">
-      <div><div class="cap">ID:</div><div class="uid">${e(d.customerId)}</div></div>
+      <div><div class="cap">ID:</div><div class="uid">${e(d.customerId)}</div>
+        <div class="oid"><div class="cap">Order ID</div><div class="ov">${e(d.orderNo)}</div></div></div>
       <div>${brand.showBarcode !== false ? `<div class="bar">${codes.barcode}</div>` : ""}<div class="tk">TK: ${e(d.tk)}</div></div>
     </div>
     <div class="rt">
-      <div><div class="cap">Order Date</div><div class="v">${e(d.orderDate)}</div><div class="sub">${e(d.orderNo)}</div></div>
+      <div><div class="cap">Order Date</div><div class="v">${e(d.orderDate)}</div></div>
       <div><div class="cap">Customer</div><div class="v">${e(d.name)}</div><div class="v">${e(d.phone)}</div></div>
       <div><div class="cap">Destination</div><div class="v">${e(d.branchName)}</div><div class="sub">${e(d.branchCode)}</div></div>
     </div>
   </div>
   <div class="stats">
     <div class="st"><div class="cap">Package</div><div class="big">${e(d.pkgCount)}</div><div class="sub">Total Package</div></div>
-    <div class="st"><div class="cap">Weight</div><div class="big">${e(d.weight)}</div><div class="sub">Gross Weight</div></div>
-    <div class="st"><div class="cap">CBM</div><div class="big">${e(d.cbm)}</div><div class="sub">Volume</div></div>
+    ${brand.showWeight !== false ? `<div class="st"><div class="cap">Weight</div><div class="big">${e(d.weight)}</div><div class="sub">Gross Weight</div></div>` : ""}
+    <div class="st"><div class="cap">${e(d.measureCap)}</div><div class="big">${e(d.measureVal)}</div><div class="sub">${e(d.measureSub)}</div></div>
     ${brand.showQr !== false ? `<div class="qr">${codes.qr}<div class="cap">Scan for Tracking</div></div>` : ""}
   </div>
   <div class="bt">
@@ -19983,7 +20016,24 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
     if (!open || !pkg) return;
     let alive = true;
     setPhone(pkg.phone || "—");
-    setOrderDate(pkg.inbound_at ? formatIso(pkg.inbound_at) : "—");
+    setOrderDate(pkg.updated_at ? formatIso(pkg.updated_at) : "—");
+    // Label date = the day the TK arrived at the destination (first
+    // "Arrived Destination" row in status_history).
+    if (supabase && pkg.tk) {
+      supabase
+        .from("status_history")
+        .select("status,created_at")
+        .eq("tk", pkg.tk)
+        .in("status", ["Arrived Destination", "Arrived"])
+        .order("created_at", { ascending: true })
+        .limit(1)
+        .then(
+          ({ data }) =>
+            alive &&
+            data?.[0]?.created_at &&
+            setOrderDate(formatIso(data[0].created_at)),
+        );
+    }
     if (supabase && pkg.customer_id) {
       supabase
         .from("customers")
@@ -19992,10 +20042,6 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
         .maybeSingle()
         .then(({ data }) => alive && data?.phone && setPhone(data.phone));
     }
-    if (ono)
-      findOrderByNo(ono).then((o) => {
-        if (alive && o?.created_at) setOrderDate(formatIso(o.created_at));
-      });
     return () => {
       alive = false;
     };
@@ -20041,7 +20087,7 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
       origin: x.origin_wh_code || x.warehouse || "—",
       pkgCount: `${i + 1} / ${total}`,
       weight: labelWeight(x.weight_kg ?? x.weight),
-      cbm: x.cbm ? Number(x.cbm).toFixed(6) + " m³" : "—",
+      ...labelMeasure(x),
       price:
         x.freight_fee !== undefined &&
         x.freight_fee !== null &&
@@ -20070,6 +20116,7 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
     showQr: systemSettings.label.showQr,
     showFreight: systemSettings.label.showFreight,
     showContainer: systemSettings.label.showContainer,
+    showWeight: systemSettings.label.showWeight,
     phone: systemSettings.company.phone,
     email: systemSettings.company.email,
     address: systemSettings.company.address,
@@ -44093,6 +44140,60 @@ function CnOrdersPage() {
 // ------------------------------------------------------------
 // Detail page
 // ------------------------------------------------------------
+// ------------------------------------------------------------
+// CnPrintLabelButton — Print Label for CN Purchase Order TKs
+// ------------------------------------------------------------
+// ដំណើរការពេល TK របស់ CN Order ទៅដល់ "Arrived Destination" (ឬក្រោយនោះ)។
+// ប្រើ PrintLabelModal ដែលមានស្រាប់ (Package label ដូច Packages / TK)។
+const CN_LABEL_READY_TK_STATUSES = new Set([
+  "Arrived Destination",
+  "Arrived",
+  "Shipping To Branch",
+  "Shipping to Branch",
+  "Inbound Warehouse",
+  "Completed",
+  "Complete",
+]);
+const cnTkLabelReady = (tkStatus) =>
+  CN_LABEL_READY_TK_STATUSES.has(String(tkStatus || "").trim());
+
+function CnPrintLabelModalLoader({ row, tk, onClose }) {
+  const [pkg, setPkg] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!supabase || !tk) return;
+      const { data, error } = await supabase
+        .from("packages")
+        .select("*")
+        .eq("tk", tk)
+        .maybeSingle();
+      if (!alive) return;
+      if (error || !data) {
+        emitCBToast("err", "Print Label", "Cannot load TK " + tk);
+        return onClose();
+      }
+      // Label shows the CN order no (company ID) as the Order ID.
+      setPkg({ ...data, order_no: row.order_id });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [tk, row?.order_id]);
+  const m = String(row?.customer || "").match(
+    /^([A-Za-z]{1,8}-\d+)\s*·\s*(.+)$/,
+  );
+  return (
+    <PrintLabelModal
+      open={!!pkg}
+      onClose={onClose}
+      pkg={pkg}
+      custId={m ? m[1] : "—"}
+      custName={m ? m[2].trim() : row?.customer || "—"}
+    />
+  );
+}
+
 function CnOrderDetailPage() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -44154,6 +44255,8 @@ function CnOrderDetailPage() {
   const [cnViewer, setCnViewer] = useState(-1);
   const [cnImgOpen, setCnImgOpen] = useState(false);
   const [cnMenuOpen, setCnMenuOpen] = useState(false);
+  const [labelTk, setLabelTk] = useState(null); // TK whose label is being printed
+  const [labelMenuOpen, setLabelMenuOpen] = useState(false);
   const canPay = hasPermission(user, "cn_order.payment"),
     canPurchase = hasPermission(user, "cn_order.purchase"),
     canRefund = hasPermission(user, "cn_order.refund"),
@@ -44493,6 +44596,10 @@ function CnOrderDetailPage() {
   const canAdvance = canPurchase && cnStatusCanAdvance(row.status);
   const purchaseFinance = cnPurchaseFinancials(row);
   const estMargin = purchaseFinance.preFreightMarginUsd;
+  // TKs of this order that already reached Cambodia -> label can be printed.
+  const labelTks = parcels
+    .filter((p) => p.tk && cnTkLabelReady(p.tk_status || p.status))
+    .map((p) => p.tk);
 
   return (
     <div className="space-y-5">
@@ -44538,6 +44645,39 @@ function CnOrderDetailPage() {
           >
             <Icons.Printer size={15} /> Invoice
           </button>
+          {labelTks.length > 0 && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() =>
+                  labelTks.length === 1
+                    ? setLabelTk(labelTks[0])
+                    : setLabelMenuOpen((v) => !v)
+                }
+                className="h-10 px-3 rounded-xl border border-blue-200 bg-blue-50 text-blue-700 text-sm font-bold inline-flex items-center gap-1.5 hover:bg-blue-100"
+              >
+                <Icons.Printer size={15} /> Print Label
+                {labelTks.length > 1 && <Icons.ChevronDown size={14} />}
+              </button>
+              {labelMenuOpen && labelTks.length > 1 && (
+                <div className="absolute right-0 mt-1 z-30 min-w-[220px] rounded-xl border border-slate-200 bg-white shadow-lg py-1">
+                  {labelTks.map((tk) => (
+                    <button
+                      key={tk}
+                      type="button"
+                      onClick={() => {
+                        setLabelMenuOpen(false);
+                        setLabelTk(tk);
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm font-mono hover:bg-slate-50"
+                    >
+                      {tk}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {canPay && !terminal && due - paid > 0.005 && (
             <button
               onClick={() => setPayOpen(true)}
@@ -44778,6 +44918,16 @@ function CnOrderDetailPage() {
                         >
                           View TK {p.tk}
                         </Link>
+                      )}
+                      {p.tk && cnTkLabelReady(p.tk_status || p.status) && (
+                        <button
+                          type="button"
+                          onClick={() => setLabelTk(p.tk)}
+                          className="ml-2 inline-flex items-center gap-1 align-middle text-xs font-semibold text-slate-600 hover:text-signal-blue"
+                          title="Print label"
+                        >
+                          <Icons.Printer size={12} /> Print Label
+                        </button>
                       )}
                       {p.tk && hasPermission(user, "tk.edit") && (
                         <button
@@ -45273,6 +45423,13 @@ function CnOrderDetailPage() {
       )}
       {cnInvoiceOpen && (
         <CnInvoiceModal row={row} onClose={() => setCnInvoiceOpen(false)} />
+      )}
+      {labelTk && (
+        <CnPrintLabelModalLoader
+          row={row}
+          tk={labelTk}
+          onClose={() => setLabelTk(null)}
+        />
       )}
       <CnPaymentModal
         open={payOpen}
@@ -48711,6 +48868,7 @@ function SettingsPage() {
                     ["showQr", "QR Code"],
                     ["showFreight", "Freight Fee"],
                     ["showContainer", "Container"],
+                    ["showWeight", "Weight (kg)"],
                   ].map(([k, l]) => (
                     <label
                       key={k}
