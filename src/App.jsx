@@ -4290,7 +4290,18 @@ async function ensureCustomerInboundAddress(
       .from("customer_addresses")
       .update({ is_default: false })
       .eq("customer_id", customer.id);
-    if (clearDefaultErr) throw clearDefaultErr;
+    if (clearDefaultErr) {
+      if (
+        /row-level security|permission denied/i.test(
+          clearDefaultErr.message || "",
+        )
+      ) {
+        throw new Error(
+          "Your role is not allowed to update customer locations (customer_addresses). Ask an admin to run supabase/customer_addresses_staff.sql, then scan again.",
+        );
+      }
+      throw clearDefaultErr;
+    }
   }
   const row = {
     customer_id: customer.id,
@@ -4314,7 +4325,14 @@ async function ensureCustomerInboundAddress(
     .insert(row)
     .select("*")
     .single();
-  if (createErr) throw createErr;
+  if (createErr) {
+    if (/row-level security|permission denied/i.test(createErr.message || "")) {
+      throw new Error(
+        "Your role is not allowed to auto-create the customer location (customer_addresses). Ask an admin to run supabase/customer_addresses_staff.sql, then scan again.",
+      );
+    }
+    throw createErr;
+  }
 
   // Keep the customer default in sync so future Inbounds reuse this location.
   await supabase
