@@ -12123,6 +12123,7 @@ function Topbar({ title, onMenuClick }) {
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
+  const [showChangePw, setShowChangePw] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
   const [commandQuery, setCommandQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -12441,6 +12442,17 @@ function Topbar({ title, onMenuClick }) {
               <button
                 onClick={() => {
                   setMenuOpen(false);
+                  setShowChangePw(true);
+                }}
+                role="menuitem"
+                className="cbx-menu-item"
+              >
+                <Icons.KeyRound size={15} />
+                Change Password
+              </button>
+              <button
+                onClick={() => {
+                  setMenuOpen(false);
                   setPrefsModal("lang");
                 }}
                 role="menuitem"
@@ -12483,6 +12495,9 @@ function Topbar({ title, onMenuClick }) {
           )}
         </div>
 
+        {showChangePw && (
+          <StaffChangePasswordModal onClose={() => setShowChangePw(false)} />
+        )}
         {showAccount &&
           createPortal(
             <div
@@ -14872,6 +14887,311 @@ function CustomerResetPasswordModal({ row, onClose }) {
   );
 }
 
+// ------------------------------------------------------------
+// Staff passwords
+//  - StaffResetPasswordModal: Super Admin sets a new password for a staff
+//    member (Edge Function `reset-staff-password`, needs the service role).
+//  - StaffChangePasswordModal: any staff changes their OWN password
+//    (verifies the current one first, same as the customer app).
+// ------------------------------------------------------------
+const RESET_STAFF_PASSWORD_FUNCTION = "reset-staff-password";
+
+function StaffResetPasswordModal({ row, onClose }) {
+  const [pw, setPw] = useState(() => generateTempPassword(10));
+  const [show, setShow] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+  const [copied, setCopied] = useState(false);
+  if (!row) return null;
+
+  async function submit(e) {
+    e.preventDefault();
+    if (busy) return;
+    if (pw.length < 6) return setError("Password ត្រូវមានយ៉ាងតិច 6 តួអក្សរ");
+    setBusy(true);
+    setError("");
+    try {
+      if (!supabase) throw new Error("Supabase មិនទាន់តភ្ជាប់");
+      const { data: session } = await supabase.auth.getSession();
+      const { data, error: fnError } = await supabase.functions.invoke(
+        RESET_STAFF_PASSWORD_FUNCTION,
+        {
+          body: { user_id: row.id, email: row.email, new_password: pw },
+          headers: {
+            Authorization: `Bearer ${session.session?.access_token}`,
+          },
+        },
+      );
+      if (fnError) throw fnError;
+      if (data?.error) throw new Error(data.error);
+      setDone(true);
+      emitCBToast(
+        "ok",
+        "Password reset",
+        `${row.name || row.email} អាចចូលប្រើដោយ Password ថ្មីបានភ្លាម។`,
+      );
+    } catch (err) {
+      const msg = await edgeFnErrorMessage(err, "មិនអាច Reset Password បានទេ");
+      setError(msg);
+      emitCBToast("err", "Reset failed", msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyPw() {
+    try {
+      await navigator.clipboard.writeText(pw);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {}
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <form
+        onSubmit={submit}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden"
+      >
+        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 grid place-items-center">
+              <Icons.KeyRound size={18} />
+            </span>
+            <div>
+              <h3 className="font-bold text-lg text-slate-900">
+                Reset Staff Password
+              </h3>
+              <p className="text-xs text-slate-500">
+                {row.name} · {row.email}
+              </p>
+            </div>
+          </div>
+          <button type="button" onClick={onClose}>
+            <Icons.X size={18} />
+          </button>
+        </div>
+        <div className="p-5 space-y-4">
+          {error && (
+            <div className="rounded-xl bg-red-50 text-red-700 px-3 py-2 text-sm">
+              {error}
+            </div>
+          )}
+          {done ? (
+            <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4 space-y-2">
+              <p className="text-sm font-semibold text-emerald-800">
+                Reset បានជោគជ័យ — សូមផ្តល់ Password ថ្មីនេះទៅ Staff
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 rounded-lg bg-white border border-emerald-200 px-3 py-2 text-base font-bold tracking-wider text-slate-900 select-all">
+                  {pw}
+                </code>
+                <button
+                  type="button"
+                  onClick={copyPw}
+                  className="h-10 px-3 rounded-xl border border-emerald-200 bg-white text-sm font-semibold text-emerald-700"
+                >
+                  {copied ? "Copied" : "Copy"}
+                </button>
+              </div>
+              <p className="text-xs text-emerald-700/80">
+                Password នេះនឹងមិនបង្ហាញម្តងទៀតទេ។ សូមណែនាំ Staff ឱ្យប្តូរទៅ
+                Password ផ្ទាល់ខ្លួនតាម Profile → Change Password។
+              </p>
+            </div>
+          ) : (
+            <>
+              <label className="block">
+                <span className="text-xs font-semibold text-slate-500">
+                  New Password
+                </span>
+                <div className="mt-1 flex items-center gap-2">
+                  <input
+                    autoFocus
+                    type={show ? "text" : "password"}
+                    value={pw}
+                    onChange={(e) => setPw(e.target.value)}
+                    className={`${INPUT_CLS} flex-1 font-mono`}
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShow((v) => !v)}
+                    className="h-10 w-10 rounded-xl border border-slate-200 grid place-items-center text-slate-500"
+                    aria-label="Show / hide password"
+                  >
+                    {show ? (
+                      <Icons.EyeOff size={16} />
+                    ) : (
+                      <Icons.Eye size={16} />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPw(generateTempPassword(10))}
+                    className="h-10 px-3 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 whitespace-nowrap"
+                  >
+                    Generate
+                  </button>
+                </div>
+              </label>
+              <p className="text-xs text-slate-500">
+                Staff នឹងចូលប្រើដោយ Email និង Password ថ្មីនេះភ្លាមៗ ហើយ
+                Password ចាស់លែងប្រើបាន។
+              </p>
+            </>
+          )}
+        </div>
+        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-10 px-4 rounded-xl border border-slate-200 text-sm font-semibold"
+          >
+            {done ? "Close" : "Cancel"}
+          </button>
+          {!done && (
+            <button
+              disabled={busy}
+              className="h-10 px-5 rounded-xl bg-amber-600 text-white text-sm font-bold disabled:opacity-50"
+            >
+              {busy ? "Resetting…" : "Reset Password"}
+            </button>
+          )}
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function StaffChangePasswordModal({ onClose }) {
+  const [cur, setCur] = useState("");
+  const [next, setNext] = useState("");
+  const [again, setAgain] = useState("");
+  const [show, setShow] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (busy) return;
+    if (!cur) return setError("សូមបញ្ចូល Password បច្ចុប្បន្ន");
+    if (next.length < 6)
+      return setError("Password ថ្មីត្រូវមានយ៉ាងតិច 6 តួអក្សរ");
+    if (next !== again) return setError("Password ថ្មីទាំងពីរមិនដូចគ្នា");
+    if (next === cur) return setError("Password ថ្មីត្រូវខុសពី Password ចាស់");
+    setBusy(true);
+    setError("");
+    try {
+      if (!supabase) throw new Error("Supabase មិនទាន់តភ្ជាប់");
+      const { data: u } = await supabase.auth.getUser();
+      const email = u?.user?.email;
+      if (!email) throw new Error("Session ផុតកំណត់ សូម Login ម្តងទៀត");
+      // Verify the current password on a throw-away client so the live
+      // session is not disturbed.
+      const probe = createSupabaseAuthProbe();
+      const { error: bad } = await probe.auth.signInWithPassword({
+        email,
+        password: cur,
+      });
+      if (bad) throw new Error("Password បច្ចុប្បន្នមិនត្រឹមត្រូវ");
+      const { error: upErr } = await supabase.auth.updateUser({
+        password: next,
+      });
+      if (upErr) throw upErr;
+      setDone(true);
+      emitCBToast("ok", "Password changed", "Password ត្រូវបានប្តូរជោគជ័យ។");
+    } catch (err) {
+      setError(err?.message || "មិនអាចប្តូរ Password បានទេ");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const field = (label, val, set, auto) => (
+    <label className="block">
+      <span className="text-xs font-semibold text-slate-500">{label}</span>
+      <input
+        type={show ? "text" : "password"}
+        value={val}
+        onChange={(e) => set(e.target.value)}
+        className={`${INPUT_CLS} mt-1`}
+        autoComplete={auto}
+      />
+    </label>
+  );
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <form
+        onSubmit={submit}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden"
+      >
+        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <h3 className="font-bold text-lg text-slate-900">Change Password</h3>
+          <button type="button" onClick={onClose}>
+            <Icons.X size={18} />
+          </button>
+        </div>
+        <div className="p-5 space-y-3.5">
+          {error && (
+            <div className="rounded-xl bg-red-50 text-red-700 px-3 py-2 text-sm">
+              {error}
+            </div>
+          )}
+          {done ? (
+            <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4 text-sm font-semibold text-emerald-800">
+              Password ត្រូវបានប្តូរជោគជ័យ។
+            </div>
+          ) : (
+            <>
+              {field("Current Password", cur, setCur, "current-password")}
+              {field("New Password", next, setNext, "new-password")}
+              {field("Confirm New Password", again, setAgain, "new-password")}
+              <label className="flex items-center gap-2 text-xs text-slate-500">
+                <input
+                  type="checkbox"
+                  checked={show}
+                  onChange={(e) => setShow(e.target.checked)}
+                />
+                Show passwords
+              </label>
+            </>
+          )}
+        </div>
+        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-10 px-4 rounded-xl border border-slate-200 text-sm font-semibold"
+          >
+            {done ? "Close" : "Cancel"}
+          </button>
+          {!done && (
+            <button
+              disabled={busy}
+              className="h-10 px-5 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-50"
+            >
+              {busy ? "Saving…" : "Change Password"}
+            </button>
+          )}
+        </div>
+      </form>
+    </div>,
+    document.body,
+  );
+}
+
 function RowDeleteModal({
   label,
   notice,
@@ -15384,6 +15704,49 @@ function ListPage({
   }, [path, deletingRow]);
   const canResetPassword =
     path === "/customers" && hasPermission(user, "customer.reset_password");
+  // Staff accounts: only a Super Admin may reset someone else's password.
+  const canResetStaffPw = path === "/users" && user?.role === SUPER_ADMIN;
+  // Disable / Enable a staff account (Super Admin only). Disabling signs the
+  // person out immediately and blocks login until the account is enabled.
+  const toggleStaffStatus = async (row) => {
+    const disable = !isStaffDisabled(row.status);
+    const ok = await confirmDialog({
+      title: disable ? "Disable account" : "Enable account",
+      message: disable
+        ? `${row.name} (${row.email}) នឹងត្រូវ Logout ភ្លាមៗ ហើយមិនអាចចូលប្រើបានទៀតទេ រហូតដល់ Enable វិញ។`
+        : `${row.name} (${row.email}) នឹងអាចចូលប្រើប្រព័ន្ធបានវិញ។`,
+      confirmText: disable ? "Disable" : "Enable",
+      cancelText: "Cancel",
+    });
+    if (!ok) return;
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const { data, error: fnError } = await supabase.functions.invoke(
+        "set-staff-status",
+        {
+          body: { user_id: row.id, email: row.email, disabled: disable },
+          headers: {
+            Authorization: `Bearer ${session.session?.access_token}`,
+          },
+        },
+      );
+      if (fnError) throw fnError;
+      if (data?.error) throw new Error(data.error);
+      try {
+        await updateRow(row, { status: disable ? "Suspended" : "Active" });
+      } catch {
+        /* the function already saved it; this only refreshes the table */
+      }
+      emitCBToast(
+        "ok",
+        disable ? "Account disabled" : "Account enabled",
+        `${row.name} ${disable ? "ត្រូវបានបិទ" : "ត្រូវបានបើកវិញ"}។`,
+      );
+    } catch (err) {
+      const msg = await edgeFnErrorMessage(err, "មិនអាចប្តូរស្ថានភាពបានទេ");
+      emitCBToast("err", "Failed", msg);
+    }
+  };
   const isUsersModule = path === "/users";
   const isTransferModule = path === "/customer-transfer";
   // Exceptions has no mock table of its own — it's just whichever real
@@ -15915,7 +16278,10 @@ function ListPage({
               : undefined
           }
           rowActions={
-            (canEditRows || canDeleteRows || canResetPassword) &&
+            (canEditRows ||
+              canDeleteRows ||
+              canResetPassword ||
+              canResetStaffPw) &&
             !isExceptionsModule &&
             !isTransferModule
               ? (row) => (
@@ -15929,6 +16295,34 @@ function ListPage({
                         onClick={() => setResetPwRow(row)}
                       />
                     )}
+                    {canResetStaffPw &&
+                      row.email &&
+                      row.email !== user?.email && (
+                        <>
+                          <RowAction
+                            label="Reset Password"
+                            subject={row.name}
+                            icon="KeyRound"
+                            tone="warn"
+                            onClick={() => setResetPwRow(row)}
+                          />
+                          <RowAction
+                            label={
+                              isStaffDisabled(row.status) ? "Enable" : "Disable"
+                            }
+                            subject={row.name}
+                            icon={
+                              isStaffDisabled(row.status)
+                                ? "UserCheck"
+                                : "UserX"
+                            }
+                            tone={
+                              isStaffDisabled(row.status) ? "primary" : "danger"
+                            }
+                            onClick={() => toggleStaffStatus(row)}
+                          />
+                        </>
+                      )}
                     {canEditRows &&
                       (isLinkedTk ? (
                         <RowAction
@@ -15963,6 +16357,13 @@ function ListPage({
         />
         {canResetPassword && resetPwRow && (
           <CustomerResetPasswordModal
+            key={resetPwRow.id}
+            row={resetPwRow}
+            onClose={() => setResetPwRow(null)}
+          />
+        )}
+        {canResetStaffPw && resetPwRow && (
+          <StaffResetPasswordModal
             key={resetPwRow.id}
             row={resetPwRow}
             onClose={() => setResetPwRow(null)}
@@ -16165,6 +16566,13 @@ const MOCK_KEY = "cargo_bridge_mock_user";
 
 // Merge the Supabase auth user with their row in `customers` (name, phone,
 // customer_code...) so the rest of the app only ever deals with one shape.
+// A staff row whose status is one of these can no longer use the system.
+const DISABLED_STAFF_STATUSES = ["suspended", "inactive", "disabled"];
+function isStaffDisabled(status) {
+  return DISABLED_STAFF_STATUSES.includes(String(status || "").toLowerCase());
+}
+const DISABLED_MSG = "គណនីនេះត្រូវបានបិទ (Disabled)។ សូមទំនាក់ទំនង Admin។";
+
 async function hydrateProfile(authUser) {
   if (!authUser) return null;
 
@@ -16189,6 +16597,11 @@ async function hydrateProfile(authUser) {
   }
 
   if (staffRow) {
+    // Disabled staff can never sign in (or keep a restored session).
+    if (isStaffDisabled(staffRow.status)) {
+      await supabase.auth.signOut();
+      return { __disabled: true };
+    }
     if (!staffRow.auth_user_id) {
       await supabase
         .from("users")
@@ -16257,18 +16670,69 @@ export function AuthProvider({ children }) {
     supabase.auth
       .getSession()
       .then(async ({ data }) => {
-        setUser(await hydrateProfile(data.session?.user));
+        const prof = await hydrateProfile(data.session?.user);
+        setUser(prof?.__disabled ? null : prof);
       })
       .catch(() => setUser(null))
       .finally(() => setLoading(false));
 
     const { data: listener } = supabase.auth.onAuthStateChange(
       async (_event, session) => {
-        setUser(await hydrateProfile(session?.user));
+        const prof = await hydrateProfile(session?.user);
+        setUser(prof?.__disabled ? null : prof);
       },
     );
     return () => listener.subscription.unsubscribe();
   }, []);
+
+  // Live kill-switch: when a Super Admin disables THIS staff account, sign
+  // them out right away (Realtime push + a 15s / focus check as fallback).
+  useEffect(() => {
+    if (!supabase || !baseUser?.isStaff || !baseUser?.id) return undefined;
+    let kicked = false;
+    const kick = async () => {
+      if (kicked) return;
+      kicked = true;
+      await supabase.auth.signOut();
+      setUser(null);
+      emitCBToast("err", "Account disabled", DISABLED_MSG);
+    };
+    const check = async () => {
+      const { data, error } = await supabase
+        .from("users")
+        .select("status")
+        .eq("auth_user_id", baseUser.id)
+        .maybeSingle();
+      if (!error && data && isStaffDisabled(data.status)) kick();
+    };
+    const channel = supabase
+      .channel("staff-self-status-" + baseUser.id)
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "users",
+          filter: `auth_user_id=eq.${baseUser.id}`,
+        },
+        (payload) => {
+          if (isStaffDisabled(payload.new?.status)) kick();
+        },
+      )
+      .subscribe();
+    const timer = setInterval(check, 15000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") check();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", check);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", check);
+      supabase.removeChannel(channel);
+    };
+  }, [baseUser?.id, baseUser?.isStaff]);
 
   async function login(email, password) {
     if (!supabase) {
@@ -16290,7 +16754,12 @@ export function AuthProvider({ children }) {
       password,
     });
     if (error) return { error };
-    setUser(await hydrateProfile(data.user));
+    const prof = await hydrateProfile(data.user);
+    if (prof?.__disabled) {
+      setUser(null);
+      return { error: { message: DISABLED_MSG } };
+    }
+    setUser(prof);
     return { error: null };
   }
 
