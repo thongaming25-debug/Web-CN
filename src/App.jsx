@@ -769,6 +769,8 @@ const DEFAULT_SYSTEM_SETTINGS = {
     branchDeliveryFee: DEFAULT_CARGO_POLICIES.Normal.branchDeliveryFee,
     handlingFee: DEFAULT_CARGO_POLICIES.Normal.handlingFee,
     cargoPolicies: JSON.parse(JSON.stringify(DEFAULT_CARGO_POLICIES)),
+    // Air freight is charged per KG (Land / Sea share the S/M/L + CBM tables).
+    airRatePerKg: 0,
     effectiveDate: new Date().toISOString().slice(0, 10),
     policyName: "Default Shipping Policy",
   },
@@ -783,6 +785,7 @@ const DEFAULT_SYSTEM_SETTINGS = {
     showFreight: true,
     showContainer: true,
     showWeight: true,
+    showMethod: true,
   },
 };
 
@@ -2661,10 +2664,38 @@ function calcFreight({
   width,
   height,
   weight,
+  shippingMethod,
 }) {
   const cbm = computeCbm(length, width, height);
   const policy =
     getSystemSettings().shipping || DEFAULT_SYSTEM_SETTINGS.shipping;
+
+  // Air → charged by weight: KG × Air rate (set in Settings → Shipping & Pricing).
+  // Land / Sea keep the S/M/L fixed price + CBM rules below.
+  if (normShipMethod(shippingMethod) === "Air") {
+    const kg = Number(weight);
+    if (!(kg > 0))
+      return { ok: false, message: "Air freight needs a Weight (KG)", cbm };
+    const airRate = Number(policy.airRatePerKg || 0);
+    if (!(airRate > 0))
+      return {
+        ok: false,
+        message:
+          "Air rate per KG is not configured (Settings → Shipping & Pricing)",
+        cbm,
+      };
+    return {
+      ok: true,
+      method: "Air Weight",
+      rate: airRate,
+      cbm: null,
+      fee: Math.round(kg * airRate * 100) / 100,
+      policyCurrency: policy.currency || "USD",
+      cargoType: null,
+      packageType: null,
+    };
+  }
+
   const effectivePackageType =
     packageType || (sizeClass === "OVER" ? "dimension_based" : "small_package");
 
@@ -3531,7 +3562,63 @@ function RegistrationOverview({ rows }) {
   );
 }
 
-function PaginationBar({ page, pageCount, total, shown, onPage }) {
+function PaginationBar({
+  page,
+  pageCount,
+  total,
+  shown,
+  onPage,
+  pageSize,
+  onPageSize,
+  pageSizes = [15, 30, 50, 100],
+}) {
+  if (onPageSize) {
+    const from = total === 0 ? 0 : page * pageSize + 1;
+    const to = from + shown - 1;
+    const arrow =
+      "inline-flex h-9 w-10 items-center justify-center rounded-lg border border-mist-200 bg-white text-ink-700 hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed";
+    return (
+      <div className="flex items-center justify-end gap-x-6 gap-y-2 flex-wrap px-4 lg:px-5 py-3 border-t border-mist-200 text-sm text-ink-700">
+        <label className="flex items-center gap-2">
+          Rows per page
+          <select
+            value={pageSize}
+            onChange={(e) => onPageSize(Number(e.target.value))}
+            className="h-9 rounded-lg border border-mist-200 bg-white px-2.5 text-sm"
+          >
+            {pageSizes.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span>
+          {from} to {to} of {total.toLocaleString("en-US")} results
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-label="Previous page"
+            onClick={() => onPage(Math.max(0, page - 1))}
+            disabled={page === 0}
+            className={arrow}
+          >
+            <Icons.ChevronLeft size={16} />
+          </button>
+          <button
+            type="button"
+            aria-label="Next page"
+            onClick={() => onPage(Math.min(pageCount - 1, page + 1))}
+            disabled={page >= pageCount - 1}
+            className={arrow}
+          >
+            <Icons.ChevronRight size={16} />
+          </button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="flex items-center justify-between gap-2 flex-wrap px-4 lg:px-5 py-3 border-t border-mist-200 text-xs text-ink-600/50">
       <span>
@@ -3705,6 +3792,33 @@ function formatIso(iso) {
 // cn_orders.id -> "CN000001" for TKs that belong to a CN Purchase Order.
 // Filled by PackageTrackingProvider.refetch; display-only (never written to DB).
 const CN_ORDER_NO_BY_ID = {};
+// cn_orders.id -> "Land" | "Sea" | "Air" (chosen when the CN order is created).
+const CN_SHIP_METHOD_BY_ID = {};
+const CN_SHIP_METHODS = ["Land", "Sea", "Air"];
+function normShipMethod(v) {
+  const t = String(v || "")
+    .trim()
+    .toLowerCase();
+  return CN_SHIP_METHODS.find((m) => m.toLowerCase() === t) || "";
+}
+// Same line icons as the customer app (truck / ship / plane), uses the text colour.
+function ShipMethodIcon({ m, size = 16, className = "" }) {
+  const I = { Land: Icons.Truck, Sea: Icons.Ship, Air: Icons.Plane }[
+    normShipMethod(m) || "Land"
+  ];
+  return <I size={size} className={className} />;
+}
+// Effective shipping method of a TK: the CN order's choice first, then the
+// package's own method, otherwise Land. Land and Sea are priced the same way;
+// Air is priced by KG.
+function pkgShippingMethod(p) {
+  return (
+    normShipMethod(p?.cn_order_id && CN_SHIP_METHOD_BY_ID[p.cn_order_id]) ||
+    normShipMethod(p?.shipping_method) ||
+    normShipMethod(p?.method) ||
+    "Land"
+  );
+}
 
 // Adds display-only fields so list columns/CSV export/search can read
 // flat strings. Never written back to the registry.
@@ -5146,10 +5260,11 @@ function PackageTrackingProvider({ children }) {
       if (ids.length) {
         const { data: cns } = await supabase
           .from("cn_orders")
-          .select("id,order_id")
+          .select("id,order_id,shipping_method")
           .in("id", ids);
         (cns || []).forEach((c) => {
           CN_ORDER_NO_BY_ID[c.id] = c.order_id;
+          CN_SHIP_METHOD_BY_ID[c.id] = c.shipping_method || "";
         });
       }
     }
@@ -7769,8 +7884,11 @@ function VerifyScanModal({
   const pkg = findPackage(tk);
   if (!pkg) return null;
 
+  const shipMethod = pkgShippingMethod(pkg);
+  const isAir = shipMethod === "Air";
   const calc = edit
     ? calcFreight({
+        shippingMethod: shipMethod,
         cargoType: dims.cargoType,
         packageType: dims.packageType,
         sizeClass: dims.sizeClass,
@@ -7788,11 +7906,12 @@ function VerifyScanModal({
       if (!(Number(dims.weight) > 0))
         return setError("Weight must be a positive number");
       if (
+        !isAir &&
         dims.packageType === "small_package" &&
         !["S", "M", "L"].includes(dims.sizeClass)
       )
         return setError("Please select Size S, M or L");
-      if (dims.packageType === "dimension_based" && calc.cbm == null)
+      if (!isAir && dims.packageType === "dimension_based" && calc.cbm == null)
         return setError("Length, Width and Height must be positive numbers");
       if (!calc.ok) return setError(calc.message);
       if (!String(dims.reason).trim())
@@ -7801,7 +7920,7 @@ function VerifyScanModal({
     setSaving(true);
     try {
       if (edit) {
-        const dimsEntered = dims.packageType === "dimension_based";
+        const dimsEntered = !isAir && dims.packageType === "dimension_based";
         // A fee the Super Admin overrode by hand is never silently
         // replaced by the automatic calculation.
         const keepFee = pkg.freight_overridden;
@@ -7814,10 +7933,13 @@ function VerifyScanModal({
           weight_kg: Number(dims.weight),
           weight: Number(dims.weight), // packages.weight is numeric
           cbm: calc.cbm != null ? calc.cbm.toFixed(3) : null,
-          cargo_type: dims.cargoType,
-          package_type: dims.packageType,
-          size_class:
-            dims.packageType === "dimension_based" ? "OVER" : dims.sizeClass,
+          cargo_type: isAir ? null : dims.cargoType,
+          package_type: isAir ? null : dims.packageType,
+          size_class: isAir
+            ? null
+            : dims.packageType === "dimension_based"
+              ? "OVER"
+              : dims.sizeClass,
           pricing_method: calc.method,
           rate: calc.rate,
           freight_fee: newFee,
@@ -7965,7 +8087,7 @@ function VerifyScanModal({
                     label: "Status",
                     value: <StatusBadge label={pkg.status || "—"} />,
                   },
-                  { label: "Shipping Method", value: pkg.method || "Land" },
+                  { label: "Shipping Method", value: shipMethod },
                   {
                     label: "Total Parcel / Total Quantity",
                     value: (
@@ -8026,8 +8148,14 @@ function VerifyScanModal({
                     {sizeLabel(pkg.size_class)} · Fee{" "}
                     {pkg.freight_fee != null ? money(pkg.freight_fee) : "—"}
                   </div>
+                  {isAir && (
+                    <div className="text-xs rounded-md bg-blue-50 text-blue-800 px-3 py-2">
+                      ✈️ Air — freight = Weight (KG) × Air rate. Size / CBM are
+                      not used.
+                    </div>
+                  )}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
+                    <div className={isAir ? "hidden" : ""}>
                       <label className={LABEL_CLS}>Package Type</label>
                       <select
                         value={
@@ -8080,7 +8208,7 @@ function VerifyScanModal({
                       />
                     </div>
                   </div>
-                  {dims.packageType === "dimension_based" ? (
+                  {isAir ? null : dims.packageType === "dimension_based" ? (
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       {[
                         ["length", "Length (cm)"],
@@ -8121,7 +8249,7 @@ function VerifyScanModal({
                       </div>
                     </div>
                   )}
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className={isAir ? "hidden" : "grid grid-cols-2 gap-3"}>
                     <div>
                       <label className={LABEL_CLS}>Cargo Type</label>
                       <select
@@ -18663,7 +18791,10 @@ function ShipmentLookup() {
           );
           cnOrders = [...cnById.values()];
           cnOrders.forEach((o) => {
-            if (o.id && o.order_id) CN_ORDER_NO_BY_ID[o.id] = o.order_id;
+            if (o.id && o.order_id) {
+              CN_ORDER_NO_BY_ID[o.id] = o.order_id;
+              CN_SHIP_METHOD_BY_ID[o.id] = o.shipping_method || "";
+            }
           });
           // TKs that belong to the matched CN orders
           const cnIds = cnOrders
@@ -18694,10 +18825,11 @@ function ShipmentLookup() {
         if (unknownCn.length) {
           const { data: cns } = await supabase
             .from("cn_orders")
-            .select("id,order_id")
+            .select("id,order_id,shipping_method")
             .in("id", unknownCn);
           (cns || []).forEach((c) => {
             CN_ORDER_NO_BY_ID[c.id] = c.order_id;
+            CN_SHIP_METHOD_BY_ID[c.id] = c.shipping_method || "";
           });
         }
 
@@ -19398,14 +19530,17 @@ function EditPackageModal({ open, pkg, onClose }) {
     e.preventDefault();
     if (!hasPermission(user, "tk.edit")) return;
     setError("");
+    const isAirEdit = pkgShippingMethod(pkg) === "Air";
     if (f.weight !== "" && !(Number(f.weight) > 0))
       return setError("Weight must be a positive number");
     if (
+      !isAirEdit &&
       f.package_type === "small_package" &&
       !["S", "M", "L"].includes(f.size_class)
     )
       return setError("Please select Size S, M or L");
     if (
+      !isAirEdit &&
       f.package_type === "dimension_based" &&
       computeCbm(f.length, f.width, f.height) == null
     )
@@ -19443,6 +19578,7 @@ function EditPackageModal({ open, pkg, onClose }) {
       updated_at: new Date().toISOString(),
     };
     const calc = calcFreight({
+      shippingMethod: pkgShippingMethod(pkg),
       cargoType: f.cargo_type,
       packageType: f.package_type,
       sizeClass: f.size_class,
@@ -19451,6 +19587,16 @@ function EditPackageModal({ open, pkg, onClose }) {
       height: f.height,
       weight: f.weight,
     });
+    if (isAirEdit)
+      Object.assign(patch, {
+        package_type: null,
+        size_class: null,
+        cargo_type: null,
+        length_cm: null,
+        width_cm: null,
+        height_cm: null,
+        cbm: "",
+      });
     if (calc.ok && !pkg.freight_overridden) {
       patch.pricing_method = calc.method;
       patch.rate = calc.rate;
@@ -19873,6 +20019,8 @@ async function getLabelContainer(no) {
 //  - Small Package (Size S / M / L) → បង្ហាញ "SIZE  M"
 //  - Dimension Based (> L / OVER)    → បង្ហាញ "CBM  0.123456 m³"
 function labelMeasure(x) {
+  if (pkgShippingMethod(x) === "Air")
+    return { measureCap: "Method", measureVal: "AIR", measureSub: "By Weight" };
   const sc = String(x.size_class || "").toUpperCase();
   const isDim =
     sc === "OVER" ||
@@ -19933,7 +20081,7 @@ const LABEL_CSS = `
   .qr .cap{font-size:1.7mm;margin-top:.6mm;text-transform:none;color:#1d5fe0}
   .bt{display:flex;margin-top:1.6mm}
   .bt>div{flex:1;padding:0 2mm;border-right:.3mm solid #dbe5f7;min-width:0}
-  .bt>div:nth-child(2){flex:1.5}
+  .bt>.rtc{flex:1.5}
   .bt>div:first-child{padding-left:0}
   .bt>div:last-child{border-right:0}
   .ft{margin-top:1.4mm;padding-top:1mm;border-top:.3mm solid #c9d6f0;text-align:center;font-size:2.1mm;letter-spacing:.6mm;color:#5b6b8f;font-weight:700}
@@ -19967,7 +20115,8 @@ function labelPageHtml(d, codes, brand = {}) {
   </div>
   <div class="bt">
     ${brand.showFreight !== false ? `<div><div class="cap">Freight</div><div class="big v" style="font-size:4mm">${e(d.price)}</div><div class="sub">Total Freight</div></div>` : ""}
-    <div><div class="cap">Route</div><div class="v" style="white-space:nowrap;font-size:2.9mm">${e(d.origin)} → ${e(d.branchCode)}</div><div class="sub">China → Cambodia</div></div>
+    ${brand.showMethod !== false && d.shipMethod ? `<div><div class="cap">Shipping</div><div class="big v" style="font-size:4mm">${e(d.shipMethod.toUpperCase())}</div><div class="sub">${e({ Land: "By Land", Sea: "By Sea", Air: "By Air" }[d.shipMethod] || "")}</div></div>` : ""}
+    <div class="rtc"><div class="cap">Route</div><div class="v" style="white-space:nowrap;font-size:2.9mm">${e(d.origin)} → ${e(d.branchCode)}</div><div class="sub">China → Cambodia</div></div>
     ${brand.showContainer !== false ? `<div><div class="cap">Container</div><div class="v">${e(d.containerNo)}</div><div class="sub">${e(d.containerSub)}</div></div>` : ""}
   </div>
   <div class="ft">TRACK &nbsp;•&nbsp; SHIP &nbsp;•&nbsp; DELIVER</div>
@@ -20088,6 +20237,12 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
       pkgCount: `${i + 1} / ${total}`,
       weight: labelWeight(x.weight_kg ?? x.weight),
       ...labelMeasure(x),
+      // Only when the method is really known (CN order / TK); never guessed.
+      shipMethod:
+        normShipMethod(x.cn_order_id && CN_SHIP_METHOD_BY_ID[x.cn_order_id]) ||
+        normShipMethod(x.shipping_method) ||
+        normShipMethod(x.method) ||
+        "",
       price:
         x.freight_fee !== undefined &&
         x.freight_fee !== null &&
@@ -20117,6 +20272,7 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
     showFreight: systemSettings.label.showFreight,
     showContainer: systemSettings.label.showContainer,
     showWeight: systemSettings.label.showWeight,
+    showMethod: systemSettings.label.showMethod,
     phone: systemSettings.company.phone,
     email: systemSettings.company.email,
     address: systemSettings.company.address,
@@ -31774,6 +31930,7 @@ const CustomerApp = (() => {
     const [walletPayError, setWalletPayError] = useState("");
     const [parcels, setParcels] = useState([]);
     const [priceExtra, setPriceExtra] = useState(null);
+    const [shipMethod, setShipMethod] = useState("");
     const [cnImages, setCnImages] = useState([]);
     const [cnImagesLoading, setCnImagesLoading] = useState(true);
     const [loading, setLoading] = useState(true);
@@ -31808,6 +31965,16 @@ const CustomerApp = (() => {
           setPriceExtra(ex || null);
         } catch (_e) {
           setPriceExtra(null);
+        }
+        try {
+          const { data: sm } = await supabase
+            .from("cn_orders")
+            .select("shipping_method")
+            .eq("id", data.id)
+            .maybeSingle();
+          setShipMethod(sm?.shipping_method || "");
+        } catch (_e) {
+          setShipMethod("");
         }
         setCnImagesLoading(true);
         loadCnImages(data.id).then((imgs) => {
@@ -32060,6 +32227,36 @@ const CustomerApp = (() => {
             tr={tr}
             Card={Card}
           />
+
+          {normShipMethod(shipMethod) && (
+            <Card className="p-5 relative overflow-hidden">
+              <span className="absolute top-0 right-0 w-14 h-12 rounded-bl-3xl bg-rose-400 text-white grid place-items-center">
+                <Icons.MapPin size={20} />
+              </span>
+              <h2 className="font-bold text-slate-900">
+                {tr("Shipping Information", "ព័ត៌មានការដឹកជញ្ជូន")}
+              </h2>
+              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-3 text-sm">
+                <span className="text-slate-700">
+                  {tr("Shipping Method", "វិធីសាស្ត្រដឹកជញ្ជូន")}
+                </span>
+                <span className="flex items-center gap-2 font-bold text-slate-900">
+                  <ShipMethodIcon
+                    m={shipMethod}
+                    size={24}
+                    className="text-indigo-700"
+                  />
+                  {
+                    {
+                      Land: tr("By Land", "ផ្លូវគោក"),
+                      Sea: tr("By Sea", "ផ្លូវទឹក"),
+                      Air: tr("By Air", "ផ្លូវអាកាស"),
+                    }[normShipMethod(shipMethod)]
+                  }
+                </span>
+              </div>
+            </Card>
+          )}
 
           {parcels.length > 0 && (
             <Card className="p-4">
@@ -39730,6 +39927,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
   const [directTracks, setDirectTracks] = useState("");
   const [platform, setPlatform] = useState(CN_PLATFORMS[0]);
   const [shop, setShop] = useState("");
+  const [shipMethod, setShipMethod] = useState("Land");
   const [product, setProduct] = useState("");
   const [url, setUrl] = useState("");
   const [variant, setVariant] = useState("");
@@ -39949,6 +40147,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
         customer: airOrderCustomerLabel(customer),
         platform,
         shop_name: cnNz(shop),
+        shipping_method: shipMethod,
         product_name: cnNz(firstItem.product_name),
         product_url: cnNz(firstItem.product_url),
         variant: cnNz(firstItem.variant),
@@ -40229,6 +40428,25 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
             placeholder="Shop / seller name"
           />
         </div>
+      </div>
+      <div>
+        <label className={LABEL_CLS}>Shipping Method *</label>
+        <div className="grid grid-cols-3 gap-2">
+          {CN_SHIP_METHODS.map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setShipMethod(m)}
+              className={`inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-bold transition ${shipMethod === m ? "border-blue-600 bg-blue-600 text-white shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-blue-300"}`}
+            >
+              <ShipMethodIcon m={m} size={18} />
+              {m}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-slate-500 mt-1.5">
+          Land / Sea: freight by Size S/M/L or CBM. Air: freight by KG.
+        </p>
       </div>
       {!isDirect && (
         <div className="space-y-3 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
@@ -41723,6 +41941,91 @@ function CnEditModal({ open, row, onClose, onSaved }) {
 
 // Cancel an order the customer has not paid for. No money moves, so there is
 // no wallet refund; the order just closes with a recorded reason.
+// Staff can change Land / Sea / Air after the order is created (customer chose
+// another route, or the wrong one was picked). Freight is only calculated when
+// the TK arrives, so a change here is picked up automatically then.
+function CnShipMethodModal({ open, row, onClose, onSaved }) {
+  const { user } = useAuth();
+  const [m, setM] = useState("Land");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (open) {
+      setM(normShipMethod(row?.shipping_method) || "Land");
+      setBusy(false);
+      setError("");
+    }
+  }, [open, row?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!open || !row) return null;
+  const old = normShipMethod(row.shipping_method) || "Land";
+
+  async function submit(e) {
+    e.preventDefault();
+    if (m === old) return onClose();
+    if (!supabase) return setError("Supabase is not connected.");
+    setBusy(true);
+    setError("");
+    try {
+      const by = cnBy(user);
+      const { error: err } = await supabase
+        .from("cn_orders")
+        .update({
+          shipping_method: m,
+          updated_by: by,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", row.id);
+      if (err) throw err;
+      CN_SHIP_METHOD_BY_ID[row.id] = m;
+      await supabase.from("cn_order_history").insert({
+        cn_order_id: row.id,
+        event: "edit",
+        note: `Shipping Method changed ${old} → ${m}`,
+        created_by: by,
+      });
+      emitCBToast("ok", "Shipping Method updated", `${old} → ${m}`);
+      onSaved?.();
+      onClose();
+    } catch (er) {
+      setError(er.message || "Unable to update Shipping Method.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <CnModalShell
+      title="Change Shipping Method"
+      subtitle={`${row.order_id} · currently ${old}`}
+      onClose={onClose}
+      onSubmit={submit}
+      error={error}
+      busy={busy}
+      submitLabel="Save"
+      busyLabel="Saving…"
+    >
+      <div className="grid grid-cols-3 gap-2">
+        {CN_SHIP_METHODS.map((x) => (
+          <button
+            key={x}
+            type="button"
+            onClick={() => setM(x)}
+            className={`inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-bold transition ${m === x ? "border-blue-600 bg-blue-600 text-white shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-blue-300"}`}
+          >
+            <ShipMethodIcon m={x} size={18} />
+            {x}
+          </button>
+        ))}
+      </div>
+      <p className="text-xs text-slate-500">
+        Land / Sea: freight by Size S/M/L or CBM. Air: freight by KG. If a TK
+        already has a freight fee, open Adjust Size / Weight on that TK to
+        recalculate it.
+      </p>
+    </CnModalShell>
+  );
+}
+
 function CnCancelModal({ open, row, onClose, onSaved }) {
   const { user } = useAuth();
   const [reason, setReason] = useState("");
@@ -42779,6 +43082,7 @@ function CnOrdersPage() {
   const [loadError, setLoadError] = useState("");
   const [dateRange, setDateRange] = useState(EMPTY_DATE_RANGE);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(15);
   const [quick, setQuick] = useState(""); // clickable stat / quick-tab filter
   const [rowsMeta, setRowsMeta] = useState({ total: null, truncated: false });
   const coverTried = useRef(new Set()); // order ids whose cover was already looked up
@@ -42871,7 +43175,7 @@ function CnOrdersPage() {
   }, [activeTab, loadTks]);
   useEffect(() => {
     setPage(0);
-  }, [q, status, pay, tkStatus, dateRange, activeTab, quick]);
+  }, [q, status, pay, tkStatus, dateRange, activeTab, quick, pageSize]);
 
   const active = (r) =>
     !CN_ORDER_TERMINAL_STATUSES.has(cnNormalizeStatus(r.status));
@@ -43135,11 +43439,11 @@ function CnOrdersPage() {
 
   // Pagination (orders + TK list)
   const listTotal = activeTab === "tks" ? filteredTks.length : filtered.length;
-  const pageCount = Math.max(1, Math.ceil(listTotal / CN_PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(listTotal / pageSize));
   const curPage = Math.min(page, pageCount - 1);
-  const pageFrom = curPage * CN_PAGE_SIZE;
-  const pagedOrders = filtered.slice(pageFrom, pageFrom + CN_PAGE_SIZE);
-  const pagedTks = filteredTks.slice(pageFrom, pageFrom + CN_PAGE_SIZE);
+  const pageFrom = curPage * pageSize;
+  const pagedOrders = filtered.slice(pageFrom, pageFrom + pageSize);
+  const pagedTks = filteredTks.slice(pageFrom, pageFrom + pageSize);
 
   const pageIdKey = pagedOrders.map((r) => r.id).join(",");
   useEffect(() => {
@@ -43298,6 +43602,10 @@ function CnOrdersPage() {
           csv: (x) => (tkNumbersByOrder.get(x.id) || []).join(" | "),
         },
         { label: "Linked TKs", csv: (x) => linkedTkCount.get(x.id) || 0 },
+        {
+          label: "Shipping Method",
+          csv: (x) => normShipMethod(x.shipping_method) || "Land",
+        },
         { label: "Total (USD)", csv: (x) => Number(x.total_due_usd) || 0 },
         { label: "Paid (USD)", csv: (x) => paidOf(x) },
         {
@@ -43570,9 +43878,9 @@ function CnOrdersPage() {
 
         {activeTab === "orders" && (
           <div className="overflow-auto">
-            <table className="min-w-[1500px] w-full text-sm">
+            <table className="min-w-[1380px] w-full text-sm whitespace-nowrap">
               <thead>
-                <tr className="bg-mist-50 text-left text-xs uppercase tracking-wide text-ink-600/60">
+                <tr className="bg-mist-50 text-left text-[11px] uppercase tracking-wider text-ink-600/60">
                   {[
                     "Order ID",
                     "Tracking Number",
@@ -43640,13 +43948,37 @@ function CnOrdersPage() {
                         }
                         className="hover:bg-mist-50 cursor-pointer"
                       >
-                        <td className="px-4 py-3 font-bold text-ink-900">
+                        <td className="px-4 py-3 text-ink-900">
                           <Link
                             to={`/cn-orders/${encodeURIComponent(r.order_id)}`}
-                            className="hover:text-signal-blue"
+                            className="block font-bold hover:text-signal-blue"
                           >
                             {r.order_id}
                           </Link>
+                          <div className="mt-1.5 flex items-center gap-2 text-xs">
+                            <span className="inline-flex items-center gap-1 text-ink-600/70">
+                              <ShipMethodIcon
+                                m={r.shipping_method}
+                                size={14}
+                                className="text-blue-600"
+                              />
+                              {normShipMethod(r.shipping_method) || "Land"}
+                            </span>
+                            {r.platform && (
+                              <span
+                                className={`rounded-md border px-2 py-0.5 font-semibold ${
+                                  String(r.platform).toLowerCase() === "taobao"
+                                    ? "border-orange-200 bg-orange-50 text-orange-700"
+                                    : String(r.platform).toLowerCase() ===
+                                        "1688"
+                                      ? "border-blue-100 bg-blue-50 text-blue-700"
+                                      : "border-slate-200 bg-slate-50 text-slate-600"
+                                }`}
+                              >
+                                {r.platform}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-3">
                           <CnTrackingCell tks={tkNumbersByOrder.get(r.id)} />
@@ -43673,9 +44005,7 @@ function CnOrdersPage() {
                               <span className="text-xs text-ink-600/40">
                                 {its.length > 1
                                   ? `${its.length} items`
-                                  : [r.platform, r.shop_name]
-                                      .filter(Boolean)
-                                      .join(" · ")}
+                                  : r.shop_name || r.platform || ""}
                               </span>
                             </div>
                           </div>
@@ -43877,6 +44207,8 @@ function CnOrdersPage() {
               total={listTotal}
               shown={activeTab === "tks" ? pagedTks.length : pagedOrders.length}
               onPage={setPage}
+              pageSize={pageSize}
+              onPageSize={setPageSize}
             />
           )}
 
@@ -44110,6 +44442,8 @@ function CnOrdersPage() {
                 total={filtered.length}
                 shown={pagedOrders.length}
                 onPage={setPage}
+                pageSize={pageSize}
+                onPageSize={setPageSize}
               />
             )}
           </>
@@ -44174,7 +44508,11 @@ function CnPrintLabelModalLoader({ row, tk, onClose }) {
         return onClose();
       }
       // Label shows the CN order no (company ID) as the Order ID.
-      setPkg({ ...data, order_no: row.order_id });
+      setPkg({
+        ...data,
+        order_no: row.order_id,
+        shipping_method: row.shipping_method || data.shipping_method,
+      });
     })();
     return () => {
       alive = false;
@@ -44210,6 +44548,7 @@ function CnOrderDetailPage() {
   const [refundOpen, setRefundOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [shipOpen, setShipOpen] = useState(false);
   const [changeTkTarget, setChangeTkTarget] = useState(null); // TK being changed
   const [pickTkOpen, setPickTkOpen] = useState(false);
   // Staff can take the Cambodia shipping fee on behalf of the customer.
@@ -44620,6 +44959,29 @@ function CnOrderDetailPage() {
               <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-violet-700">
                 Parse Link
               </span>
+              <button
+                type="button"
+                disabled={!canEdit || terminal}
+                onClick={() => setShipOpen(true)}
+                title={
+                  canEdit && !terminal
+                    ? "Change Shipping Method"
+                    : "Shipping Method"
+                }
+                className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[11px] font-bold normal-case tracking-normal text-indigo-700 enabled:hover:bg-indigo-100 disabled:cursor-default"
+              >
+                <ShipMethodIcon
+                  m={row.shipping_method}
+                  size={14}
+                  className="text-indigo-700"
+                />
+                {
+                  { Land: "By Land", Sea: "By Sea", Air: "By Air" }[
+                    normShipMethod(row.shipping_method) || "Land"
+                  ]
+                }
+                {canEdit && !terminal && <Icons.Pencil size={11} />}
+              </button>
             </div>
             <h1 className="font-bold text-2xl text-slate-900">
               {row.order_id}
@@ -44753,6 +45115,8 @@ function CnOrderDetailPage() {
                             .filter((x) => x.tk)
                             .map((x) => x.tk);
                           CN_ORDER_NO_BY_ID[row.id] = row.order_id;
+                          CN_SHIP_METHOD_BY_ID[row.id] =
+                            row.shipping_method || "";
                           if (tks.length === 1) setChangeTkTarget(tks[0]);
                           else setPickTkOpen(true);
                         }}
@@ -44761,6 +45125,19 @@ function CnOrderDetailPage() {
                         <Icons.ScanLine size={15} /> Change Tracking Number
                       </button>
                     )}
+                  {canEdit && !terminal && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setCnMenuOpen(false);
+                        setShipOpen(true);
+                      }}
+                      className="flex w-full items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      <Icons.Truck size={15} /> Change Shipping Method
+                    </button>
+                  )}
                   {canEdit && !terminal && (
                     <button
                       type="button"
@@ -44934,6 +45311,8 @@ function CnOrderDetailPage() {
                           type="button"
                           onClick={() => {
                             CN_ORDER_NO_BY_ID[row.id] = row.order_id;
+                            CN_SHIP_METHOD_BY_ID[row.id] =
+                              row.shipping_method || "";
                             setChangeTkTarget(p.tk);
                           }}
                           className="ml-2 align-middle text-slate-400 hover:text-signal-blue"
@@ -45313,6 +45692,10 @@ function CnOrderDetailPage() {
                 { label: "Platform", value: row.platform || "—" },
                 { label: "Shop", value: row.shop_name || "—" },
                 {
+                  label: "Shipping Method",
+                  value: normShipMethod(row.shipping_method) || "Land",
+                },
+                {
                   label: "Product",
                   value: row.product_name || "—",
                   span: true,
@@ -45495,6 +45878,15 @@ function CnOrderDetailPage() {
         row={row}
         onClose={() => setEditOpen(false)}
         onSaved={load}
+      />
+      <CnShipMethodModal
+        open={shipOpen}
+        row={row}
+        onClose={() => setShipOpen(false)}
+        onSaved={() => {
+          load();
+          refetchPackages?.();
+        }}
       />
       <CnCancelModal
         open={cancelOpen}
@@ -48611,6 +49003,47 @@ function SettingsPage() {
                     </div>
                   </div>
 
+                  <div className="rounded-2xl border border-slate-200 overflow-hidden">
+                    <div className="px-5 py-4 bg-sky-50/70 flex items-center justify-between">
+                      <div>
+                        <div className="font-bold text-slate-900">
+                          Air — Weight Based
+                        </div>
+                        <div className="text-xs text-slate-500 mt-0.5">
+                          Air orders are charged by weight: KG × Air rate. Land
+                          and Sea use the Small Package / CBM rules.
+                        </div>
+                      </div>
+                      <span className="rounded-full px-2.5 py-1 text-[11px] font-bold bg-sky-100 text-sky-700">
+                        Per KG
+                      </span>
+                    </div>
+                    <div className="p-5">
+                      <label className="block max-w-xs text-sm font-semibold text-slate-700">
+                        <span>Air Rate</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          className={input}
+                          value={settings.shipping.airRatePerKg ?? 0}
+                          onChange={(e) =>
+                            setSettings((p) => ({
+                              ...p,
+                              shipping: {
+                                ...p.shipping,
+                                airRatePerKg: Number(e.target.value || 0),
+                              },
+                            }))
+                          }
+                        />
+                        <span className="text-xs text-slate-400">
+                          {settings.shipping.currency} / KG
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+
                   {["Normal", "Sensitive"].map((cargoType) => (
                     <div
                       key={cargoType}
@@ -48869,6 +49302,7 @@ function SettingsPage() {
                     ["showFreight", "Freight Fee"],
                     ["showContainer", "Container"],
                     ["showWeight", "Weight (kg)"],
+                    ["showMethod", "Shipping Method"],
                   ].map(([k, l]) => (
                     <label
                       key={k}
