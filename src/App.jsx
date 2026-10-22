@@ -2311,7 +2311,10 @@ const MODULES = {
     subtitle: "All staff and admins in the system",
     primaryAction: "New User",
     columns: [
-      col("name", "Name", { strong: true }),
+      col("name", "Name", {
+        strong: true,
+        linkTo: (row) => `/users/${encodeURIComponent(row.id)}`,
+      }),
       col("role", "Role"),
       col("department", "Department"),
       col("warehouse_code", "Warehouse"),
@@ -10940,6 +10943,7 @@ function DataTable({
   loading = false,
   skeletonRows = 6,
   rowActions,
+  onRowClick,
   caption,
   error = null,
   onRetry,
@@ -10983,7 +10987,24 @@ function DataTable({
           {!loading &&
             !error &&
             rows.map((row, i) => (
-              <tr key={i} className="cbx-row transition-colors">
+              <tr
+                key={i}
+                className={`cbx-row transition-colors ${onRowClick ? "cursor-pointer hover:bg-blue-50/40" : ""}`}
+                onClick={
+                  onRowClick
+                    ? (e) => {
+                        // Links / buttons / inputs inside the row keep their own click.
+                        if (
+                          e.target.closest(
+                            "a,button,input,select,textarea,label",
+                          )
+                        )
+                          return;
+                        onRowClick(row);
+                      }
+                    : undefined
+                }
+              >
                 {columns.map((col) => (
                   <td
                     key={col.key}
@@ -15642,6 +15663,7 @@ function ListPage({
 }) {
   const isLinkedTk = LINKED_TK_PATHS.includes(path);
   const { user } = useAuth();
+  const navigateTo = useNavigate();
   const {
     rows: tableRows,
     ready: tableReady,
@@ -15705,48 +15727,6 @@ function ListPage({
   const canResetPassword =
     path === "/customers" && hasPermission(user, "customer.reset_password");
   // Staff accounts: only a Super Admin may reset someone else's password.
-  const canResetStaffPw = path === "/users" && user?.role === SUPER_ADMIN;
-  // Disable / Enable a staff account (Super Admin only). Disabling signs the
-  // person out immediately and blocks login until the account is enabled.
-  const toggleStaffStatus = async (row) => {
-    const disable = !isStaffDisabled(row.status);
-    const ok = await confirmDialog({
-      title: disable ? "Disable account" : "Enable account",
-      message: disable
-        ? `${row.name} (${row.email}) នឹងត្រូវ Logout ភ្លាមៗ ហើយមិនអាចចូលប្រើបានទៀតទេ រហូតដល់ Enable វិញ។`
-        : `${row.name} (${row.email}) នឹងអាចចូលប្រើប្រព័ន្ធបានវិញ។`,
-      confirmText: disable ? "Disable" : "Enable",
-      cancelText: "Cancel",
-    });
-    if (!ok) return;
-    try {
-      const { data: session } = await supabase.auth.getSession();
-      const { data, error: fnError } = await supabase.functions.invoke(
-        "set-staff-status",
-        {
-          body: { user_id: row.id, email: row.email, disabled: disable },
-          headers: {
-            Authorization: `Bearer ${session.session?.access_token}`,
-          },
-        },
-      );
-      if (fnError) throw fnError;
-      if (data?.error) throw new Error(data.error);
-      try {
-        await updateRow(row, { status: disable ? "Suspended" : "Active" });
-      } catch {
-        /* the function already saved it; this only refreshes the table */
-      }
-      emitCBToast(
-        "ok",
-        disable ? "Account disabled" : "Account enabled",
-        `${row.name} ${disable ? "ត្រូវបានបិទ" : "ត្រូវបានបើកវិញ"}។`,
-      );
-    } catch (err) {
-      const msg = await edgeFnErrorMessage(err, "មិនអាចប្តូរស្ថានភាពបានទេ");
-      emitCBToast("err", "Failed", msg);
-    }
-  };
   const isUsersModule = path === "/users";
   const isTransferModule = path === "/customer-transfer";
   // Exceptions has no mock table of its own — it's just whichever real
@@ -16264,6 +16244,11 @@ function ListPage({
           loading={listLoading}
           skeletonRows={8}
           caption={title}
+          onRowClick={
+            isUsersModule
+              ? (row) => navigateTo(`/users/${encodeURIComponent(row.id)}`)
+              : undefined
+          }
           error={displayRows.length === 0 ? errorInfo : null}
           onRetry={() => refetch()}
           emptyTitle={hasActiveFilters ? "No matching results" : undefined}
@@ -16278,10 +16263,8 @@ function ListPage({
               : undefined
           }
           rowActions={
-            (canEditRows ||
-              canDeleteRows ||
-              canResetPassword ||
-              canResetStaffPw) &&
+            !isUsersModule &&
+            (canEditRows || canDeleteRows || canResetPassword) &&
             !isExceptionsModule &&
             !isTransferModule
               ? (row) => (
@@ -16295,52 +16278,6 @@ function ListPage({
                         onClick={() => setResetPwRow(row)}
                       />
                     )}
-                    {canResetStaffPw &&
-                      row.email &&
-                      row.email !== user?.email && (
-                        <>
-                          <RowAction
-                            label="Reset Password"
-                            subject={row.name}
-                            icon="KeyRound"
-                            tone="warn"
-                            onClick={() => setResetPwRow(row)}
-                          />
-                          <RowAction
-                            label={
-                              isStaffDisabled(row.status) ? "Enable" : "Disable"
-                            }
-                            subject={row.name}
-                            icon={
-                              isStaffDisabled(row.status)
-                                ? "UserCheck"
-                                : "UserX"
-                            }
-                            tone={
-                              isStaffDisabled(row.status) ? "primary" : "danger"
-                            }
-                            onClick={() => toggleStaffStatus(row)}
-                          />
-                        </>
-                      )}
-                    {canEditRows &&
-                      (isLinkedTk ? (
-                        <RowAction
-                          label="Edit"
-                          subject={row.tk}
-                          icon="Pencil"
-                          tone="primary"
-                          to={`/packages/${encodeURIComponent(row.tk)}`}
-                        />
-                      ) : (
-                        <RowAction
-                          label="Edit"
-                          subject={row.id ?? row.name}
-                          icon="Pencil"
-                          tone="primary"
-                          onClick={() => setEditingRow(row)}
-                        />
-                      ))}
                     {canDeleteRows && (
                       <RowAction
                         label="Delete"
@@ -16357,13 +16294,6 @@ function ListPage({
         />
         {canResetPassword && resetPwRow && (
           <CustomerResetPasswordModal
-            key={resetPwRow.id}
-            row={resetPwRow}
-            onClose={() => setResetPwRow(null)}
-          />
-        )}
-        {canResetStaffPw && resetPwRow && (
-          <StaffResetPasswordModal
             key={resetPwRow.id}
             row={resetPwRow}
             onClose={() => setResetPwRow(null)}
@@ -52996,6 +52926,490 @@ function CustomerWarehouseRouteModal({
   );
 }
 
+// Disable / Enable a staff account (Super Admin only). Disabling signs the
+// person out immediately and blocks login until the account is enabled.
+async function setStaffDisabled(row, updateRow) {
+  const disable = !isStaffDisabled(row.status);
+  const ok = await confirmDialog({
+    title: disable ? "Disable account" : "Enable account",
+    message: disable
+      ? `${row.name} (${row.email}) នឹងត្រូវ Logout ភ្លាមៗ ហើយមិនអាចចូលប្រើបានទៀតទេ រហូតដល់ Enable វិញ។`
+      : `${row.name} (${row.email}) នឹងអាចចូលប្រើប្រព័ន្ធបានវិញ។`,
+    confirmText: disable ? "Disable" : "Enable",
+    cancelText: "Cancel",
+  });
+  if (!ok) return false;
+  try {
+    const { data: session } = await supabase.auth.getSession();
+    const { data, error: fnError } = await supabase.functions.invoke(
+      "set-staff-status",
+      {
+        body: { user_id: row.id, email: row.email, disabled: disable },
+        headers: { Authorization: `Bearer ${session.session?.access_token}` },
+      },
+    );
+    if (fnError) throw fnError;
+    if (data?.error) throw new Error(data.error);
+    try {
+      await updateRow(row, { status: disable ? "Suspended" : "Active" });
+    } catch {
+      /* the function already saved it; this only refreshes cached rows */
+    }
+    emitCBToast(
+      "ok",
+      disable ? "Account disabled" : "Account enabled",
+      `${row.name} ${disable ? "ត្រូវបានបិទ" : "ត្រូវបានបើកវិញ"}។`,
+    );
+    return true;
+  } catch (err) {
+    const msg = await edgeFnErrorMessage(err, "មិនអាចប្តូរស្ថានភាពបានទេ");
+    emitCBToast("err", "Failed", msg);
+    return false;
+  }
+}
+
+function StaffField({ label, children }) {
+  return (
+    <div>
+      <div className="text-xs font-semibold text-slate-500 mb-1.5">{label}</div>
+      <div className="min-h-[42px] flex items-center rounded-xl border border-slate-200 bg-slate-50/60 px-3.5 py-2 text-sm text-slate-800">
+        {children || <span className="text-slate-400">—</span>}
+      </div>
+    </div>
+  );
+}
+
+const STAFF_INPUT =
+  "h-[42px] w-full rounded-xl border border-slate-200 bg-white px-3.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-slate-500";
+
+function StaffDetailPage() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const { rows: whRows } = useWarehouses();
+  const { updateRow, deleteRow } = useTableRows("/users", []);
+  const [row, setRow] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [missing, setMissing] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [form, setForm] = useState({
+    name: "",
+    department: "",
+    warehouse_code: "",
+    role: "",
+  });
+  const [saving, setSaving] = useState(false);
+  const nameRef = useRef(null);
+
+  const isSuper = user?.role === SUPER_ADMIN;
+  const canEdit = hasPermission(user, "user.edit");
+  const canDelete = hasPermission(user, "user.delete");
+  const isSelf =
+    !!row?.email &&
+    !!user?.email &&
+    row.email.toLowerCase() === user.email.toLowerCase();
+
+  const load = React.useCallback(async () => {
+    if (!supabase) {
+      setLoading(false);
+      setMissing(true);
+      return;
+    }
+    const { data, error } = await supabase
+      .from("users")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+    if (error || !data) setMissing(true);
+    else {
+      setRow(data);
+      setMissing(false);
+    }
+    setLoading(false);
+  }, [id]);
+  useEffect(() => {
+    setLoading(true);
+    load();
+  }, [load]);
+  // Reset the form whenever the saved row changes.
+  useEffect(() => {
+    if (row)
+      setForm({
+        name: row.name || "",
+        department: row.department || "",
+        warehouse_code: row.warehouse_code || "",
+        role: row.role || "",
+      });
+  }, [row]);
+
+  if (loading)
+    return (
+      <div className="max-w-5xl mx-auto p-6">
+        <Skeleton className="h-28 w-full rounded-2xl" />
+        <Skeleton className="h-64 w-full rounded-2xl mt-4" />
+      </div>
+    );
+  if (missing || !row)
+    return (
+      <div className="max-w-5xl mx-auto p-6">
+        <Link
+          to="/users"
+          className="inline-flex items-center gap-1.5 text-sm font-semibold text-blue-700"
+        >
+          <Icons.ArrowLeft size={16} /> Back to Users
+        </Link>
+        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-10 text-center text-slate-500">
+          រកមិនឃើញ Staff នេះទេ (Staff not found)។
+        </div>
+      </div>
+    );
+
+  const disabled = isStaffDisabled(row.status);
+  const KEYS = ["name", "department", "warehouse_code", "role"];
+  const patch = {};
+  KEYS.forEach((k) => {
+    if (String(form[k] ?? "") !== String(row[k] ?? "")) patch[k] = form[k];
+  });
+  const dirty = Object.keys(patch).length > 0;
+
+  const withCurrent = (list, cur) =>
+    cur && !list.includes(cur) ? [cur, ...list] : list;
+  const roleOptions = withCurrent(
+    assignableRoles(user).map((r) => r.name),
+    row.role,
+  );
+  const deptOptions = withCurrent(
+    DEPARTMENTS.map((d) => d.name),
+    row.department,
+  );
+  const whOptions = (whRows || []).map((w) => ({
+    code: w.code,
+    label: w.name ? `${w.code} · ${w.name}` : w.code,
+  }));
+  if (
+    row.warehouse_code &&
+    !whOptions.some((w) => w.code === row.warehouse_code)
+  )
+    whOptions.unshift({ code: row.warehouse_code, label: row.warehouse_code });
+
+  async function save() {
+    if (!dirty || saving) return;
+    if (!String(form.name).trim())
+      return emitCBToast("err", "Update failed", "សូមបញ្ចូលឈ្មោះ។");
+    setSaving(true);
+    try {
+      if (!canEdit) throw new Error(NO_PERM_MSG);
+      if ("role" in patch) assertCanAssignRole(user, patch.role);
+      else if ("department" in patch || "warehouse_code" in patch)
+        requirePermission(user, "user.assign_role");
+      await updateRow(row, patch);
+      emitCBToast("ok", "Updated", `${form.name} was updated.`);
+      await load();
+    } catch (err) {
+      emitCBToast(
+        "err",
+        "Update failed",
+        err?.message || "មិនអាច Update បានទេ",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const fmt = (v) => (v ? new Date(v).toLocaleString() : "");
+  const menuItem =
+    "flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm font-semibold rounded-lg hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent";
+  const selfNote = isSelf ? "មិនអាចធ្វើលើគណនីខ្លួនឯង" : undefined;
+
+  return (
+    <div className="max-w-5xl mx-auto p-4 lg:p-6">
+      <Link
+        to="/users"
+        className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-500 hover:text-blue-700"
+      >
+        <Icons.ArrowLeft size={16} /> Back to Users
+      </Link>
+
+      {/* Header */}
+      <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-5 flex flex-wrap items-center justify-between gap-4 shadow-sm">
+        <div className="flex items-center gap-4 min-w-0">
+          <div className="w-14 h-14 shrink-0 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 text-white grid place-items-center text-xl font-bold">
+            {String(row.name || "?")
+              .trim()
+              .charAt(0)
+              .toUpperCase()}
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-2xl font-bold text-slate-900 truncate">
+                {row.name}
+              </h1>
+              <StatusBadge label={row.status || "Active"} />
+            </div>
+            <div className="mt-1 text-sm text-slate-500 flex items-center gap-x-3 gap-y-1 flex-wrap">
+              <span className="font-semibold text-slate-700">{row.role}</span>
+              <span>{row.email}</span>
+              {row.warehouse_code && <span>· {row.warehouse_code}</span>}
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {canEdit && dirty && (
+            <button
+              type="button"
+              onClick={() =>
+                setForm({
+                  name: row.name || "",
+                  department: row.department || "",
+                  warehouse_code: row.warehouse_code || "",
+                  role: row.role || "",
+                })
+              }
+              className="h-10 px-4 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+          )}
+          {canEdit && (
+            <button
+              type="button"
+              onClick={save}
+              disabled={!dirty || saving}
+              className="h-10 px-5 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed"
+            >
+              {saving ? "Updating…" : "Update"}
+            </button>
+          )}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setMenuOpen((v) => !v)}
+              className="h-10 px-4 rounded-xl bg-orange-500 text-white text-sm font-bold hover:bg-orange-600 inline-flex items-center gap-1.5"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+            >
+              Action <Icons.ChevronDown size={16} />
+            </button>
+            {menuOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-30"
+                  onClick={() => setMenuOpen(false)}
+                />
+                <div
+                  role="menu"
+                  className="absolute right-0 top-12 z-40 w-60 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl"
+                >
+                  {canEdit && (
+                    <button
+                      role="menuitem"
+                      className={`${menuItem} text-slate-700`}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        nameRef.current?.focus();
+                        nameRef.current?.select();
+                      }}
+                    >
+                      <Icons.Pencil size={16} /> Edit
+                    </button>
+                  )}
+                  {isSuper && (
+                    <button
+                      role="menuitem"
+                      disabled={isSelf || !row.email}
+                      title={selfNote}
+                      className={`${menuItem} text-slate-700`}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setResetOpen(true);
+                      }}
+                    >
+                      <Icons.KeyRound size={16} /> Reset Password
+                    </button>
+                  )}
+                  {isSuper && (
+                    <button
+                      role="menuitem"
+                      disabled={isSelf}
+                      title={selfNote}
+                      className={`${menuItem} ${disabled ? "text-emerald-700" : "text-amber-700"}`}
+                      onClick={async () => {
+                        setMenuOpen(false);
+                        if (await setStaffDisabled(row, updateRow)) load();
+                      }}
+                    >
+                      {disabled ? (
+                        <Icons.UserCheck size={16} />
+                      ) : (
+                        <Icons.UserX size={16} />
+                      )}
+                      {disabled ? "Enable account" : "Disable account"}
+                    </button>
+                  )}
+                  {canDelete && (
+                    <>
+                      <div className="my-1 border-t border-slate-100" />
+                      <button
+                        role="menuitem"
+                        disabled={isSelf}
+                        title={selfNote}
+                        className={`${menuItem} text-red-600`}
+                        onClick={() => {
+                          setMenuOpen(false);
+                          setDeleteOpen(true);
+                        }}
+                      >
+                        <Icons.Trash2 size={16} /> Delete user
+                      </button>
+                    </>
+                  )}
+                  {isSelf && (
+                    <div className="px-3 pt-1.5 pb-1 text-[11px] text-slate-400">
+                      នេះជាគណនីរបស់អ្នក — Reset / Disable / Delete
+                      មិនអាចប្រើបានទេ (ប្រើ Profile → Change Password)
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {disabled && (
+        <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          គណនីនេះត្រូវបានបិទ — Staff មិនអាចចូលប្រើប្រព័ន្ធបានទេ រហូតដល់ Enable
+          វិញ។
+        </div>
+      )}
+
+      {/* General */}
+      <div className="mt-4 rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="px-6 pt-4 border-b border-slate-200">
+          <span className="inline-block pb-3 text-sm font-bold text-blue-700 border-b-2 border-blue-600">
+            General
+          </span>
+        </div>
+        <div className="p-6 space-y-7">
+          <section>
+            <h2 className="text-sm font-bold text-slate-900 mb-4">
+              General Information
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <label className="block">
+                <div className="text-xs font-semibold text-slate-500 mb-1.5">
+                  Name
+                </div>
+                <input
+                  ref={nameRef}
+                  value={form.name}
+                  disabled={!canEdit}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  className={STAFF_INPUT}
+                />
+              </label>
+              <label className="block">
+                <div className="text-xs font-semibold text-slate-500 mb-1.5">
+                  Department
+                </div>
+                <select
+                  value={form.department}
+                  disabled={!canEdit}
+                  onChange={(e) =>
+                    setForm({ ...form, department: e.target.value })
+                  }
+                  className={STAFF_INPUT}
+                >
+                  <option value="">— None —</option>
+                  {deptOptions.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <div className="text-xs font-semibold text-slate-500 mb-1.5">
+                  Warehouse
+                </div>
+                <select
+                  value={form.warehouse_code}
+                  disabled={!canEdit}
+                  onChange={(e) =>
+                    setForm({ ...form, warehouse_code: e.target.value })
+                  }
+                  className={STAFF_INPUT}
+                >
+                  <option value="">— None —</option>
+                  {whOptions.map((w) => (
+                    <option key={w.code} value={w.code}>
+                      {w.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </section>
+          <section className="pt-6 border-t border-slate-100">
+            <h2 className="text-sm font-bold text-slate-900 mb-4">
+              Account &amp; Access
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <StaffField label="Login Account (Email)">{row.email}</StaffField>
+              <label className="block">
+                <div className="text-xs font-semibold text-slate-500 mb-1.5">
+                  Role
+                </div>
+                <select
+                  value={form.role}
+                  disabled={!canEdit}
+                  onChange={(e) => setForm({ ...form, role: e.target.value })}
+                  className={STAFF_INPUT}
+                >
+                  {roleOptions.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <StaffField label="Account Status">
+                <StatusBadge label={row.status || "Active"} />
+              </StaffField>
+              {row.created_at && (
+                <StaffField label="Created">{fmt(row.created_at)}</StaffField>
+              )}
+            </div>
+          </section>
+        </div>
+      </div>
+
+      {resetOpen && (
+        <StaffResetPasswordModal
+          row={row}
+          onClose={() => setResetOpen(false)}
+        />
+      )}
+      {deleteOpen && (
+        <RowDeleteModal
+          label={row.name}
+          onConfirm={async (reason) => {
+            if (!canDelete) throw new Error(NO_PERM_MSG);
+            const res = await deleteRow(row, reason);
+            emitCBToast("ok", "Deleted", `${row.name} was deleted.`);
+            navigate("/users");
+            return res;
+          }}
+          onClose={() => setDeleteOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 function CustomerDetailPage() {
   const { code } = useParams();
   const navigate = useNavigate();
@@ -58200,6 +58614,7 @@ function AdminApp() {
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/reports" element={<ReportsHubPage />} />
               <Route path="/customers/:code" element={<CustomerDetailPage />} />
+              <Route path="/users/:id" element={<StaffDetailPage />} />
               <Route
                 path="/deleted-accounts"
                 element={<DeletedAccountsPage />}
