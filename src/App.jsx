@@ -32473,19 +32473,44 @@ const CustomerApp = (() => {
     );
   }
 
+  // ---------- Colourful icon tile (shared by Profile + Settings) ----------
+  // Rounded gradient square with a white glyph — the "app account" look.
+  const TILE_TONES = {
+    blue: "from-sky-400 to-blue-600",
+    amber: "from-amber-300 to-orange-500",
+    rose: "from-rose-400 to-red-600",
+    violet: "from-violet-400 to-purple-600",
+    green: "from-emerald-400 to-green-600",
+    teal: "from-cyan-400 to-teal-600",
+    slate: "from-slate-400 to-slate-600",
+  };
+  const IconTile = ({ i: I, tone = "blue" }) => (
+    <span
+      className={`w-10 h-10 rounded-xl grid place-items-center shrink-0 text-white bg-gradient-to-br shadow-sm ${TILE_TONES[tone] || TILE_TONES.blue}`}
+    >
+      <I size={20} strokeWidth={2.2} />
+    </span>
+  );
+
+  // One tappable row: [tile] label ........ value  >
+  const MenuRow = ({ icon, tone, label, value, onClick }) => (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full flex items-center gap-3 px-4 py-3 text-[15px] font-medium active:bg-slate-50"
+    >
+      <IconTile i={icon} tone={tone} />
+      <span className="flex-1 text-left">{label}</span>
+      {value && <span className="text-slate-400 text-[13px]">{value}</span>}
+      <ChevronRight size={16} className="text-slate-300" />
+    </button>
+  );
+
   // ---------- Profile ----------
+  // Account overview only. Language / Appearance / Change Password / Log Out
+  // live on the Settings page (gear icon, top right).
   function Profile() {
-    const {
-      me,
-      addrs,
-      logout,
-      tr,
-      lang,
-      theme,
-      say,
-      uploadAvatar,
-      removeAvatar,
-    } = useApp();
+    const { me, addrs, tr, say, uploadAvatar, removeAvatar } = useApp();
     const fileRef = useRef(null);
     const [editOpen, setEditOpen] = useState(false);
     const [photoOpen, setPhotoOpen] = useState(false);
@@ -32508,8 +32533,6 @@ const CustomerApp = (() => {
       if (msg) say(msg);
     };
     const nav = useNavigate();
-    const [langOpen, setLangOpen] = useState(false);
-    const [themeOpen, setThemeOpen] = useState(false);
     const def = addrs.find((a) => a.def);
     const feat = useCustomerFeatures();
     const loyalty = useLoyalty();
@@ -32526,14 +32549,23 @@ const CustomerApp = (() => {
         me.customer_role || DEFAULT_CUSTOMER_ROLE,
       ],
     ];
+    // [icon, tone, label, onClick]
     const links = [
       ...(feat("wallet")
-        ? [[Wallet, tr("My Wallet", "កាបូបរបស់ខ្ញុំ"), () => nav(P("/wallet"))]]
+        ? [
+            [
+              Wallet,
+              "blue",
+              tr("My Wallet", "កាបូបរបស់ខ្ញុំ"),
+              () => nav(P("/wallet")),
+            ],
+          ]
         : []),
       ...(loyalty.on
         ? [
             [
               Gift,
+              "amber",
               tr("My Points & Rewards", "ពិន្ទុ និងរង្វាន់របស់ខ្ញុំ"),
               () => nav(P("/points")),
             ],
@@ -32543,30 +32575,43 @@ const CustomerApp = (() => {
         ? [
             [
               Warehouse,
+              "rose",
               tr("My China Warehouse", "ឃ្លាំងចិនរបស់ខ្ញុំ"),
               () => nav(P("/warehouse")),
             ],
           ]
         : []),
-      ...(feat("profile_password")
+    ];
+    const support = [
+      ...(feat("profile_notif_settings") && feat("notifications")
         ? [
             [
-              Lock,
-              tr("Change Password", "ប្តូរលេខសម្ងាត់"),
-              () => nav(P("/change-password")),
+              Bell,
+              "violet",
+              tr("Notifications", "ការជូនដំណឹង"),
+              () => nav(P("/notifications")),
             ],
           ]
         : []),
-      ...(feat("profile_notif_settings")
-        ? [[Bell, tr("Notification Settings", "ការកំណត់ការជូនដំណឹង")]]
-        : []),
       ...(feat("profile_help")
-        ? [[HelpCircle, tr("Help & Support", "ជំនួយ និងការគាំទ្រ")]]
+        ? [[HelpCircle, "teal", tr("Help & Support", "ជំនួយ និងការគាំទ្រ")]]
         : []),
     ];
     return (
       <>
-        <Top title={tr("Profile", "គណនី")} />
+        <Top
+          title={tr("Profile", "គណនី")}
+          right={
+            <button
+              type="button"
+              onClick={() => nav(P("/profile/settings"))}
+              aria-label={tr("Settings", "ការកំណត់")}
+              className="w-11 h-11 grid place-items-center rounded-full bg-white/15 active:bg-white/30 transition-colors"
+            >
+              <Icons.Settings size={20} />
+            </button>
+          }
+        />
         <div className="px-4 pt-5 space-y-4">
           <div className="text-center">
             <input
@@ -32576,7 +32621,7 @@ const CustomerApp = (() => {
               className="hidden"
               onChange={onPick}
             />
-            <div className="relative w-20 h-20 mx-auto">
+            <div className="relative w-24 h-24 mx-auto">
               <button
                 type="button"
                 disabled={avatarBusy}
@@ -32584,7 +32629,7 @@ const CustomerApp = (() => {
                   me.avatar_url ? setPhotoOpen(true) : fileRef.current?.click()
                 }
                 aria-label={tr("Change photo", "ប្តូររូបភាព")}
-                className="relative w-20 h-20 rounded-full overflow-hidden bg-blue-600 text-white text-3xl font-bold grid place-items-center disabled:opacity-60"
+                className="relative w-24 h-24 rounded-full overflow-hidden bg-blue-600 text-white text-4xl font-bold grid place-items-center ring-4 ring-white shadow-[0_6px_20px_-6px_rgba(15,40,90,.35)] disabled:opacity-60"
               >
                 {me.avatar_url && !imgBroken ? (
                   <img
@@ -32597,11 +32642,11 @@ const CustomerApp = (() => {
                   me.name?.[0] || "?"
                 )}
               </button>
-              <span className="absolute -bottom-0.5 -right-0.5 w-7 h-7 rounded-full bg-white border border-slate-200 shadow grid place-items-center text-blue-600 pointer-events-none">
+              <span className="absolute bottom-0 right-0 w-8 h-8 rounded-full bg-white border border-slate-200 shadow grid place-items-center text-blue-600 pointer-events-none">
                 {avatarBusy ? (
                   <AuthSpinner size={14} />
                 ) : (
-                  <Icons.Camera size={14} />
+                  <Icons.Camera size={15} />
                 )}
               </span>
             </div>
@@ -32613,8 +32658,8 @@ const CustomerApp = (() => {
                 onClose={() => setPhotoOpen(false)}
               />
             )}
-            <p className="font-bold text-lg mt-2">{me.name}</p>
-            <p className="text-xs text-slate-500">
+            <p className="font-bold text-xl mt-3">{me.name}</p>
+            <p className="text-xs text-slate-500 mt-0.5">
               {tr("Customer ID", "លេខសម្គាល់អតិថិជន")}:{" "}
               {me.customer_code || "—"}
             </p>
@@ -32635,59 +32680,92 @@ const CustomerApp = (() => {
               </div>
             ))}
           </Card>
-          <Card className="divide-y divide-slate-100">
-            {links.map(([I, l, fn]) => (
-              <button
-                key={l}
-                onClick={fn}
-                className="w-full flex items-center gap-3 px-4 py-3.5 text-sm font-medium"
-              >
-                <I size={18} className="text-blue-600" />
-                <span className="flex-1 text-left">{l}</span>
-                <ChevronRight size={16} className="text-slate-300" />
-              </button>
-            ))}
-          </Card>
-          <Card className="divide-y divide-slate-100">
-            <button
-              type="button"
+          {links.length > 0 && (
+            <Card className="divide-y divide-slate-100 overflow-hidden">
+              {links.map(([I, tone, l, fn]) => (
+                <MenuRow key={l} icon={I} tone={tone} label={l} onClick={fn} />
+              ))}
+            </Card>
+          )}
+          {support.length > 0 && (
+            <>
+              <p className="px-1 pt-1 text-[13px] font-semibold text-slate-500">
+                {tr("Support", "ជំនួយ")}
+              </p>
+              <Card className="divide-y divide-slate-100 overflow-hidden">
+                {support.map(([I, tone, l, fn]) => (
+                  <MenuRow
+                    key={l}
+                    icon={I}
+                    tone={tone}
+                    label={l}
+                    onClick={fn}
+                  />
+                ))}
+              </Card>
+            </>
+          )}
+        </div>
+      </>
+    );
+  }
+
+  // ---------- Settings (Language · Appearance · Security · Log Out) ----------
+  function CustomerSettings() {
+    const { logout, tr, lang, theme } = useApp();
+    const nav = useNavigate();
+    const feat = useCustomerFeatures();
+    const [langOpen, setLangOpen] = useState(false);
+    const [themeOpen, setThemeOpen] = useState(false);
+    return (
+      <>
+        <Top title={tr("Settings", "ការកំណត់")} back />
+        <div className="px-4 pt-5 space-y-4">
+          <Card className="divide-y divide-slate-100 overflow-hidden">
+            <MenuRow
+              icon={Icons.Languages}
+              tone="rose"
+              label={tr("Language", "ភាសា")}
+              value={lang === "km" ? "ភាសាខ្មែរ" : "English"}
               onClick={() => setLangOpen(true)}
-              className="w-full flex items-center gap-3 px-4 py-3.5 text-sm font-medium"
-            >
-              <span className="w-[18px] text-center text-base">
-                {lang === "km" ? "🇰🇭" : "🇬🇧"}
-              </span>
-              <span className="flex-1 text-left">{tr("Language", "ភាសា")}</span>
-              <span className="text-slate-400 text-[13px]">
-                {lang === "km" ? "ភាសាខ្មែរ" : "English"}
-              </span>
-              <ChevronRight size={16} className="text-slate-300" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setThemeOpen(true)}
-              className="w-full flex items-center gap-3 px-4 py-3.5 text-sm font-medium"
-            >
-              <Icons.Palette size={18} className="text-blue-600" />
-              <span className="flex-1 text-left">
-                {tr("Appearance", "រូបរាង")}
-              </span>
-              <span className="text-slate-400 text-[13px]">
-                {theme === "dark"
+            />
+            <MenuRow
+              icon={Icons.Palette}
+              tone="violet"
+              label={tr("Appearance", "រូបរាង")}
+              value={
+                theme === "dark"
                   ? tr("Dark", "ងងឹត")
                   : theme === "system"
                     ? tr("Device", "តាមឧបករណ៍")
-                    : tr("Light", "ភ្លឺ")}
-              </span>
-              <ChevronRight size={16} className="text-slate-300" />
-            </button>
+                    : tr("Light", "ភ្លឺ")
+              }
+              onClick={() => setThemeOpen(true)}
+            />
           </Card>
+          {feat("profile_password") && (
+            <>
+              <p className="px-1 pt-1 text-[13px] font-semibold text-slate-500">
+                {tr("Security", "សុវត្ថិភាព")}
+              </p>
+              <Card className="divide-y divide-slate-100 overflow-hidden">
+                <MenuRow
+                  icon={Icons.KeyRound}
+                  tone="green"
+                  label={tr("Change Password", "ប្តូរលេខសម្ងាត់")}
+                  onClick={() => nav(P("/change-password"))}
+                />
+              </Card>
+            </>
+          )}
           {langOpen && <LangSheet onClose={() => setLangOpen(false)} />}
           {themeOpen && <ThemeSheet onClose={() => setThemeOpen(false)} />}
-          <Btn danger onClick={logout}>
-            <LogOut size={18} />
-            {tr("Log Out", "ចាកចេញ")}
-          </Btn>
+          <div className="pt-2">
+            <Btn danger onClick={logout}>
+              <LogOut size={18} />
+              {tr("Log Out", "ចាកចេញ")}
+            </Btn>
+          </div>
         </div>
       </>
     );
@@ -33876,6 +33954,7 @@ const CustomerApp = (() => {
             />
             <Route path="change-password" element={<ChangePassword />} />
             <Route path="profile" element={<Profile />} />
+            <Route path="profile/settings" element={<CustomerSettings />} />
           </Route>
           <Route path="*" element={<Navigate to={P()} replace />} />
         </Routes>
