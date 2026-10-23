@@ -16595,20 +16595,38 @@ async function hydrateProfile(authUser) {
   // on their very first login — then stamp auth_user_id onto that row.
   // department / warehouse_code are new columns — fall back to the old
   // select if the migration has not been run yet so nobody gets locked out.
-  const staffFilter = `auth_user_id.eq.${authUser.id},email.eq.${authUser.email}`;
+  // Email match is case-insensitive (ilike, with LIKE wildcards escaped) so a
+  // staff row saved as "Name@Mail.com" still matches the auth email.
+  const safeEmail = String(authUser.email || "")
+    .trim()
+    .replace(/[\\%_,()]/g, (c) =>
+      c === "," || c === "(" || c === ")" ? "" : "\\" + c,
+    );
+  const staffFilter = `auth_user_id.eq.${authUser.id},email.ilike.${safeEmail}`;
   let { data: staffRow, error: staffErr } = await supabase
     .from("users")
     .select(
       "id, auth_user_id, name, role, email, status, department, warehouse_code, avatar_url",
     )
     .or(staffFilter)
+    .limit(1)
     .maybeSingle();
+  let staffLookupError = staffErr ? staffErr.message : null;
   if (staffErr) {
-    ({ data: staffRow } = await supabase
+    const retry = await supabase
       .from("users")
       .select("id, auth_user_id, name, role, email, status")
       .or(staffFilter)
-      .maybeSingle());
+      .limit(1)
+      .maybeSingle();
+    staffRow = retry.data;
+    staffLookupError = retry.error ? retry.error.message : null;
+  }
+  if (!staffRow) {
+    // eslint-disable-next-line no-console
+    console.warn("[auth] no staff row for", authUser.email, authUser.id, {
+      error: staffLookupError,
+    });
   }
 
   if (staffRow) {
@@ -16655,6 +16673,7 @@ async function hydrateProfile(authUser) {
     defaultWarehouse: data?.warehouse || null,
     role: "Customer",
     isStaff: false,
+    staffLookupError,
     allowedPaths: [], // customers have NO admin paths (admin routes are staff-only)
   };
 }
@@ -16967,7 +16986,7 @@ function AuthTransition({ phase = "loading", icon: Icon, title, subtitle }) {
 const authWait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function Login() {
-  const { user, login, isMock } = useAuth();
+  const { user, login, logout, isMock } = useAuth();
   const { t } = useAdminPrefs();
   const systemSettings = useSystemSettings();
   const loginCompany =
@@ -16985,8 +17004,21 @@ function Login() {
 
   // While the sign-in animation is playing we stay on this page; once it
   // finishes (transition → null) this redirect fires.
-  if (user && !transition) {
-    if (user.isStaff !== true) return <Navigate to="/customer" replace />;
+  // A customer session shares the same browser storage as admin. Instead of
+  // bouncing it to /customer forever (which locked admins out), sign it out
+  // here so the admin can log in with their own account.
+  const strayCustomer = !!user && user.isStaff !== true;
+  useEffect(() => {
+    if (strayCustomer && !transition) {
+      const why = user?.staffLookupError
+        ? ` (database error: ${user.staffLookupError})`
+        : ` No staff record matches "${user?.email}" in the users table.`;
+      logout();
+      setError("This account is not a staff account." + why);
+    }
+  }, [strayCustomer, transition]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (user && user.isStaff === true && !transition) {
     const from = location.state?.from?.pathname || "/";
     return <Navigate to={from} replace />;
   }
@@ -55608,6 +55640,17 @@ async function loyaltyCustomerMap(ids) {
   return out;
 }
 
+const LOYALTY_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// created_by can be a staff name, "System — ...", or the customer's auth uid
+const loyaltyBy = (l, c) => {
+  const by = String(l.created_by || "");
+  if (!by) return "—";
+  if (LOYALTY_UUID_RE.test(by)) return c ? `Customer — ${c.name}` : "Customer";
+  return by;
+};
+
 function LoyaltyCustomerCell({ c }) {
   if (!c) return <span className="text-slate-400">—</span>;
   return (
@@ -56837,7 +56880,7 @@ function LoyaltyPage() {
                       {l.note || "—"}
                     </td>
                     <td className="px-4 py-3 text-slate-500">
-                      {l.created_by || "—"}
+                      {loyaltyBy(l, cmap[String(l.customer_id)])}
                     </td>
                   </tr>
                 ))}
