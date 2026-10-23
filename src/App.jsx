@@ -145,8 +145,8 @@ const DESIGN_TOKENS_CSS = `
   /* sidebar */
   --cbx-side-w:264px; --cbx-side-w-collapsed:76px;
   --cbx-side-bg:#FFFFFF; --cbx-side-border:#E2E8F0;
-  --cbx-side-title:#172B4D; --cbx-side-sub:#64748B; --cbx-side-group:#94A3B8;
-  --cbx-side-text:#475569; --cbx-side-hover-bg:#F1F5F9; --cbx-side-hover-text:#172B4D;
+  --cbx-side-title:#172B4D; --cbx-side-sub:#64748B; --cbx-side-group:#8F95AB;
+  --cbx-side-text:#2A2D45; --cbx-side-hover-bg:#F1F5F9; --cbx-side-hover-text:#172B4D;
   --cbx-side-active-bg:#EFF6FF; --cbx-side-active-text:#1D4ED8; --cbx-side-bar:#2563EB;
   --cbx-tip-bg:#172B4D; --cbx-tip-text:#FFFFFF;
   --cbx-hover:#F1F5F9; --cbx-border-strong:#CBD5E1;
@@ -159,8 +159,8 @@ html.cb-admin-dark{
   --cbx-blue-soft:rgba(96,165,250,.14); --cbx-page:#0b1120; --cbx-card:#151c2c;
   --cbx-text:#e2e8f0; --cbx-muted:#94a3b8; --cbx-border:#263043;
   --cbx-side-bg:#0f1626; --cbx-side-border:#1e2638;
-  --cbx-side-title:#f1f5f9; --cbx-side-sub:#94a3b8; --cbx-side-group:#64728b;
-  --cbx-side-text:#a9b6c9; --cbx-side-hover-bg:#1b2436; --cbx-side-hover-text:#f1f5f9;
+  --cbx-side-title:#f1f5f9; --cbx-side-sub:#94a3b8; --cbx-side-group:#7c89a3;
+  --cbx-side-text:#d3dcea; --cbx-side-hover-bg:#1b2436; --cbx-side-hover-text:#f1f5f9;
   --cbx-side-active-bg:rgba(96,165,250,.16); --cbx-side-active-text:#93c5fd; --cbx-side-bar:#60a5fa;
   --cbx-tip-bg:#e2e8f0; --cbx-tip-text:#0b1120;
   --cbx-hover:#1b2436; --cbx-border-strong:#3a4763;
@@ -179,14 +179,14 @@ html.cb-admin-dark{
 .cbx-side-title{ color:var(--cbx-side-title); }
 .cbx-side-sub{ color:var(--cbx-side-sub); }
 .cbx-side-group{
-  color:var(--cbx-side-group); font-size:11px; font-weight:600;
-  letter-spacing:.06em; text-transform:uppercase;
+  color:var(--cbx-side-group); font-size:12.5px; font-weight:500;
+  letter-spacing:0; text-transform:none;
 }
 .cbx-side-rule{ display:none; height:1px; margin:6px 12px; background:var(--cbx-side-border); }
 .cbx-nav-link{
-  position:relative; display:flex; align-items:center; gap:10px;
-  padding:9px 12px; border-radius:var(--cbx-radius-sm);
-  font-size:13.5px; line-height:1.25; color:var(--cbx-side-text);
+  position:relative; display:flex; align-items:center; gap:12px;
+  padding:10px 12px; border-radius:10px;
+  font-size:14px; font-weight:600; line-height:1.25; color:var(--cbx-side-text);
   transition:background-color .12s ease, color .12s ease;
 }
 .cbx-nav-link:hover{ background:var(--cbx-side-hover-bg); color:var(--cbx-side-hover-text); }
@@ -194,10 +194,7 @@ html.cb-admin-dark{
 .cbx-nav-link.is-active{
   background:var(--cbx-side-active-bg); color:var(--cbx-side-active-text); font-weight:600;
 }
-.cbx-nav-link.is-active::before{
-  content:""; position:absolute; left:-12px; top:8px; bottom:8px; width:3px;
-  border-radius:0 3px 3px 0; background:var(--cbx-side-bar);
-}
+.cbx-nav-link.is-active::before{ display:none; }
 .cbx-collapse-btn{
   display:none; width:28px; height:28px; border-radius:8px; flex-shrink:0;
   align-items:center; justify-content:center; color:var(--cbx-side-sub);
@@ -1103,7 +1100,10 @@ const NAV_SECTIONS = [
   },
   {
     label: "Finance",
-    items: [{ label: "Wallet Top Up", icon: "Wallet", path: "/wallet-top-up" }],
+    items: [
+      { label: "Wallet Top Up", icon: "Wallet", path: "/wallet-top-up" },
+      { label: "Loyalty Points", icon: "Gift", path: "/loyalty" },
+    ],
   },
   {
     label: "Reports",
@@ -1304,6 +1304,11 @@ const PERMISSION_GROUPS = [
       ["audit.view", "View Audit Logs"],
       ["report.view", "View Reports"],
       ["payment.manage", "Top Up Wallet & Record Shipping Payments"],
+      ["points.view", "View Customer Points, Rewards & Redemptions"],
+      [
+        "points.manage",
+        "Manage Points Settings, Rewards, Redemptions & Adjustments",
+      ],
     ],
   },
   {
@@ -1356,6 +1361,7 @@ const PATH_VIEW = {
   "/warehouse-operations": "warehouse_ops.view",
   "/exceptions": "exception.view",
   "/wallet-top-up": "payment.manage",
+  "/loyalty": "points.view",
   "/users": "user.view",
   "/roles": "role.view",
   "/customer-features": "role.view",
@@ -8486,6 +8492,24 @@ const SCAN_CSS = `
 }
 .cb-scan--error .cb-ico-err { opacity: 1; transform: none; }
 
+/* the app-wide "input { min-height: 42px }" must not inflate scan boxes */
+.cb-app .cb-scan input,
+.cb-modal-backdrop .cb-scan input {
+  min-height: 0 !important;
+  height: 100%;
+  padding: 0 !important;
+  line-height: 1.2;
+}
+/* dotted-ring spinner shown while a scan is being checked */
+.cb-scan .cb-ico-spin { color: #f4695c; }
+.cb-scan--idle .cb-ico-scan { opacity: .55; }
+.cb-scan--scanning .cb-ico-scan { opacity: 0; transform: scale(.6); animation: none; }
+.cb-scan--scanning .cb-ico-spin {
+  opacity: 1; transform: none;
+  animation: cb-scan-spin .9s linear infinite;
+}
+@keyframes cb-scan-spin { to { transform: rotate(360deg); } }
+
 .cb-scan-msg { animation: cb-scan-msg .2s ease-out both; }
 .cb-scan-row-in {
   animation: cb-scan-row-in .3s cubic-bezier(.2,.8,.2,1) both,
@@ -8510,6 +8534,52 @@ const SCAN_CSS = `
   .cb-scan, .cb-scan *, .cb-scan-msg, .cb-scan-row-in { animation: none !important; transition: none !important; }
 }
 `;
+
+// Leading icon of every scan input: focus brackets (idle) -> rotating dotted
+// ring (scanning) -> check (success) / alert (error). Driven by .cb-scan--<phase>.
+function ScanIconStack() {
+  const IdleIc = Icons.Focus || Icons.ScanLine;
+  return (
+    <span className="cb-scan__icon" aria-hidden="true">
+      <IdleIc className="cb-ico-scan" size={18} />
+      <svg
+        className="cb-ico-spin"
+        viewBox="0 0 24 24"
+        width="18"
+        height="18"
+        fill="currentColor"
+      >
+        {Array.from({ length: 8 }).map((_, i) => {
+          const a = (i / 8) * 2 * Math.PI;
+          return (
+            <circle
+              key={i}
+              cx={12 + 8.8 * Math.sin(a)}
+              cy={12 - 8.8 * Math.cos(a)}
+              r={2.7 - i * 0.2}
+              opacity={1 - i * 0.11}
+            />
+          );
+        })}
+      </svg>
+      <svg
+        className="cb-ico-check"
+        viewBox="0 0 24 24"
+        width="18"
+        height="18"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <circle cx="12" cy="12" r="9.5" strokeOpacity=".35" />
+        <path d="M7.5 12.5l3 3 6-6.5" pathLength="1" />
+      </svg>
+      <Icons.TriangleAlert className="cb-ico-err" size={18} />
+    </span>
+  );
+}
 
 // How long the green success state is held before going back to idle.
 const SCAN_SUCCESS_HOLD_MS = 1100;
@@ -8592,7 +8662,7 @@ const SCAN_PHASE_LABEL = {
 };
 
 function TkScanField({
-  label = "Scan Tracking Number",
+  label = "Scan Tracking Number Or QR Code",
   value,
   onChange,
   placeholder,
@@ -8621,39 +8691,13 @@ function TkScanField({
   return (
     <div className="space-y-1.5">
       <style>{SCAN_CSS}</style>
-      <div className="flex items-center justify-between">
-        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide">
-          {label}
-        </label>
-        <span
-          className={`text-[11px] font-medium transition-colors duration-200 ${tone} ${
-            phase === "idle" ? "opacity-50" : ""
-          }`}
-        >
-          {SCAN_PHASE_LABEL[phase]}
-        </span>
-      </div>
+      <label className="block text-sm font-semibold text-ink-900">
+        {label}
+      </label>
       <div
-        className={`cb-scan cb-scan--${phase} ${shake} ${tone} flex items-center gap-2.5 bg-white border border-mist-200 rounded-md px-3 py-2.5 focus-within:border-signal-blue`}
+        className={`cb-scan cb-scan--${phase} ${shake} ${tone} flex h-10 items-center gap-2.5 bg-white border border-mist-200 rounded-lg px-3 focus-within:border-signal-blue`}
       >
-        <span className="cb-scan__icon" aria-hidden="true">
-          <Icons.ScanLine className="cb-ico-scan" size={18} />
-          <svg
-            className="cb-ico-check"
-            viewBox="0 0 24 24"
-            width="18"
-            height="18"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <circle cx="12" cy="12" r="9.5" strokeOpacity=".35" />
-            <path d="M7.5 12.5l3 3 6-6.5" pathLength="1" />
-          </svg>
-          <Icons.TriangleAlert className="cb-ico-err" size={18} />
-        </span>
+        <ScanIconStack />
         <input
           ref={inputRef}
           autoFocus
@@ -11618,6 +11662,7 @@ const ADMIN_KM = {
   "Warehouse Operations": "ប្រតិបត្តិការឃ្លាំង",
   Finance: "ហិរញ្ញវត្ថុ",
   "Wallet Top Up": "បញ្ចូលកាបូប",
+  "Loyalty Points": "ពិន្ទុអតិថិជន",
   "Exceptions & Reports": "ករណីលើកលែង និងរបាយការណ៍",
   Reports: "របាយការណ៍",
   "Collapse sidebar": "បង្រួមម៉ឺនុយ",
@@ -11725,55 +11770,78 @@ html.cb-admin-dark input,html.cb-admin-dark textarea,html.cb-admin-dark select{c
 html.cb-admin-dark input::placeholder,html.cb-admin-dark textarea::placeholder{color:#64728b}
 html.cb-admin-dark .cb-sk{background-color:#1e2638;background-image:linear-gradient(100deg,rgba(255,255,255,0) 30%,rgba(255,255,255,.07) 50%,rgba(255,255,255,0) 70%)}
 /* surfaces */
-html.cb-admin-dark .bg-white,html.cb-admin-dark .hover\:bg-white:hover{background-color:#151c2c}
-html.cb-admin-dark .focus\:bg-white:focus,html.cb-admin-dark .bg-\[\#fbfcfe\]{background-color:#0f1626}
-html.cb-admin-dark .bg-mist-50,html.cb-admin-dark .bg-slate-50,html.cb-admin-dark .disabled\:bg-mist-50:disabled{background-color:#101827}
-html.cb-admin-dark .bg-mist-50\/70,html.cb-admin-dark .bg-mist-50\/60,html.cb-admin-dark .bg-mist-50\/50,html.cb-admin-dark .bg-slate-50\/70{background-color:rgba(16,24,39,.7)}
-html.cb-admin-dark .bg-mist-100,html.cb-admin-dark .bg-slate-100{background-color:#1b2436}
-html.cb-admin-dark .bg-mist-200,html.cb-admin-dark .bg-slate-200{background-color:#263043}
-html.cb-admin-dark .hover\:bg-mist-50:hover,html.cb-admin-dark .hover\:bg-slate-50:hover,html.cb-admin-dark .group:hover .group-hover\:bg-mist-50,html.cb-admin-dark .hover\:bg-mist-50\/70:hover,html.cb-admin-dark .hover\:bg-mist-50\/60:hover,html.cb-admin-dark .hover\:bg-slate-50\/60:hover,html.cb-admin-dark .hover\:bg-slate-50\/70:hover{background-color:#1b2436}
-html.cb-admin-dark .hover\:bg-mist-100:hover,html.cb-admin-dark .hover\:bg-slate-100:hover{background-color:#222c41}
-html.cb-admin-dark .bg-ink-900\/5{background-color:rgba(255,255,255,.05)}
+html.cb-admin-dark .bg-white,html.cb-admin-dark .hover\:bg-white:hover{background-color:#151c2c!important}
+html.cb-admin-dark .focus\:bg-white:focus,html.cb-admin-dark .bg-\[\#fbfcfe\]{background-color:#0f1626!important}
+html.cb-admin-dark .bg-mist-50,html.cb-admin-dark .bg-slate-50,html.cb-admin-dark .disabled\:bg-mist-50:disabled{background-color:#101827!important}
+html.cb-admin-dark .bg-mist-50\/70,html.cb-admin-dark .bg-mist-50\/60,html.cb-admin-dark .bg-mist-50\/50,html.cb-admin-dark .bg-slate-50\/70{background-color:rgba(16,24,39,.7)!important}
+html.cb-admin-dark .bg-mist-100,html.cb-admin-dark .bg-slate-100{background-color:#1b2436!important}
+html.cb-admin-dark .bg-mist-200,html.cb-admin-dark .bg-slate-200{background-color:#263043!important}
+html.cb-admin-dark .hover\:bg-mist-50:hover,html.cb-admin-dark .hover\:bg-slate-50:hover,html.cb-admin-dark .group:hover .group-hover\:bg-mist-50,html.cb-admin-dark .hover\:bg-mist-50\/70:hover,html.cb-admin-dark .hover\:bg-mist-50\/60:hover,html.cb-admin-dark .hover\:bg-slate-50\/60:hover,html.cb-admin-dark .hover\:bg-slate-50\/70:hover{background-color:#1b2436!important}
+html.cb-admin-dark .hover\:bg-mist-100:hover,html.cb-admin-dark .hover\:bg-slate-100:hover{background-color:#222c41!important}
+html.cb-admin-dark .bg-ink-900\/5{background-color:rgba(255,255,255,.05)!important}
 /* text */
-html.cb-admin-dark .text-ink-900,html.cb-admin-dark .text-slate-900{color:#f1f5f9}
-html.cb-admin-dark .text-ink-800,html.cb-admin-dark .text-slate-800{color:#e2e8f0}
-html.cb-admin-dark .text-ink-700,html.cb-admin-dark .text-slate-700{color:#cbd5e1}
-html.cb-admin-dark .text-ink-600,html.cb-admin-dark .text-slate-600{color:#a9b6c9}
-html.cb-admin-dark .text-slate-500,html.cb-admin-dark .text-ink-600\/70,html.cb-admin-dark .text-ink-600\/65,html.cb-admin-dark .text-ink-600\/60,html.cb-admin-dark .text-ink-600\/55{color:#94a3b8}
-html.cb-admin-dark .text-slate-400,html.cb-admin-dark .text-ink-600\/50,html.cb-admin-dark .text-ink-600\/45,html.cb-admin-dark .disabled\:text-ink-600\/60:disabled{color:#7385a0}
-html.cb-admin-dark .text-ink-600\/40,html.cb-admin-dark .text-ink-600\/35{color:#64728b}
-html.cb-admin-dark .text-ink-600\/30,html.cb-admin-dark .text-ink-600\/25,html.cb-admin-dark .text-ink-600\/20{color:#4b586e}
-html.cb-admin-dark .placeholder\:text-ink-600\/40::placeholder,html.cb-admin-dark .placeholder\:text-ink-600\/35::placeholder{color:#64728b}
-html.cb-admin-dark .hover\:text-ink-900:hover,html.cb-admin-dark .hover\:text-slate-900:hover{color:#fff}
-html.cb-admin-dark .hover\:text-ink-800:hover,html.cb-admin-dark .hover\:text-slate-700:hover{color:#e2e8f0}
+html.cb-admin-dark .text-ink-900,html.cb-admin-dark .text-slate-900{color:#f1f5f9!important}
+html.cb-admin-dark .text-ink-800,html.cb-admin-dark .text-slate-800{color:#e2e8f0!important}
+html.cb-admin-dark .text-ink-700,html.cb-admin-dark .text-slate-700{color:#cbd5e1!important}
+html.cb-admin-dark .text-ink-600,html.cb-admin-dark .text-slate-600{color:#a9b6c9!important}
+html.cb-admin-dark .text-slate-500,html.cb-admin-dark .text-ink-600\/70,html.cb-admin-dark .text-ink-600\/65,html.cb-admin-dark .text-ink-600\/60,html.cb-admin-dark .text-ink-600\/55{color:#94a3b8!important}
+html.cb-admin-dark .text-slate-400,html.cb-admin-dark .text-ink-600\/50,html.cb-admin-dark .text-ink-600\/45,html.cb-admin-dark .disabled\:text-ink-600\/60:disabled{color:#7385a0!important}
+html.cb-admin-dark .text-ink-600\/40,html.cb-admin-dark .text-ink-600\/35{color:#64728b!important}
+html.cb-admin-dark .text-ink-600\/30,html.cb-admin-dark .text-ink-600\/25,html.cb-admin-dark .text-ink-600\/20{color:#4b586e!important}
+html.cb-admin-dark .placeholder\:text-ink-600\/40::placeholder,html.cb-admin-dark .placeholder\:text-ink-600\/35::placeholder{color:#64728b!important}
+html.cb-admin-dark .hover\:text-ink-900:hover,html.cb-admin-dark .hover\:text-slate-900:hover{color:#fff!important}
+html.cb-admin-dark .hover\:text-ink-800:hover,html.cb-admin-dark .hover\:text-slate-700:hover{color:#e2e8f0!important}
 /* borders */
-html.cb-admin-dark .border-mist-200,html.cb-admin-dark .border-slate-200{border-color:#263043}
-html.cb-admin-dark .border-mist-100,html.cb-admin-dark .border-slate-100{border-color:#1e2638}
-html.cb-admin-dark .border-mist-300,html.cb-admin-dark .hover\:border-mist-300:hover{border-color:#334155}
-html.cb-admin-dark .divide-mist-100>:not([hidden])~:not([hidden]),html.cb-admin-dark .divide-slate-100>:not([hidden])~:not([hidden]){border-color:#1e2638}
-html.cb-admin-dark .divide-mist-200>:not([hidden])~:not([hidden]){border-color:#263043}
+html.cb-admin-dark .border-mist-200,html.cb-admin-dark .border-slate-200{border-color:#263043!important}
+html.cb-admin-dark .border-mist-100,html.cb-admin-dark .border-slate-100{border-color:#1e2638!important}
+html.cb-admin-dark .border-mist-300,html.cb-admin-dark .hover\:border-mist-300:hover{border-color:#334155!important}
+html.cb-admin-dark .divide-mist-100>:not([hidden])~:not([hidden]),html.cb-admin-dark .divide-slate-100>:not([hidden])~:not([hidden]){border-color:#1e2638!important}
+html.cb-admin-dark .divide-mist-200>:not([hidden])~:not([hidden]){border-color:#263043!important}
 /* tinted status colours */
-html.cb-admin-dark .bg-blue-50,html.cb-admin-dark .bg-blue-50\/60,html.cb-admin-dark .hover\:bg-blue-50:hover{background-color:rgba(37,99,235,.16)}
-html.cb-admin-dark .text-blue-600{color:#60a5fa}
-html.cb-admin-dark .text-blue-700{color:#93c5fd}
-html.cb-admin-dark .text-blue-800,html.cb-admin-dark .hover\:text-blue-700:hover{color:#bfdbfe}
-html.cb-admin-dark .border-blue-100{border-color:rgba(96,165,250,.25)}
-html.cb-admin-dark .border-blue-200,html.cb-admin-dark .hover\:border-blue-300:hover{border-color:rgba(96,165,250,.38)}
-html.cb-admin-dark .bg-amber-50,html.cb-admin-dark .bg-\[\#FFFBEB\]{background-color:rgba(245,158,11,.14)}
-html.cb-admin-dark .text-amber-600,html.cb-admin-dark .text-amber-700,html.cb-admin-dark .text-amber-800,html.cb-admin-dark .text-amber-900,html.cb-admin-dark .text-\[\#B87415\],html.cb-admin-dark .text-\[\#8A5A12\],html.cb-admin-dark .text-\[\#92400E\]{color:#fbbf24}
-html.cb-admin-dark .border-amber-200,html.cb-admin-dark .border-\[\#FDE68A\]{border-color:rgba(245,158,11,.35)}
-html.cb-admin-dark .bg-red-50,html.cb-admin-dark .hover\:bg-red-50:hover,html.cb-admin-dark .bg-\[\#FEF2F2\]{background-color:rgba(239,68,68,.14)}
-html.cb-admin-dark .text-red-600,html.cb-admin-dark .hover\:text-red-600:hover,html.cb-admin-dark .text-\[\#B91C1C\]{color:#f87171}
-html.cb-admin-dark .text-red-700,html.cb-admin-dark .text-red-800{color:#fca5a5}
-html.cb-admin-dark .border-red-200,html.cb-admin-dark .border-\[\#FECACA\]{border-color:rgba(248,113,113,.32)}
-html.cb-admin-dark .bg-emerald-50{background-color:rgba(16,185,129,.14)}
-html.cb-admin-dark .text-emerald-600,html.cb-admin-dark .text-emerald-700,html.cb-admin-dark .text-emerald-800,html.cb-admin-dark .text-emerald-700\/80{color:#34d399}
-html.cb-admin-dark .border-emerald-200{border-color:rgba(52,211,153,.32)}
-html.cb-admin-dark .text-violet-700{color:#a78bfa}
-html.cb-admin-dark .bg-violet-50{background-color:rgba(139,92,246,.16)}
-html.cb-admin-dark .bg-violet-500{background-color:#8b5cf6}
-html.cb-admin-dark .text-rose-600,html.cb-admin-dark .text-rose-800{color:#fb7185}
-html.cb-admin-dark .border-rose-200{border-color:rgba(251,113,133,.32)}
+html.cb-admin-dark .bg-blue-50,html.cb-admin-dark .bg-blue-50\/60,html.cb-admin-dark .hover\:bg-blue-50:hover{background-color:rgba(37,99,235,.16)!important}
+html.cb-admin-dark .text-blue-600{color:#60a5fa!important}
+html.cb-admin-dark .text-blue-700{color:#93c5fd!important}
+html.cb-admin-dark .text-blue-800,html.cb-admin-dark .hover\:text-blue-700:hover{color:#bfdbfe!important}
+html.cb-admin-dark .border-blue-100{border-color:rgba(96,165,250,.25)!important}
+html.cb-admin-dark .border-blue-200,html.cb-admin-dark .hover\:border-blue-300:hover{border-color:rgba(96,165,250,.38)!important}
+html.cb-admin-dark .bg-amber-50,html.cb-admin-dark .bg-\[\#FFFBEB\]{background-color:rgba(245,158,11,.14)!important}
+html.cb-admin-dark .text-amber-600,html.cb-admin-dark .text-amber-700,html.cb-admin-dark .text-amber-800,html.cb-admin-dark .text-amber-900,html.cb-admin-dark .text-\[\#B87415\],html.cb-admin-dark .text-\[\#8A5A12\],html.cb-admin-dark .text-\[\#92400E\]{color:#fbbf24!important}
+html.cb-admin-dark .border-amber-200,html.cb-admin-dark .border-\[\#FDE68A\]{border-color:rgba(245,158,11,.35)!important}
+html.cb-admin-dark .bg-red-50,html.cb-admin-dark .hover\:bg-red-50:hover,html.cb-admin-dark .bg-\[\#FEF2F2\]{background-color:rgba(239,68,68,.14)!important}
+html.cb-admin-dark .text-red-600,html.cb-admin-dark .hover\:text-red-600:hover,html.cb-admin-dark .text-\[\#B91C1C\]{color:#f87171!important}
+html.cb-admin-dark .text-red-700,html.cb-admin-dark .text-red-800{color:#fca5a5!important}
+html.cb-admin-dark .border-red-200,html.cb-admin-dark .border-\[\#FECACA\]{border-color:rgba(248,113,113,.32)!important}
+html.cb-admin-dark .bg-emerald-50{background-color:rgba(16,185,129,.14)!important}
+html.cb-admin-dark .text-emerald-600,html.cb-admin-dark .text-emerald-700,html.cb-admin-dark .text-emerald-800,html.cb-admin-dark .text-emerald-700\/80{color:#34d399!important}
+html.cb-admin-dark .border-emerald-200{border-color:rgba(52,211,153,.32)!important}
+html.cb-admin-dark .text-violet-700{color:#a78bfa!important}
+html.cb-admin-dark .bg-violet-50{background-color:rgba(139,92,246,.16)!important}
+html.cb-admin-dark .bg-violet-500{background-color:#8b5cf6!important}
+html.cb-admin-dark .text-rose-600,html.cb-admin-dark .text-rose-800{color:#fb7185!important}
+html.cb-admin-dark .border-rose-200{border-color:rgba(251,113,133,.32)!important}
+/* ---- Dark-mode contrast fixes ----
+   The app-wide fallback sheet declares [class~="text-ink-900"], [class~="bg-mist-50"],
+   [class~="border-mist-100"] ... with !important, which beat the remaps above and left
+   dark text on dark cards (Dashboard titles / KPI values) and white card borders.
+   The remaps above are now !important too (higher specificity wins); the rules below
+   cover the colour classes that had no dark remap at all. */
+html.cb-admin-dark .bg-mist-50\/40,html.cb-admin-dark .bg-mist-50\/95{background-color:rgba(16,24,39,.7)!important}
+html.cb-admin-dark .hover\:bg-mist-200:hover{background-color:#2a3550!important}
+html.cb-admin-dark [class~="text-signal-blue"],html.cb-admin-dark [class~="hover:text-signal-blue"]:hover{color:#60a5fa!important}
+html.cb-admin-dark [class~="text-signal-red"],html.cb-admin-dark [class~="hover:text-signal-red"]:hover{color:#f87171!important}
+html.cb-admin-dark [class~="text-signal-red/80"]{color:rgba(248,113,113,.85)!important}
+html.cb-admin-dark [class~="text-signal-teal"]{color:#2dd4bf!important}
+html.cb-admin-dark [class~="text-signal-teal/80"]{color:rgba(45,212,191,.85)!important}
+html.cb-admin-dark [class~="text-signal-amber"]{color:#fbbf24!important}
+html.cb-admin-dark [class~="stroke-mist-100"]{stroke:#263043!important}
+html.cb-admin-dark .bg-amber-50\/70{background-color:rgba(245,158,11,.14)!important}
+html.cb-admin-dark .bg-rose-50{background-color:rgba(244,63,94,.14)!important}
+html.cb-admin-dark .text-violet-600{color:#a78bfa!important}
+html.cb-admin-dark .text-slate-300{color:#4b586e!important}
+html.cb-admin-dark .ring-slate-200{--tw-ring-color:#263043!important}
+html.cb-admin-dark :is(.ring-blue-100,.ring-blue-200){--tw-ring-color:rgba(96,165,250,.32)!important}
+html.cb-admin-dark :is(.ring-emerald-100,.ring-amber-100,.ring-rose-100,.ring-violet-100){--tw-ring-color:rgba(148,163,184,.22)!important}
+
 /* login page */
 html.cb-admin-dark .cb-login-page{background-color:#0b1120}
 html.cb-admin-dark .cb-login-page .bg-white\/95,html.cb-admin-dark .cb-login-page .bg-white\/90{background-color:rgba(21,28,44,.92)}
@@ -12087,8 +12155,8 @@ function Sidebar({ open, onClose, collapsed = false, onToggleCollapse }) {
                       >
                         <Icon
                           name={item.icon}
-                          size={17}
-                          strokeWidth={2}
+                          size={20}
+                          strokeWidth={1.8}
                           className="shrink-0"
                         />
                         <span className="cbx-label truncate">{label}</span>
@@ -12752,6 +12820,23 @@ function useCurrentTitle() {
 
 function Layout() {
   const { pathname } = useLocation();
+  // Safety net: the shell must never be scrolled sideways (focus/scrollIntoView
+  // on an off-screen element can do it even with overflow hidden).
+  useEffect(() => {
+    const reset = (e) => {
+      const el = e.target;
+      if (
+        el &&
+        el.classList &&
+        el.classList.contains("cb-app") &&
+        el.scrollLeft !== 0
+      ) {
+        el.scrollLeft = 0;
+      }
+    };
+    document.addEventListener("scroll", reset, true);
+    return () => document.removeEventListener("scroll", reset, true);
+  }, []);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] =
     useState(readSidebarCollapsed);
@@ -12775,11 +12860,11 @@ function Layout() {
         collapsed={sidebarCollapsed}
         onToggleCollapse={toggleSidebarCollapsed}
       />
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 overflow-x-clip">
         <SlaNotificationSync />
         <SlaAirNotificationSync />
         <Topbar title={title} onMenuClick={() => setSidebarOpen(true)} />
-        <main className="flex-1 overflow-y-auto p-4 lg:p-6 xl:p-7">
+        <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden overscroll-x-none p-4 lg:p-6 xl:p-7">
           <div key={pathname} className="cb-page-enter">
             <Outlet />
           </div>
@@ -27612,6 +27697,13 @@ const CUSTOMER_FEATURES = [
     desc: "Order Payment card and Pay from Wallet action on a pending CN Purchase Order.",
   },
   {
+    group: "Wallet & Payment",
+    key: "points",
+    label: "Points & Rewards",
+    kh: "ពិន្ទុ និងរង្វាន់",
+    desc: "Points card on Home, Points page and the Profile link. Also hidden while Admin → Loyalty Points is switched OFF.",
+  },
+  {
     group: "Warehouse & Notifications",
     key: "warehouse",
     label: "My China Warehouse",
@@ -27898,6 +27990,7 @@ const CustomerApp = (() => {
     X,
     ShieldCheck,
     Wallet,
+    Gift,
   } = Icons;
   // =============================================================
   // Customer Portal — SEPARATE from Admin/Staff (Cargo Bridge)
@@ -28308,6 +28401,9 @@ const CustomerApp = (() => {
     const [branchErr, setBranchErr] = useState("");
     const [loading, setLoading] = useState(true);
     const [wallet, setWallet] = useState({ balance: 0, tx: [] });
+    // false until the wallet has been fetched once — the Wallet page shows a
+    // skeleton instead of a fake "$0.00" / empty list.
+    const [walletReady, setWalletReady] = useState(false);
     // Feature permissions follow the signed-in customer's role.
     useEffect(() => {
       setCurrentCustomerRole(me?.customer_role);
@@ -28435,7 +28531,11 @@ const CustomerApp = (() => {
     };
     const loadWallet = async () => {
       const { data, error } = await supabase.rpc("customer_wallet");
-      if (error || !data) return;
+      if (error || !data) {
+        setWalletReady(true);
+        return;
+      }
+      setWalletReady(true);
       setWallet({
         balance: Number(data.balance) || 0,
         // reversals are admin-only: never show them (or the top-ups they cancel)
@@ -29064,12 +29164,30 @@ const CustomerApp = (() => {
     // Pick up new statuses without a manual refresh (every minute).
     useEffect(() => {
       if (!supabase || !session) return undefined;
-      const t = setInterval(() => {
+      let last = Date.now();
+      const run = () => {
+        last = Date.now();
         loadShips();
         loadAirShips();
         loadCnOrders();
+        loadWallet();
+      };
+      const t = setInterval(() => {
+        if (!document.hidden) run();
       }, 60000);
-      return () => clearInterval(t);
+      // Returning to the app (switch tab / unlock phone) → refresh at once,
+      // but not more than once every 15 s.
+      const onVisible = () => {
+        if (document.visibilityState === "visible" && Date.now() - last > 15000)
+          run();
+      };
+      document.addEventListener("visibilitychange", onVisible);
+      window.addEventListener("focus", onVisible);
+      return () => {
+        clearInterval(t);
+        document.removeEventListener("visibilitychange", onVisible);
+        window.removeEventListener("focus", onVisible);
+      };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [session]);
     const unread = notifs.filter(
@@ -29110,6 +29228,7 @@ const CustomerApp = (() => {
       seenAt,
       markAllRead,
       wallet,
+      walletReady,
       refreshMoney,
       payShipping,
       payCnOrder,
@@ -29207,7 +29326,7 @@ const CustomerApp = (() => {
             onChange={(e) => set(e.target.value)}
             placeholder={ph}
             type={pw && !show ? "password" : type}
-            className="cb-field-input flex-1 min-w-0 h-full text-[15px] text-slate-900 placeholder:text-slate-400"
+            className="cb-field-input flex-1 min-w-0 h-full text-[16px] text-slate-900 placeholder:text-slate-400"
           />
           {pw && (
             <button
@@ -29215,7 +29334,7 @@ const CustomerApp = (() => {
               tabIndex={-1}
               onClick={() => setShow(!show)}
               aria-label={show ? "Hide password" : "Show password"}
-              className="shrink-0 text-slate-400 hover:text-slate-600 transition-colors"
+              className="shrink-0 -mr-2 grid h-11 w-11 place-items-center text-slate-400 hover:text-slate-600 active:text-slate-700 transition-colors"
             >
               {show ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
@@ -29240,11 +29359,15 @@ const CustomerApp = (() => {
   const Top = ({ title, back, right }) => {
     const nav = useNavigate();
     return (
-      <header className="bg-blue-600 text-white px-4 pt-5 pb-5 flex items-center gap-3 rounded-b-3xl">
+      <header
+        className="bg-blue-600 text-white px-4 pb-5 flex items-center gap-3 rounded-b-3xl"
+        style={{ paddingTop: "max(1.25rem, env(safe-area-inset-top))" }}
+      >
         {back && (
           <button
             onClick={() => nav(-1)}
-            className="w-9 h-9 grid place-items-center rounded-full bg-white/15"
+            aria-label="Back"
+            className="w-11 h-11 -ml-1 grid place-items-center rounded-full bg-white/15 active:bg-white/30 transition-colors"
           >
             <ArrowLeft size={20} />
           </button>
@@ -29830,7 +29953,14 @@ const CustomerApp = (() => {
       [P("/profile"), User, tr("Profile", "គណនី"), true],
     ].filter((t) => t[3]);
     return (
-      <div className="min-h-screen bg-slate-50 text-slate-900" style={FONT}>
+      <div
+        className="min-h-screen bg-slate-50 text-slate-900"
+        style={{
+          ...FONT,
+          touchAction: "manipulation",
+          WebkitTapHighlightColor: "transparent",
+        }}
+      >
         <div className="max-w-md mx-auto pb-24 relative">
           {supabase && customerFeatureStore.serverStatus === "error" && (
             <div
@@ -29883,7 +30013,7 @@ const CustomerApp = (() => {
                 to={to}
                 end={to === P()}
                 className={({ isActive }) =>
-                  `py-2.5 flex flex-col items-center gap-0.5 text-[11px] font-medium ${isActive ? "text-blue-600" : "text-slate-400"}`
+                  `min-h-[52px] py-2 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors active:bg-slate-50 ${isActive ? "text-blue-600" : "text-slate-400"}`
                 }
               >
                 <I size={22} />
@@ -30009,12 +30139,17 @@ const CustomerApp = (() => {
     const brandLogo = brand?.logoUrl || brand?.logoDataUrl || "";
     const feat = useCustomerFeatures();
     const nav = useNavigate();
+    const loyalty = useLoyalty();
     const [q, setQ] = useState("");
-    const owed = ships.filter(
+    // Cards count only what this customer's role can actually open, so the
+    // numbers always match the lists / feed below (AIR is retired: China only).
+    const seaList = feat("tab_shipments") ? ships : [];
+    const cnList = feat("tab_cn_orders") ? cnOrders : [];
+    const owed = seaList.filter(
       (s) => s.step === 4 && s.fee?.state === "due" && s.fee.total > 0,
     );
     const owedTotal = owed.reduce((a, s) => a + s.fee.due, 0);
-    const cnt = (f) => ships.filter((s) => f(s.step)).length;
+    const cnt = (f) => seaList.filter((s) => f(s.step)).length;
     // AIR shipments use their own status flow → map onto the same dashboard cards.
     const airCnt = (f) =>
       airShips.filter((s) =>
@@ -30022,7 +30157,7 @@ const CustomerApp = (() => {
       ).length;
     // CN Purchase Orders map onto the same dashboard cards.
     const cnCnt = (names) =>
-      cnOrders.filter(
+      cnList.filter(
         (o) =>
           !cnNeedsCustomerWalletPayment(o) &&
           names.includes(cnNormalizeStatus(o.status)),
@@ -30031,7 +30166,7 @@ const CustomerApp = (() => {
       [
         "Total",
         "សរុប",
-        ships.length + airShips.length + cnOrders.length,
+        seaList.length + cnList.length,
         "bg-slate-100 text-slate-700",
         Package,
       ],
@@ -30224,6 +30359,21 @@ const CustomerApp = (() => {
                     >
                       {moneyS(wallet.balance)}
                     </b>
+                  </div>
+                  <ChevronRight size={18} className="text-slate-300" />
+                </Card>
+              )}
+              {loyalty.on && loyalty.data && (
+                <Card
+                  onClick={() => nav(P("/points"))}
+                  className="p-4 flex items-center gap-3 cursor-pointer"
+                >
+                  <Icon i={Gift} c="bg-amber-50 text-amber-600" />
+                  <div className="flex-1">
+                    <p className="text-xs text-slate-500">
+                      {tr("My Points", "ពិន្ទុរបស់ខ្ញុំ")}
+                    </p>
+                    <b className="text-xl">{fmtPts(loyalty.data.balance)}</b>
                   </div>
                   <ChevronRight size={18} className="text-slate-300" />
                 </Card>
@@ -31033,9 +31183,109 @@ const CustomerApp = (() => {
     );
   }
 
+  // ---------- Skeletons: Wallet & Points ----------
+  // Translucent bars for use on top of the blue / orange gradient cards.
+  const SK_ON_COLOR = { backgroundColor: "rgba(255,255,255,.28)" };
+
+  function TxRowsSkeleton({ rows = 6 }) {
+    return (
+      <SkeletonRegion className="divide-y divide-slate-100">
+        {Array.from({ length: rows }).map((_, i) => (
+          <div key={i} className="flex items-center gap-3 px-4 py-3">
+            <div className="flex-1 min-w-0 space-y-2">
+              <Skeleton
+                className="h-3.5"
+                style={{ width: skWidth(i) }}
+                delay={i * 70}
+              />
+              <Skeleton className="h-3 w-24" delay={i * 70 + 40} />
+            </div>
+            <div className="flex flex-col items-end gap-2">
+              <Skeleton className="h-3.5 w-14" delay={i * 70} />
+              <Skeleton className="h-3 w-16" delay={i * 70 + 40} />
+            </div>
+          </div>
+        ))}
+      </SkeletonRegion>
+    );
+  }
+
+  function RewardCardsSkeleton({ count = 2 }) {
+    return (
+      <SkeletonRegion className="space-y-3">
+        {Array.from({ length: count }).map((_, i) => (
+          <Card key={i} className="p-3 flex gap-3">
+            <Skeleton
+              className="w-24 h-24 rounded-xl shrink-0"
+              delay={i * 90}
+            />
+            <div className="flex-1 min-w-0 pt-1">
+              <Skeleton className="h-4 w-2/5" delay={i * 90} />
+              <div className="mt-5 flex items-center justify-between gap-2">
+                <Skeleton className="h-4 w-14" delay={i * 90 + 40} />
+                <Skeleton className="h-9 w-28 rounded-lg" delay={i * 90 + 80} />
+              </div>
+              <Skeleton className="h-3 w-16 mt-3" delay={i * 90 + 120} />
+            </div>
+          </Card>
+        ))}
+      </SkeletonRegion>
+    );
+  }
+
+  function PointsSkeleton() {
+    const { tr } = useApp();
+    return (
+      <div className="px-4 pt-4 pb-6 space-y-4">
+        <SkeletonRegion>
+          <Card className="p-5 bg-gradient-to-br from-amber-500 to-orange-500">
+            <p className="text-sm text-amber-50">
+              {tr("Available points", "ពិន្ទុដែលមាន")}
+            </p>
+            <div className="h-10 mt-1 flex items-center">
+              <Skeleton className="h-8 w-16 rounded-lg" style={SK_ON_COLOR} />
+            </div>
+            <Skeleton
+              className="h-3 w-3/4 mt-3"
+              style={SK_ON_COLOR}
+              delay={80}
+            />
+          </Card>
+        </SkeletonRegion>
+        <h2 className="font-bold">{tr("Rewards", "រង្វាន់")}</h2>
+        <RewardCardsSkeleton count={2} />
+        <h2 className="font-bold">{tr("Points History", "ប្រវត្តិពិន្ទុ")}</h2>
+        <Card>
+          <TxRowsSkeleton rows={3} />
+        </Card>
+      </div>
+    );
+  }
+
+  // Reward photo: shimmer while the image downloads, then a soft fade-in.
+  function RewardImg({ src, alt }) {
+    const [ok, setOk] = useState(false);
+    return (
+      <div className="relative w-24 h-24 shrink-0 rounded-xl overflow-hidden bg-slate-100">
+        {!ok && <Skeleton className="absolute inset-0 !rounded-none" />}
+        <img
+          ref={(el) => {
+            if (el && el.complete && !ok) setOk(true);
+          }}
+          src={src}
+          alt={alt}
+          loading="lazy"
+          onLoad={() => setOk(true)}
+          onError={() => setOk(true)}
+          className={`w-full h-full object-cover transition-opacity duration-300 ${ok ? "opacity-100" : "opacity-0"}`}
+        />
+      </div>
+    );
+  }
+
   // ---------- Wallet ----------
   function WalletPage() {
-    const { wallet, refreshMoney, tr } = useApp();
+    const { wallet, walletReady, refreshMoney, tr } = useApp();
     useEffect(() => {
       refreshMoney();
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -31078,11 +31328,17 @@ const CustomerApp = (() => {
             <p className="text-sm text-blue-100">
               {tr("Available balance", "សមតុល្យដែលមាន")}
             </p>
-            <p className="text-3xl font-extrabold mt-1">
-              {moneyS(wallet.balance)}
-            </p>
+            {walletReady ? (
+              <p className="text-3xl font-extrabold mt-1 cb-fade-in">
+                {moneyS(wallet.balance)}
+              </p>
+            ) : (
+              <SkeletonRegion className="h-9 mt-1 flex items-center">
+                <Skeleton className="h-7 w-32 rounded-lg" style={SK_ON_COLOR} />
+              </SkeletonRegion>
+            )}
           </Card>
-          {wallet.balance < 0 && (
+          {walletReady && wallet.balance < 0 && (
             <p className="rounded-xl bg-red-50 text-red-700 text-xs font-semibold px-3 py-2.5">
               {tr(
                 `Your balance is negative. Please top up ${moneyS(Math.abs(wallet.balance))} or more with our staff to cover it before your next payment.`,
@@ -31094,40 +31350,393 @@ const CustomerApp = (() => {
             {tr("Transaction History", "ប្រវត្តិប្រតិបត្តិការ")}
           </h2>
           <Card className="divide-y divide-slate-100">
-            {rows.map((t) => {
-              const n = Number(t.amount) || 0;
-              return (
-                <div key={t.id} className="flex items-center gap-3 px-4 py-3">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold">
-                      {label[t.type] || t.type}
-                    </p>
-                    <p className="text-xs text-slate-400 truncate">
-                      {fmtDate(t.created_at)}
-                      {t.tk ? ` · ${t.tk}` : ""}
-                    </p>
+            {!walletReady && <TxRowsSkeleton rows={7} />}
+            {walletReady &&
+              rows.map((t) => {
+                const n = Number(t.amount) || 0;
+                return (
+                  <div
+                    key={t.id}
+                    className="flex items-center gap-3 px-4 py-3 cb-fade-in"
+                    style={{
+                      animationDelay: `${Math.min(rows.indexOf(t), 8) * 30}ms`,
+                    }}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold">
+                        {label[t.type] || t.type}
+                      </p>
+                      <p className="text-xs text-slate-400 truncate">
+                        {fmtDate(t.created_at)}
+                        {t.tk ? ` · ${t.tk}` : ""}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p
+                        className={`text-sm font-bold ${n > 0 ? "text-emerald-600" : n < 0 ? "text-red-600" : "text-slate-400"}`}
+                      >
+                        {n > 0 ? "+" : n < 0 ? "−" : ""}
+                        {money(Math.abs(n))}
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        {tr("Bal", "សមតុល្យ")} {moneyS(t._after)}
+                      </p>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <p
-                      className={`text-sm font-bold ${n > 0 ? "text-emerald-600" : n < 0 ? "text-red-600" : "text-slate-400"}`}
-                    >
-                      {n > 0 ? "+" : n < 0 ? "−" : ""}
-                      {money(Math.abs(n))}
-                    </p>
-                    <p className="text-[11px] text-slate-400">
-                      {tr("Bal", "សមតុល្យ")} {moneyS(t._after)}
-                    </p>
-                  </div>
-                </div>
-              );
-            })}
-            {!wallet.tx.length && (
+                );
+              })}
+            {walletReady && !wallet.tx.length && (
               <p className="text-center text-sm text-slate-400 py-8">
                 {tr("No transactions yet", "មិនទាន់មានប្រតិបត្តិការទេ")}
               </p>
             )}
           </Card>
         </div>
+      </>
+    );
+  }
+
+  // ---------- Points & Rewards (Customer Points) ----------
+  // Needs supabase_customer_points.sql. The program is hidden completely
+  // (Home card, Profile link, /points page) while Admin → Loyalty Points →
+  // Settings has it switched OFF, or when the "points" Customer Feature is off.
+  const fmtPts = (n) => Number(n || 0).toLocaleString("en-US");
+  function useLoyalty() {
+    const feat = useCustomerFeatures();
+    const featOn = feat("points");
+    const [data, setData] = useState(null);
+    const [state, setState] = useState("loading"); // loading | ready | off
+    const load = async () => {
+      if (!supabase) {
+        setState("off");
+        return null;
+      }
+      const { data: d, error } = await supabase.rpc("customer_points");
+      if (error || !d) {
+        setData(null);
+        setState("off");
+        return null;
+      }
+      setData(d);
+      setState(d.enabled ? "ready" : "off");
+      return d;
+    };
+    useEffect(() => {
+      if (featOn) load();
+      else setState("off");
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [featOn]);
+    return { on: featOn && state === "ready", state, data, reload: load };
+  }
+
+  function PointsPage() {
+    const { tr, lang, say } = useApp();
+    const L = useLoyalty();
+    const [rewards, setRewards] = useState([]);
+    const [rLoading, setRLoading] = useState(true);
+    const [pick, setPick] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [done, setDone] = useState(null);
+
+    const loadRewards = async () => {
+      if (!supabase) return;
+      const { data } = await supabase
+        .from("loyalty_rewards")
+        .select("*")
+        .eq("active", true)
+        .order("sort_order", { ascending: true })
+        .order("points_cost", { ascending: true });
+      setRewards(data || []);
+      setRLoading(false);
+    };
+    useEffect(() => {
+      if (L.on) loadRewards();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [L.on]);
+
+    if (L.state === "off") return <Navigate to={P()} replace />;
+    if (L.state === "loading" || !L.data)
+      return (
+        <>
+          <Top title={tr("My Points", "ពិន្ទុរបស់ខ្ញុំ")} back />
+          <PointsSkeleton />
+        </>
+      );
+
+    const d = L.data;
+    const balance = Number(d.balance) || 0;
+    const rName = (r) => (lang === "km" && r.name_km ? r.name_km : r.name_en);
+    const typeLabel = {
+      earn: tr("Points earned", "ពិន្ទុដែលទទួលបាន"),
+      reverse: tr("Refund adjustment", "កែតម្រូវការសងប្រាក់"),
+      redeem: tr("Redeemed", "បានប្តូររង្វាន់"),
+      redeem_refund: tr("Redemption cancelled", "ការប្តូរត្រូវបានលុបចោល"),
+      adjust: tr("Bonus / adjustment", "ពិន្ទុបន្ថែម / កែតម្រូវ"),
+    };
+    const statusTx = {
+      "Ready for Pickup": [
+        tr("Ready for pickup", "រួចរាល់ សម្រាប់ទទួល"),
+        "bg-amber-50 text-amber-700",
+      ],
+      Collected: [
+        tr("Collected", "បានទទួលរួច"),
+        "bg-emerald-50 text-emerald-700",
+      ],
+      Cancelled: [tr("Cancelled", "បានលុបចោល"), "bg-slate-100 text-slate-500"],
+    };
+    const friendly = (m = "") =>
+      /not enough points/i.test(m)
+        ? tr("You don't have enough points.", "ពិន្ទុរបស់អ្នកមិនគ្រប់គ្រាន់ទេ។")
+        : /out of stock/i.test(m)
+          ? tr("This reward is out of stock.", "រង្វាន់នេះអស់ស្តុកហើយ។")
+          : /not available|not active/i.test(m)
+            ? tr(
+                "This reward is no longer available.",
+                "រង្វាន់នេះមិនអាចប្រើបានទៀតទេ។",
+              )
+            : m || tr("Something went wrong.", "មានបញ្ហាកើតឡើង។");
+
+    const redeem = async () => {
+      if (!pick || busy) return;
+      setBusy(true);
+      const { data: res, error } = await supabase.rpc("redeem_reward", {
+        p_reward_id: pick.id,
+      });
+      setBusy(false);
+      await Promise.all([L.reload(), loadRewards()]);
+      const picked = pick;
+      setPick(null);
+      if (error) return say(friendly(error.message));
+      setDone({ ...res, image_url: picked.image_url });
+    };
+
+    const rate = tr(
+      `Earn ${d.points_per_step} point${d.points_per_step > 1 ? "s" : ""} for every ${money(d.spend_per_step)} you pay on CN Orders.`,
+      `ទទួលបាន ${d.points_per_step} ពិន្ទុ រាល់ការបង់ប្រាក់ ${money(d.spend_per_step)} លើ CN Order។`,
+    );
+
+    return (
+      <>
+        <Top title={tr("My Points", "ពិន្ទុរបស់ខ្ញុំ")} back />
+        <div className="px-4 pt-4 pb-6 space-y-4 cb-fade-in">
+          <Card className="p-5 bg-gradient-to-br from-amber-500 to-orange-500 text-white">
+            <p className="text-sm text-amber-50">
+              {tr("Available points", "ពិន្ទុដែលមាន")}
+            </p>
+            <p className="text-4xl font-extrabold mt-1">{fmtPts(balance)}</p>
+            <p className="text-xs text-amber-50/90 mt-2">{rate}</p>
+          </Card>
+
+          <h2 className="font-bold">{tr("Rewards", "រង្វាន់")}</h2>
+          {rLoading ? (
+            <RewardCardsSkeleton count={2} />
+          ) : !rewards.length ? (
+            <Card className="p-6 text-center text-sm text-slate-400">
+              {tr(
+                "No rewards available yet. Please check back soon.",
+                "មិនទាន់មានរង្វាន់ទេ។ សូមត្រឡប់មកវិញក្នុងពេលឆាប់ៗ។",
+              )}
+            </Card>
+          ) : (
+            <div className="space-y-3 cb-fade-in">
+              {rewards.map((r) => {
+                const out = r.stock != null && r.stock <= 0;
+                const need = Number(r.points_cost) - balance;
+                const can = !out && need <= 0;
+                return (
+                  <Card key={r.id} className="p-3 flex gap-3">
+                    {r.image_url ? (
+                      <RewardImg src={r.image_url} alt={rName(r)} />
+                    ) : (
+                      <Icon i={Gift} c="bg-amber-50 text-amber-600" />
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-[15px]">{rName(r)}</p>
+                      {r.description && (
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {r.description}
+                        </p>
+                      )}
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <b className="text-amber-600 text-sm">
+                          {fmtPts(r.points_cost)} {tr("pts", "ពិន្ទុ")}
+                        </b>
+                        <button
+                          type="button"
+                          disabled={!can}
+                          onClick={() => setPick(r)}
+                          className={`h-9 px-4 rounded-lg text-sm font-semibold ${can ? "bg-blue-600 text-white active:scale-[.98]" : "bg-slate-100 text-slate-400"}`}
+                        >
+                          {out
+                            ? tr("Out of stock", "អស់ស្តុក")
+                            : can
+                              ? tr("Redeem", "ប្តូរ")
+                              : tr(
+                                  `Need ${fmtPts(need)} more`,
+                                  `ខ្វះ ${fmtPts(need)} ពិន្ទុ`,
+                                )}
+                        </button>
+                      </div>
+                      {r.stock != null && r.stock > 0 && r.stock <= 5 && (
+                        <p className="text-[11px] text-red-500 mt-1">
+                          {tr(
+                            `Only ${r.stock} left`,
+                            `នៅសល់តែ ${r.stock} ប៉ុណ្ណោះ`,
+                          )}
+                        </p>
+                      )}
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+
+          {d.redemptions?.length > 0 && (
+            <>
+              <h2 className="font-bold">
+                {tr("My Redemptions", "ការប្តូររង្វាន់របស់ខ្ញុំ")}
+              </h2>
+              <Card className="divide-y divide-slate-100">
+                {d.redemptions.map((r) => {
+                  const [label, tone] = statusTx[r.status] || [r.status, ""];
+                  return (
+                    <div
+                      key={r.id}
+                      className="flex items-center gap-3 px-4 py-3"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold truncate">
+                          {r.reward_name}
+                        </p>
+                        <p className="text-xs text-slate-400">
+                          {r.code} · {fmtDate(r.created_at)}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <span
+                          className={`inline-block rounded-md px-2 py-0.5 text-[11px] font-semibold ${tone}`}
+                        >
+                          {label}
+                        </span>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          −{fmtPts(r.points_spent)} {tr("pts", "ពិន្ទុ")}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </Card>
+            </>
+          )}
+
+          <h2 className="font-bold">
+            {tr("Points History", "ប្រវត្តិពិន្ទុ")}
+          </h2>
+          <Card className="divide-y divide-slate-100">
+            {(d.ledger || []).map((t) => {
+              const n = Number(t.points) || 0;
+              return (
+                <div key={t.id} className="flex items-center gap-3 px-4 py-3">
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold">
+                      {typeLabel[t.type] || t.type}
+                    </p>
+                    <p className="text-xs text-slate-400 truncate">
+                      {fmtDate(t.created_at)}
+                      {t.note ? ` · ${t.note}` : ""}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p
+                      className={`text-sm font-bold ${n > 0 ? "text-emerald-600" : "text-red-600"}`}
+                    >
+                      {n > 0 ? "+" : "−"}
+                      {fmtPts(Math.abs(n))}
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      {tr("Bal", "សមតុល្យ")} {fmtPts(t.balance_after)}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+            {!d.ledger?.length && (
+              <p className="text-center text-sm text-slate-400 py-8">
+                {tr("No points yet", "មិនទាន់មានពិន្ទុទេ")}
+              </p>
+            )}
+          </Card>
+        </div>
+
+        {pick && (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/40"
+            onClick={() => !busy && setPick(null)}
+          >
+            <div
+              className="w-full max-w-md rounded-t-3xl bg-white p-5 space-y-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="font-bold text-lg">
+                {tr("Redeem this reward?", "ប្តូររង្វាន់នេះឬ?")}
+              </h3>
+              {pick.image_url && (
+                <img
+                  src={pick.image_url}
+                  alt={rName(pick)}
+                  className="w-full h-44 rounded-xl object-cover bg-slate-100"
+                />
+              )}
+              <div className="rounded-xl bg-amber-50 p-4">
+                <p className="font-semibold">{rName(pick)}</p>
+                <p className="text-sm text-slate-600 mt-1">
+                  {tr(
+                    `${fmtPts(pick.points_cost)} points will be deducted. You will have ${fmtPts(balance - pick.points_cost)} left.`,
+                    `នឹងកាត់ ${fmtPts(pick.points_cost)} ពិន្ទុ។ អ្នកនឹងនៅសល់ ${fmtPts(balance - pick.points_cost)} ពិន្ទុ។`,
+                  )}
+                </p>
+              </div>
+              <Btn loading={busy} onClick={redeem}>
+                {tr("Confirm", "បញ្ជាក់")}
+              </Btn>
+              <Btn ghost disabled={busy} onClick={() => setPick(null)}>
+                {tr("Cancel", "បោះបង់")}
+              </Btn>
+            </div>
+          </div>
+        )}
+
+        {done && (
+          <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40">
+            <div className="w-full max-w-md rounded-t-3xl bg-white p-5 space-y-4 text-center">
+              <div className="mx-auto w-14 h-14 rounded-full bg-emerald-50 text-emerald-600 grid place-items-center">
+                <Check size={28} />
+              </div>
+              <h3 className="font-bold text-lg">
+                {tr("Redeemed successfully!", "ប្តូររង្វាន់បានជោគជ័យ!")}
+              </h3>
+              {done.image_url && (
+                <img
+                  src={done.image_url}
+                  alt={done.reward_name}
+                  className="mx-auto w-32 h-32 rounded-xl object-cover bg-slate-100"
+                />
+              )}
+              <p className="text-sm text-slate-600">{done.reward_name}</p>
+              <p className="text-3xl font-extrabold tracking-wide">
+                {done.code}
+              </p>
+              <p className="text-xs text-slate-500">
+                {tr(
+                  "Show this code to our staff to collect your reward.",
+                  "សូមបង្ហាញលេខកូដនេះដល់បុគ្គលិករបស់យើង ដើម្បីទទួលរង្វាន់របស់អ្នក។",
+                )}
+              </p>
+              <Btn onClick={() => setDone(null)}>{tr("Done", "រួចរាល់")}</Btn>
+            </div>
+          </div>
+        )}
       </>
     );
   }
@@ -31871,6 +32480,7 @@ const CustomerApp = (() => {
     const [themeOpen, setThemeOpen] = useState(false);
     const def = addrs.find((a) => a.def);
     const feat = useCustomerFeatures();
+    const loyalty = useLoyalty();
     const info = [
       [tr("Full Name", "ឈ្មោះពេញ"), me.name],
       [tr("Phone Number", "លេខទូរស័ព្ទ"), me.phone],
@@ -31887,6 +32497,15 @@ const CustomerApp = (() => {
     const links = [
       ...(feat("wallet")
         ? [[Wallet, tr("My Wallet", "កាបូបរបស់ខ្ញុំ"), () => nav(P("/wallet"))]]
+        : []),
+      ...(loyalty.on
+        ? [
+            [
+              Gift,
+              tr("My Points & Rewards", "ពិន្ទុ និងរង្វាន់របស់ខ្ញុំ"),
+              () => nav(P("/points")),
+            ],
+          ]
         : []),
       ...(feat("warehouse")
         ? [
@@ -32096,12 +32715,86 @@ const CustomerApp = (() => {
     ["Refund", "Refund Order", "សងប្រាក់វិញ", ["Refund Order"]],
   ];
 
+  // Empty-state illustration: a stack of list rows, the first one highlighted.
+  function CnEmptyIllustration() {
+    return (
+      <svg
+        viewBox="0 0 200 150"
+        className="mx-auto w-44 h-32"
+        aria-hidden="true"
+      >
+        <defs>
+          <filter id="cn-empty-sh" x="-20%" y="-20%" width="140%" height="160%">
+            <feDropShadow
+              dx="0"
+              dy="6"
+              stdDeviation="6"
+              floodColor="#2563eb"
+              floodOpacity=".18"
+            />
+          </filter>
+        </defs>
+        <rect
+          x="26"
+          y="14"
+          width="148"
+          height="46"
+          rx="12"
+          fill="#fff"
+          filter="url(#cn-empty-sh)"
+        />
+        <circle cx="48" cy="37" r="11" fill="#34d399" />
+        <path
+          d="M43 37l4 4 7-8"
+          stroke="#fff"
+          strokeWidth="2.5"
+          fill="none"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <rect x="68" y="27" width="86" height="5" rx="2.5" fill="#cbd5e1" />
+        <rect x="68" y="37" width="60" height="5" rx="2.5" fill="#cbd5e1" />
+        <rect x="68" y="47" width="26" height="4" rx="2" fill="#e2e8f0" />
+        {[78, 112].map((y) => (
+          <g key={y}>
+            <circle cx="48" cy={y} r="10" fill="#cbd5e1" />
+            <path
+              d={`M43.5 ${y}l3.5 3.5 6-7`}
+              stroke="#fff"
+              strokeWidth="2.2"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <rect
+              x="68"
+              y={y - 8}
+              width="70"
+              height="5"
+              rx="2.5"
+              fill="#e2e8f0"
+            />
+            <rect
+              x="68"
+              y={y + 2}
+              width="48"
+              height="5"
+              rx="2.5"
+              fill="#e2e8f0"
+            />
+          </g>
+        ))}
+      </svg>
+    );
+  }
+
   function CustomerCnOrders() {
     const { me, tr } = useApp();
     const nav = useNavigate();
     const [rows, setRows] = useState([]);
     const [loading, setLoading] = useState(true);
     const [tab, setTab] = useState("All");
+    const [refreshing, setRefreshing] = useState(false);
     const cnTabsScroller = React.useRef(null);
 
     const load = React.useCallback(async () => {
@@ -32133,6 +32826,15 @@ const CustomerApp = (() => {
     useEffect(() => {
       load();
     }, [load]);
+
+    // Refresh button: keep the empty card on screen, spin the icon, and hold
+    // for a short minimum so the tap always feels acknowledged.
+    const refresh = async () => {
+      if (refreshing) return;
+      setRefreshing(true);
+      await Promise.all([load(), new Promise((r) => setTimeout(r, 700))]);
+      setRefreshing(false);
+    };
 
     // Keep the selected customer status chip completely visible in the
     // horizontal list. This prevents the start of "Waiting Order Payment"
@@ -32193,7 +32895,7 @@ const CustomerApp = (() => {
             </div>
           </div>
 
-          {rows.length > 0 && (
+          {
             <div
               ref={cnTabsScroller}
               className="flex gap-2 overflow-x-auto overflow-y-hidden pb-1 scroll-smooth"
@@ -32215,9 +32917,9 @@ const CustomerApp = (() => {
                 );
               })}
             </div>
-          )}
+          }
 
-          {loading ? (
+          {loading && !refreshing ? (
             <div className="space-y-3">
               {Array.from({ length: 4 }).map((_, i) => (
                 <Card key={i} className="p-4">
@@ -32227,31 +32929,41 @@ const CustomerApp = (() => {
                 </Card>
               ))}
             </div>
-          ) : !rows.length ? (
-            <Card className="p-8 text-center">
-              <div className="mx-auto w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 grid place-items-center">
-                <Icons.ShoppingCart size={24} />
-              </div>
-              <p className="font-semibold mt-3">
-                {tr("No CN Purchase Orders yet", "មិនទាន់មានការបញ្ជាទិញពីចិន")}
+          ) : !list.length ? (
+            <Card className="p-6 text-center cb-fade-in">
+              <CnEmptyIllustration />
+              <p className="font-semibold mt-4 text-slate-900">
+                {tr("No Data Available", "មិនមានទិន្នន័យទេ")}
               </p>
               <p className="text-sm text-slate-400 mt-1">
-                {tr(
-                  "Your China purchase orders will appear here.",
-                  "ការបញ្ជាទិញពីចិនរបស់អ្នកនឹងបង្ហាញនៅទីនេះ",
-                )}
+                {!rows.length
+                  ? tr(
+                      "Your China purchase orders will appear here.",
+                      "ការបញ្ជាទិញពីចិនរបស់អ្នកនឹងបង្ហាញនៅទីនេះ",
+                    )
+                  : tr(
+                      "No orders in this status.",
+                      "គ្មានការបញ្ជាទិញក្នុងស្ថានភាពនេះទេ។",
+                    )}
               </p>
+              <button
+                type="button"
+                onClick={refresh}
+                disabled={refreshing}
+                aria-busy={refreshing}
+                className="mt-6 w-full h-12 rounded-xl text-white font-semibold flex items-center justify-center gap-2 bg-gradient-to-b from-blue-500 to-blue-700 shadow-[0_6px_16px_-6px_rgba(37,99,235,.7)] active:scale-[.98] transition-transform disabled:opacity-80"
+              >
+                <Icons.RefreshCw
+                  size={18}
+                  className={refreshing ? "animate-spin" : ""}
+                />
+                {refreshing
+                  ? tr("Refreshing…", "កំពុងផ្ទុក…")
+                  : tr("Refresh", "ផ្ទុកឡើងវិញ")}
+              </button>
             </Card>
           ) : (
             <div className="space-y-3">
-              {!list.length && (
-                <p className="text-center text-sm text-slate-400 py-10">
-                  {tr(
-                    "No orders in this status.",
-                    "គ្មានការបញ្ជាទិញក្នុងស្ថានភាពនេះទេ។",
-                  )}
-                </p>
-              )}
               {list.map((r) => (
                 <Card
                   key={r.id}
@@ -33111,6 +33823,14 @@ const CustomerApp = (() => {
               element={
                 <Gate k="wallet">
                   <WalletPage />
+                </Gate>
+              }
+            />
+            <Route
+              path="points"
+              element={
+                <Gate k="points">
+                  <PointsPage />
                 </Gate>
               }
             />
@@ -35291,7 +36011,7 @@ function ScanCenterPage() {
             <div className="flex items-center justify-between gap-3 mb-3">
               <div>
                 <h2 className="text-sm font-semibold text-ink-900">
-                  Scan Tracking Number
+                  Scan Package
                 </h2>
                 <p className="text-xs text-ink-600/50 mt-0.5">
                   Use a barcode scanner or type a TK manually.
@@ -35316,6 +36036,9 @@ function ScanCenterPage() {
                 lookup(value);
               }}
             >
+              <label className="mb-1.5 block text-sm font-semibold text-ink-900">
+                Scan Tracking Number Or QR Code
+              </label>
               <div
                 className={`cb-scan cb-scan--${phase} ${
                   phase === "error"
@@ -35331,26 +36054,9 @@ function ScanCenterPage() {
                       : phase === "error"
                         ? "text-signal-red"
                         : "text-ink-600"
-                } flex items-center gap-3 bg-white border-2 border-mist-200 rounded-lg px-4 py-3.5 focus-within:border-signal-blue`}
+                } flex h-12 items-center gap-3 bg-white border border-mist-200 rounded-lg px-3.5 focus-within:border-signal-blue`}
               >
-                <span className="cb-scan__icon" aria-hidden="true">
-                  <Icons.ScanLine className="cb-ico-scan" size={18} />
-                  <svg
-                    className="cb-ico-check"
-                    viewBox="0 0 24 24"
-                    width="18"
-                    height="18"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <circle cx="12" cy="12" r="9.5" strokeOpacity=".35" />
-                    <path d="M7.5 12.5l3 3 6-6.5" pathLength="1" />
-                  </svg>
-                  <Icons.TriangleAlert className="cb-ico-err" size={18} />
-                </span>
+                <ScanIconStack />
                 <input
                   ref={inputRef}
                   autoFocus
@@ -35364,7 +36070,7 @@ function ScanCenterPage() {
                 <button
                   type="submit"
                   disabled={!value.trim() || !canScan || !ready}
-                  className="shrink-0 inline-flex items-center gap-1.5 bg-signal-blue text-white text-sm font-semibold px-4 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-40"
+                  className="shrink-0 inline-flex h-9 items-center gap-1.5 bg-signal-blue text-white text-sm font-semibold px-4 rounded-md hover:bg-signal-blue/90 disabled:opacity-40"
                 >
                   <Search size={15} /> Verify
                 </button>
@@ -54857,6 +55563,1338 @@ function ReverseTopUpModal({ row, onClose, onDone }) {
   );
 }
 
+// ------------------------------------------------------------
+// LOYALTY POINTS (Finance) — standalone page: /loyalty
+// Needs supabase_customer_points.sql (loyalty_* tables + RPCs).
+// Points are earned ONLY when a CN Purchase Order becomes Paid. The master
+// switch (Settings tab) keeps the whole program hidden from customers and
+// stops new points from being earned until the promotion starts.
+// ------------------------------------------------------------
+const loyaltyErr = (e) => {
+  const m = String(e?.message || e || "");
+  if (
+    /loyalty_|customer_points|redeem_reward|adjust_points/i.test(m) &&
+    /relation|function|schema cache|could not find|does not exist/i.test(m)
+  )
+    return "Customer Points is not set up yet. Run supabase_customer_points.sql in the Supabase SQL Editor.";
+  if (/not allowed|42501|permission denied|row-level security/i.test(m))
+    return "You do not have permission to do this.";
+  return m || "Something went wrong.";
+};
+const LOYALTY_STATUS_TONE = {
+  "Ready for Pickup": "bg-amber-50 text-amber-700",
+  Collected: "bg-emerald-50 text-emerald-700",
+  Cancelled: "bg-slate-100 text-slate-500",
+};
+const LOYALTY_TYPE_LABEL = {
+  earn: "Earned",
+  reverse: "Refund adjustment",
+  redeem: "Redeemed",
+  redeem_refund: "Redemption cancelled",
+  adjust: "Manual adjustment",
+};
+const fmtPts = (n) => Number(n || 0).toLocaleString("en-US");
+
+async function loyaltyCustomerMap(ids) {
+  const out = {};
+  const list = [...new Set(ids)].filter(Boolean);
+  for (let i = 0; i < list.length; i += 100) {
+    const { data } = await supabase
+      .from("customers")
+      .select("id, customer_code, name, phone")
+      .in("id", list.slice(i, i + 100));
+    (data || []).forEach((c) => (out[String(c.id)] = c));
+  }
+  return out;
+}
+
+function LoyaltyCustomerCell({ c }) {
+  if (!c) return <span className="text-slate-400">—</span>;
+  return (
+    <div className="min-w-0">
+      <Link
+        to={`/customers/${encodeURIComponent(c.customer_code)}`}
+        className="font-semibold text-blue-700 hover:underline"
+      >
+        {c.customer_code}
+      </Link>
+      <div className="truncate text-xs text-slate-500">{c.name}</div>
+    </div>
+  );
+}
+
+function LoyaltySettingsForm({ settings, canManage, onSaved }) {
+  const { user } = useAuth();
+  const [enabled, setEnabled] = useState(!!settings?.enabled);
+  const [spend, setSpend] = useState(String(settings?.spend_per_step ?? 10));
+  const [pts, setPts] = useState(String(settings?.points_per_step ?? 1));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const sp = Number(spend);
+  const pp = Number(pts);
+  const valid = Number.isFinite(sp) && sp > 0 && Number.isInteger(pp) && pp > 0;
+  const field =
+    "mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:bg-slate-50";
+
+  async function save() {
+    if (!valid || busy) return;
+    setBusy(true);
+    setErr("");
+    const { error } = await supabase
+      .from("loyalty_settings")
+      .update({
+        enabled,
+        spend_per_step: Math.round(sp * 100) / 100,
+        points_per_step: pp,
+        updated_by: user?.name || user?.email || "Admin",
+      })
+      .eq("id", 1);
+    setBusy(false);
+    if (error) return setErr(loyaltyErr(error));
+    emitCBToast("ok", "Settings saved", "Customer Points settings updated.");
+    onSaved();
+  }
+
+  return (
+    <div className="max-w-xl space-y-5">
+      <div
+        className={`rounded-2xl border p-4 ${enabled ? "border-emerald-200 bg-emerald-50/60" : "border-amber-200 bg-amber-50/60"}`}
+      >
+        <label className="flex cursor-pointer items-start gap-3">
+          <input
+            type="checkbox"
+            className="mt-1 h-4 w-4"
+            checked={enabled}
+            disabled={!canManage}
+            onChange={(e) => setEnabled(e.target.checked)}
+          />
+          <span>
+            <span className="block text-sm font-extrabold text-slate-900">
+              Points program is {enabled ? "ON" : "OFF"}
+            </span>
+            <span className="block text-xs text-slate-600">
+              {enabled
+                ? "Customers can see their points, and CN Orders that become Paid now earn points."
+                : "Customers cannot see Points or Rewards, and CN Orders that become Paid earn nothing. Orders paid while OFF never earn points later."}
+            </span>
+          </span>
+        </label>
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="block text-xs font-bold uppercase tracking-wide text-slate-500">
+          Spend (USD) per step
+          <input
+            type="number"
+            min="0.01"
+            step="0.01"
+            className={field}
+            value={spend}
+            disabled={!canManage}
+            onChange={(e) => setSpend(e.target.value)}
+          />
+        </label>
+        <label className="block text-xs font-bold uppercase tracking-wide text-slate-500">
+          Points earned per step
+          <input
+            type="number"
+            min="1"
+            step="1"
+            className={field}
+            value={pts}
+            disabled={!canManage}
+            onChange={(e) => setPts(e.target.value)}
+          />
+        </label>
+      </div>
+      {valid && (
+        <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
+          Rule: every <b>{money(sp)}</b> paid on a CN Order earns{" "}
+          <b>
+            {pp} point{pp > 1 ? "s" : ""}
+          </b>
+          . Example: a {money(sp * 4.7)} order earns <b>{4 * pp} points</b>{" "}
+          (partial steps are not counted).
+        </div>
+      )}
+      <p className="text-xs text-slate-500">
+        Points are given once, when the order is fully Paid. A refund removes
+        points in proportion to the money refunded. A rate change applies to
+        orders paid afterwards only.
+      </p>
+      {err && <p className="text-xs font-semibold text-red-600">{err}</p>}
+      {canManage && (
+        <button
+          type="button"
+          onClick={save}
+          disabled={!valid || busy}
+          className="h-11 rounded-xl bg-blue-600 px-6 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+        >
+          {busy ? "Saving…" : "Save Settings"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Shrinks a photo to <= `max` px and re-encodes it as JPEG (small, fast for customers).
+function loyaltyResizeImage(file, max = 640) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const r = Math.min(1, max / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * r));
+      const h = Math.max(1, Math.round(img.height * r));
+      const c = document.createElement("canvas");
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      c.toBlob(
+        (b) =>
+          b ? resolve(b) : reject(new Error("Could not process this image.")),
+        "image/jpeg",
+        0.85,
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(
+        new Error(
+          "Could not read this image. Please use a JPG, PNG or WebP photo.",
+        ),
+      );
+    };
+    img.src = url;
+  });
+}
+
+function LoyaltyRewardModal({ row, onClose, onDone }) {
+  const isNew = !row?.id;
+  const [f, setF] = useState({
+    name_en: row?.name_en || "",
+    name_km: row?.name_km || "",
+    description: row?.description || "",
+    image_url: row?.image_url || "",
+    points_cost: row?.points_cost != null ? String(row.points_cost) : "",
+    stock: row?.stock != null ? String(row.stock) : "",
+    sort_order: row?.sort_order != null ? String(row.sort_order) : "0",
+    active: row?.active ?? true,
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target.value }));
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef(null);
+
+  async function pickImage(e) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!/^image\//.test(file.type))
+      return setErr("Please choose an image file.");
+    setUploading(true);
+    setErr("");
+    try {
+      const blob = await loyaltyResizeImage(file, 640);
+      const path = `rewards/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+      const { error } = await supabase.storage
+        .from("loyalty-rewards")
+        .upload(path, blob, { contentType: "image/jpeg", upsert: false });
+      if (error) throw error;
+      const url = supabase.storage.from("loyalty-rewards").getPublicUrl(path)
+        .data.publicUrl;
+      setF((p) => ({ ...p, image_url: url }));
+    } catch (ex) {
+      const m = String(ex?.message || ex);
+      setErr(
+        /bucket not found|not found/i.test(m)
+          ? "Image storage is not set up yet. Run supabase_loyalty_images.sql in the Supabase SQL Editor."
+          : /row-level security|not allowed|unauthorized/i.test(m)
+            ? "You do not have permission to upload images."
+            : m,
+      );
+    }
+    setUploading(false);
+  }
+  const cost = Number(f.points_cost);
+  const stockN = f.stock.trim() === "" ? null : Number(f.stock);
+  const valid =
+    !uploading &&
+    f.name_en.trim() &&
+    Number.isInteger(cost) &&
+    cost > 0 &&
+    (stockN === null || (Number.isInteger(stockN) && stockN >= 0));
+  const field =
+    "mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
+
+  async function save() {
+    if (!valid || busy) return;
+    setBusy(true);
+    setErr("");
+    const payload = {
+      name_en: f.name_en.trim(),
+      name_km: f.name_km.trim() || null,
+      description: f.description.trim() || null,
+      image_url: f.image_url.trim() || null,
+      points_cost: cost,
+      stock: stockN,
+      sort_order: Number.parseInt(f.sort_order, 10) || 0,
+      active: !!f.active,
+    };
+    const { error } = isNew
+      ? await supabase.from("loyalty_rewards").insert(payload)
+      : await supabase.from("loyalty_rewards").update(payload).eq("id", row.id);
+    setBusy(false);
+    if (error) return setErr(loyaltyErr(error));
+    emitCBToast(
+      "ok",
+      isNew ? "Reward added" : "Reward updated",
+      payload.name_en,
+    );
+    onDone();
+  }
+
+  return (
+    <WalletModal title={isNew ? "Add Reward" : "Edit Reward"} onClose={onClose}>
+      <div className="max-h-[70vh] space-y-3 overflow-y-auto pr-1">
+        <label className="block text-xs font-bold uppercase tracking-wide text-slate-500">
+          Name (English)
+          <input
+            className={field}
+            value={f.name_en}
+            onChange={set("name_en")}
+            placeholder="e.g. Water Bottle"
+          />
+        </label>
+        <label className="block text-xs font-bold uppercase tracking-wide text-slate-500">
+          Name (Khmer)
+          <input
+            className={field}
+            value={f.name_km}
+            onChange={set("name_km")}
+            placeholder="ឧ. ដបទឹក"
+          />
+        </label>
+        <label className="block text-xs font-bold uppercase tracking-wide text-slate-500">
+          Description (optional)
+          <input
+            className={field}
+            value={f.description}
+            onChange={set("description")}
+          />
+        </label>
+        <div>
+          <div className="text-xs font-bold uppercase tracking-wide text-slate-500">
+            Reward Photo (so customers recognise it)
+          </div>
+          <div className="mt-1 flex items-center gap-3">
+            {f.image_url ? (
+              <img
+                src={f.image_url}
+                alt=""
+                className="h-24 w-24 rounded-xl border border-slate-200 object-cover"
+              />
+            ) : (
+              <div className="flex h-24 w-24 items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-slate-400">
+                <Icons.Image size={26} />
+              </div>
+            )}
+            <div className="space-y-2">
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={pickImage}
+              />
+              <button
+                type="button"
+                disabled={uploading}
+                onClick={() => fileRef.current?.click()}
+                className="flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                <Icons.Upload size={14} />
+                {uploading
+                  ? "Uploading…"
+                  : f.image_url
+                    ? "Change Photo"
+                    : "Upload Photo"}
+              </button>
+              {f.image_url && !uploading && (
+                <button
+                  type="button"
+                  onClick={() => setF((p) => ({ ...p, image_url: "" }))}
+                  className="block text-xs font-semibold text-red-600 hover:underline"
+                >
+                  Remove photo
+                </button>
+              )}
+            </div>
+          </div>
+          <p className="mt-1 text-[11px] text-slate-400">
+            JPG, PNG or WebP. The photo is resized automatically.
+          </p>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <label className="block text-xs font-bold uppercase tracking-wide text-slate-500">
+            Points
+            <input
+              type="number"
+              min="1"
+              step="1"
+              className={field}
+              value={f.points_cost}
+              onChange={set("points_cost")}
+            />
+          </label>
+          <label className="block text-xs font-bold uppercase tracking-wide text-slate-500">
+            Stock
+            <input
+              type="number"
+              min="0"
+              step="1"
+              className={field}
+              value={f.stock}
+              onChange={set("stock")}
+              placeholder="∞"
+            />
+          </label>
+          <label className="block text-xs font-bold uppercase tracking-wide text-slate-500">
+            Order
+            <input
+              type="number"
+              step="1"
+              className={field}
+              value={f.sort_order}
+              onChange={set("sort_order")}
+            />
+          </label>
+        </div>
+        <p className="text-[11px] text-slate-400">
+          Leave Stock empty for unlimited. Lower “Order” shows first.
+        </p>
+        <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+          <input
+            type="checkbox"
+            checked={!!f.active}
+            onChange={(e) => setF((p) => ({ ...p, active: e.target.checked }))}
+          />
+          Active (visible to customers)
+        </label>
+      </div>
+      {err && <p className="mt-3 text-xs font-semibold text-red-600">{err}</p>}
+      <div className="mt-5 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600 hover:bg-slate-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={save}
+          disabled={!valid || busy}
+          className="h-10 rounded-xl bg-blue-600 px-5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </WalletModal>
+  );
+}
+
+function LoyaltyCancelModal({ row, onClose, onDone }) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  async function submit() {
+    if (!reason.trim() || busy) return;
+    setBusy(true);
+    setErr("");
+    const { error } = await supabase.rpc("cancel_redemption", {
+      p_id: row.id,
+      p_reason: reason.trim(),
+    });
+    setBusy(false);
+    if (error) return setErr(loyaltyErr(error));
+    emitCBToast(
+      "ok",
+      "Redemption cancelled",
+      `${row.code}: ${fmtPts(row.points_spent)} points returned to the customer.`,
+    );
+    onDone();
+  }
+  return (
+    <WalletModal title={`Cancel ${row.code}`} onClose={onClose}>
+      <p className="text-sm text-slate-600">
+        “{row.reward_name}” — the customer gets{" "}
+        <b>{fmtPts(row.points_spent)} points</b> back and the stock returns.
+      </p>
+      <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-slate-500">
+        Reason
+        <input
+          autoFocus
+          className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="e.g. Out of stock at branch"
+        />
+      </label>
+      {err && <p className="mt-3 text-xs font-semibold text-red-600">{err}</p>}
+      <div className="mt-5 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600 hover:bg-slate-50"
+        >
+          Back
+        </button>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!reason.trim() || busy}
+          className="h-10 rounded-xl bg-red-600 px-5 text-sm font-bold text-white hover:bg-red-700 disabled:opacity-50"
+        >
+          {busy ? "Cancelling…" : "Cancel Redemption"}
+        </button>
+      </div>
+    </WalletModal>
+  );
+}
+
+function LoyaltyAdjustModal({ initialCustomer = null, onClose, onDone }) {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [customer, setCustomer] = useState(initialCustomer);
+  const [points, setPoints] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const reqId = useRef(0);
+  const n = Number(points);
+  const valid =
+    !!customer && Number.isInteger(n) && n !== 0 && note.trim().length > 0;
+  const field =
+    "mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
+
+  useEffect(() => {
+    const term = q.trim();
+    if (customer || term.length < 1 || !supabase) {
+      setResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const my = ++reqId.current;
+    const t = setTimeout(async () => {
+      const safe = term.replace(/[,()%]/g, " ");
+      const { data, error } = await supabase
+        .from("customers")
+        .select("id, customer_code, name, phone")
+        .or(
+          `customer_code.ilike.%${safe}%,name.ilike.%${safe}%,phone.ilike.%${safe}%`,
+        )
+        .limit(8);
+      if (my !== reqId.current) return;
+      setResults(error ? [] : data || []);
+      setSearching(false);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q, customer]);
+
+  async function submit() {
+    if (!valid || busy) return;
+    setBusy(true);
+    setErr("");
+    const { data, error } = await supabase.rpc("adjust_points", {
+      p_customer_id: String(customer.id),
+      p_points: n,
+      p_note: note.trim(),
+    });
+    setBusy(false);
+    if (error) return setErr(loyaltyErr(error));
+    emitCBToast(
+      "ok",
+      "Points updated",
+      `${customer.name} (${customer.customer_code}): ${n > 0 ? "+" : ""}${fmtPts(n)} points · balance ${fmtPts(data?.balance)}.`,
+    );
+    onDone();
+  }
+
+  return (
+    <WalletModal title="Adjust Customer Points" onClose={onClose}>
+      <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
+        Customer
+        {customer ? (
+          <div className="mt-1 flex items-center justify-between rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5">
+            <div className="min-w-0 text-sm font-bold normal-case text-slate-900">
+              {customer.customer_code} · {customer.name}
+            </div>
+            {!initialCustomer && (
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomer(null);
+                  setQ("");
+                }}
+                className="ml-3 text-slate-400 hover:text-slate-700"
+                title="Change customer"
+              >
+                <Icons.X size={16} />
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="relative">
+            <Icons.Search
+              size={15}
+              className="absolute left-3 top-1/2 mt-0.5 -translate-y-1/2 text-slate-400"
+            />
+            <input
+              autoFocus
+              className={`${field} pl-9`}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search Customer ID, name or phone…"
+            />
+            {q.trim() && (
+              <div className="absolute z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+                {searching && (
+                  <div className="px-3 py-3 text-xs font-medium normal-case text-slate-400">
+                    Searching…
+                  </div>
+                )}
+                {!searching && results.length === 0 && (
+                  <div className="px-3 py-3 text-xs font-medium normal-case text-slate-400">
+                    No customer found.
+                  </div>
+                )}
+                {results.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => {
+                      setCustomer(c);
+                      setResults([]);
+                    }}
+                    className="block w-full px-3 py-2.5 text-left hover:bg-slate-50"
+                  >
+                    <span className="block truncate text-sm font-bold normal-case text-slate-900">
+                      {c.customer_code} · {c.name}
+                    </span>
+                    <span className="block text-xs font-medium normal-case text-slate-400">
+                      {c.phone || "No phone"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </label>
+      <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-slate-500">
+        Points (use a minus to remove)
+        <input
+          type="number"
+          step="1"
+          className={field}
+          value={points}
+          onChange={(e) => setPoints(e.target.value)}
+          placeholder="e.g. 5 or -5"
+        />
+      </label>
+      <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-slate-500">
+        Reason (the customer can see this)
+        <input
+          className={field}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="e.g. Launch promotion bonus"
+        />
+      </label>
+      {err && <p className="mt-3 text-xs font-semibold text-red-600">{err}</p>}
+      <div className="mt-5 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600 hover:bg-slate-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={!valid || busy}
+          className="h-10 rounded-xl bg-blue-600 px-5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+        >
+          {busy ? "Saving…" : "Apply"}
+        </button>
+      </div>
+    </WalletModal>
+  );
+}
+
+function LoyaltyPage() {
+  const { user } = useAuth();
+  const canManage = hasPermission(user, "points.manage");
+  const [tab, setTab] = useState("redemptions");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [reload, setReload] = useState(0);
+  const [settings, setSettings] = useState(null);
+  const [rewards, setRewards] = useState([]);
+  const [redemptions, setRedemptions] = useState([]);
+  const [accounts, setAccounts] = useState([]);
+  const [ledger, setLedger] = useState([]);
+  const [cmap, setCmap] = useState({});
+  const [search, setSearch] = useState("");
+  const [statusF, setStatusF] = useState("Ready for Pickup");
+  const [rewardModal, setRewardModal] = useState(null);
+  const [cancelRow, setCancelRow] = useState(null);
+  const [adjust, setAdjust] = useState(null);
+  const [busyId, setBusyId] = useState("");
+  const [showSearch, setShowSearch] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    if (!supabase) {
+      setLoading(false);
+      setError("Supabase is not configured.");
+      return;
+    }
+    setLoading(true);
+    (async () => {
+      const [s, rw, rd, ac, lg] = await Promise.all([
+        supabase.from("loyalty_settings").select("*").eq("id", 1).maybeSingle(),
+        supabase
+          .from("loyalty_rewards")
+          .select("*")
+          .order("sort_order", { ascending: true })
+          .order("created_at", { ascending: true }),
+        supabase
+          .from("loyalty_redemptions")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(500),
+        supabase
+          .from("loyalty_accounts")
+          .select("*")
+          .order("balance", { ascending: false })
+          .limit(500),
+        supabase
+          .from("loyalty_ledger")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(300),
+      ]);
+      if (!alive) return;
+      const firstErr = [s, rw, rd, ac, lg].find((r) => r.error)?.error;
+      if (firstErr) {
+        setError(loyaltyErr(firstErr));
+        setLoading(false);
+        return;
+      }
+      const map = await loyaltyCustomerMap([
+        ...(rd.data || []).map((r) => r.customer_id),
+        ...(ac.data || []).map((r) => r.customer_id),
+        ...(lg.data || []).map((r) => r.customer_id),
+      ]);
+      if (!alive) return;
+      setSettings(s.data || null);
+      setRewards(rw.data || []);
+      setRedemptions(rd.data || []);
+      setAccounts(ac.data || []);
+      setLedger(lg.data || []);
+      setCmap(map);
+      setError("");
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [reload]);
+
+  const refresh = () => setReload((n) => n + 1);
+  const pending = redemptions.filter((r) => r.status === "Ready for Pickup");
+  const outstanding = accounts.reduce(
+    (a, r) => a + (Number(r.balance) || 0),
+    0,
+  );
+  const q = search.trim().toLowerCase();
+  const match = (c, ...extra) =>
+    !q ||
+    [c?.customer_code, c?.name, c?.phone, ...extra]
+      .filter(Boolean)
+      .some((v) => String(v).toLowerCase().includes(q));
+
+  const shownRedemptions = redemptions.filter(
+    (r) =>
+      (statusF === "all" || r.status === statusF) &&
+      match(cmap[String(r.customer_id)], r.code, r.reward_name),
+  );
+  const shownAccounts = accounts.filter((a) =>
+    match(cmap[String(a.customer_id)]),
+  );
+  const shownLedger = ledger.filter((l) =>
+    match(cmap[String(l.customer_id)], l.note, l.created_by),
+  );
+
+  async function collect(r) {
+    if (busyId) return;
+    const ok = await confirmDialog({
+      title: "Mark as collected?",
+      message: `Confirm that “${r.reward_name}” (${r.code}) was handed over to the customer.`,
+    });
+    if (!ok) return;
+    setBusyId(r.id);
+    const { error: e } = await supabase.rpc("collect_redemption", {
+      p_id: r.id,
+    });
+    setBusyId("");
+    if (e) return emitCBToast("err", "Could not update", loyaltyErr(e));
+    emitCBToast("ok", "Collected", `${r.code} marked as collected.`);
+    refresh();
+  }
+
+  const stat = (icon, tone, label, value) => {
+    const Ic = Icons[icon];
+    return (
+      <div className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div
+          className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl ${tone}`}
+        >
+          <Ic size={22} />
+        </div>
+        <div className="min-w-0">
+          <div className="truncate text-xs font-semibold text-slate-500">
+            {label}
+          </div>
+          <div className="text-2xl font-extrabold leading-tight text-slate-900">
+            {value}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const th = (list) => (
+    <thead>
+      <tr className="bg-slate-50 text-left text-[11px] font-bold uppercase tracking-wider text-slate-500">
+        {list.map((h) => (
+          <th key={h} className="px-4 py-3">
+            {h}
+          </th>
+        ))}
+      </tr>
+    </thead>
+  );
+  const EmptyIc = Icons.FileSearch || Icons.Search;
+  const empty = (cols, text) => {
+    const [title, ...rest] = String(text).split(/(?<=\.)\s+/);
+    const sub =
+      rest.join(" ") || "Try adjusting your filters or check back later.";
+    return (
+      <tr>
+        <td colSpan={cols} className="px-4 py-14">
+          {loading ? (
+            <div className="text-center text-sm text-slate-400">Loading…</div>
+          ) : (
+            <div className="flex flex-col items-center text-center">
+              <div className="flex h-20 w-20 items-center justify-center rounded-full bg-blue-50 text-blue-500">
+                <EmptyIc size={34} strokeWidth={1.6} />
+              </div>
+              <div className="mt-4 text-base font-extrabold text-slate-900">
+                {title}
+              </div>
+              <div className="mt-1 max-w-xs text-sm text-slate-400">{sub}</div>
+            </div>
+          )}
+        </td>
+      </tr>
+    );
+  };
+
+  const tabs = [
+    ["redemptions", "Redemptions", "Gift", pending.length],
+    ["rewards", "Rewards", "Star", 0],
+    ["customers", "Customer Points", "User", 0],
+    ["ledger", "Ledger", "BookOpen", 0],
+    ["settings", "Settings", "Settings", 0],
+  ];
+  const searchable = ["redemptions", "customers", "ledger"].includes(tab);
+  const SearchToggleIc = Icons.SlidersHorizontal || Icons.Filter;
+  const activeRewards = rewards.filter((r) => r.active).length;
+
+  return (
+    <div className="mx-auto max-w-7xl">
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <h1 className="cb-page-title text-2xl font-extrabold text-slate-900">
+          Loyalty Points
+        </h1>
+        {settings && (
+          <span
+            className={`rounded-full px-3 py-1 text-xs font-bold ${settings.enabled ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}
+          >
+            Program {settings.enabled ? "ON" : "OFF — hidden from customers"}
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-2">
+          {canManage && (
+            <button
+              type="button"
+              onClick={() => setAdjust(true)}
+              className="flex h-10 items-center gap-1.5 rounded-xl bg-blue-600 px-4 text-sm font-bold text-white hover:bg-blue-700"
+            >
+              <Icons.Plus size={16} /> Adjust Points
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={refresh}
+            title="Refresh"
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50"
+          >
+            <Icons.RefreshCw
+              size={15}
+              className={loading ? "animate-spin" : ""}
+            />
+          </button>
+        </div>
+      </div>
+
+      <div className="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {stat(
+          "Gift",
+          "bg-blue-50 text-blue-600",
+          "Total Redemptions",
+          redemptions.length,
+        )}
+        {stat(
+          "CheckCircle2",
+          "bg-emerald-50 text-emerald-600",
+          "Collected",
+          redemptions.filter((r) => r.status === "Collected").length,
+        )}
+        {stat(
+          "XCircle",
+          "bg-red-50 text-red-500",
+          "Cancelled",
+          redemptions.filter((r) => r.status === "Cancelled").length,
+        )}
+        {stat(
+          "Hourglass",
+          "bg-amber-50 text-amber-600",
+          "Pending Pickup",
+          pending.length,
+        )}
+      </div>
+
+      {error && (
+        <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
+          {error}
+        </div>
+      )}
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="-mx-1 mb-4 flex items-center gap-1 overflow-x-auto border-b border-slate-200">
+          {tabs.map(([k, l, icon, count]) => {
+            const TabIc = Icons[icon];
+            const on = tab === k;
+            return (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setTab(k)}
+                className={`-mb-px flex h-11 shrink-0 items-center gap-2 border-b-2 px-4 text-sm font-bold transition-colors ${on ? "border-blue-600 text-blue-600" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+              >
+                {TabIc && <TabIc size={16} />}
+                {l}
+                {count > 0 && (
+                  <span className="rounded-full bg-amber-100 px-1.5 text-[11px] font-extrabold text-amber-700">
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        {tab !== "settings" && (
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            {tab === "redemptions" &&
+              ["Ready for Pickup", "Collected", "Cancelled", "all"].map(
+                (st) => (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={() => setStatusF(st)}
+                    className={`h-9 rounded-full px-4 text-xs font-bold transition-colors ${statusF === st ? "bg-blue-600 text-white shadow-sm" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                  >
+                    {st === "all" ? "All" : st}
+                  </button>
+                ),
+              )}
+            {tab === "rewards" && (
+              <span className="text-sm text-slate-500">
+                <b className="text-slate-800">{activeRewards}</b> active ·{" "}
+                {rewards.length - activeRewards} hidden
+              </span>
+            )}
+            {tab === "customers" && (
+              <span className="text-sm text-slate-500">
+                Points outstanding{" "}
+                <b className="text-amber-600">{fmtPts(outstanding)}</b> ·{" "}
+                <b className="text-slate-800">{accounts.length}</b> customers
+              </span>
+            )}
+            {tab === "ledger" && (
+              <span className="text-sm text-slate-500">
+                Latest {ledger.length} entries
+              </span>
+            )}
+            <div className="ml-auto flex items-center gap-2">
+              {searchable && (showSearch || search) && (
+                <div className="relative w-56 sm:w-72">
+                  <Icons.Search
+                    size={15}
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                  />
+                  <input
+                    autoFocus
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Search Customer ID, name, code…"
+                    className="h-9 w-full rounded-full border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                  />
+                </div>
+              )}
+              {searchable && (
+                <button
+                  type="button"
+                  title="Search & filter"
+                  onClick={() => {
+                    if (showSearch || search) {
+                      setSearch("");
+                      setShowSearch(false);
+                    } else setShowSearch(true);
+                  }}
+                  className={`flex h-9 w-9 items-center justify-center rounded-xl transition-colors ${showSearch || search ? "bg-blue-50 text-blue-600" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}
+                >
+                  <SearchToggleIc size={16} />
+                </button>
+              )}
+              {tab === "rewards" && canManage && (
+                <button
+                  type="button"
+                  onClick={() => setRewardModal({})}
+                  className="flex h-9 items-center gap-1.5 rounded-full bg-blue-600 px-4 text-xs font-bold text-white hover:bg-blue-700"
+                >
+                  <Icons.Plus size={15} /> Add Reward
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {tab === "redemptions" && (
+          <>
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full min-w-[860px] text-sm">
+                {th([
+                  "Code",
+                  "Date",
+                  "Customer",
+                  "Reward",
+                  "Points",
+                  "Status",
+                  "",
+                ])}
+                <tbody className="divide-y divide-slate-100">
+                  {!shownRedemptions.length &&
+                    empty(7, "No redemptions found.")}
+                  {shownRedemptions.map((r) => (
+                    <tr key={r.id} className="hover:bg-slate-50/70">
+                      <td className="px-4 py-3 font-bold text-slate-800">
+                        {r.code}
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">
+                        {cdDate(r.created_at)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <LoyaltyCustomerCell c={cmap[String(r.customer_id)]} />
+                      </td>
+                      <td className="px-4 py-3 text-slate-800">
+                        {r.reward_name}
+                      </td>
+                      <td className="px-4 py-3 font-bold text-amber-600">
+                        {fmtPts(r.points_spent)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`rounded-md px-2 py-1 text-[11px] font-bold ${LOYALTY_STATUS_TONE[r.status] || "bg-slate-100 text-slate-500"}`}
+                        >
+                          {r.status}
+                        </span>
+                        {r.status === "Cancelled" && r.cancel_reason && (
+                          <div className="mt-1 text-[11px] text-slate-400">
+                            {r.cancel_reason}
+                          </div>
+                        )}
+                        {r.status === "Collected" && r.collected_by && (
+                          <div className="mt-1 text-[11px] text-slate-400">
+                            by {r.collected_by}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {canManage && r.status === "Ready for Pickup" && (
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              disabled={busyId === r.id}
+                              onClick={() => collect(r)}
+                              className="h-8 rounded-lg bg-emerald-600 px-3 text-xs font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+                            >
+                              Collected
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setCancelRow(r)}
+                              className="h-8 rounded-lg border border-red-200 px-3 text-xs font-bold text-red-600 hover:bg-red-50"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        {tab === "rewards" && (
+          <>
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full min-w-[760px] text-sm">
+                {th(["Reward", "Points", "Stock", "Status", ""])}
+                <tbody className="divide-y divide-slate-100">
+                  {!rewards.length &&
+                    empty(
+                      5,
+                      "No rewards yet. Add the first one, e.g. a water bottle.",
+                    )}
+                  {rewards.map((r) => (
+                    <tr key={r.id} className="hover:bg-slate-50/70">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          {r.image_url ? (
+                            <img
+                              src={r.image_url}
+                              alt=""
+                              className="h-11 w-11 rounded-lg object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+                              <Icons.Gift size={18} />
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <div className="font-semibold text-slate-800">
+                              {r.name_en}
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              {r.name_km || "—"}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 font-bold text-amber-600">
+                        {fmtPts(r.points_cost)}
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">
+                        {r.stock == null ? (
+                          "Unlimited"
+                        ) : r.stock === 0 ? (
+                          <span className="font-bold text-red-600">
+                            Out of stock
+                          </span>
+                        ) : (
+                          r.stock
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`rounded-md px-2 py-1 text-[11px] font-bold ${r.active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}
+                        >
+                          {r.active ? "Active" : "Hidden"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {canManage && (
+                          <button
+                            type="button"
+                            onClick={() => setRewardModal(r)}
+                            className="h-8 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-600 hover:bg-slate-50"
+                          >
+                            Edit
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        {tab === "customers" && (
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full min-w-[640px] text-sm">
+              {th(["Customer", "Points Balance", "Last Updated", ""])}
+              <tbody className="divide-y divide-slate-100">
+                {!shownAccounts.length &&
+                  empty(4, "No customer has points yet.")}
+                {shownAccounts.map((a) => {
+                  const c = cmap[String(a.customer_id)];
+                  return (
+                    <tr key={a.customer_id} className="hover:bg-slate-50/70">
+                      <td className="px-4 py-3">
+                        <LoyaltyCustomerCell c={c} />
+                      </td>
+                      <td
+                        className={`px-4 py-3 font-bold ${Number(a.balance) < 0 ? "text-red-600" : "text-amber-600"}`}
+                      >
+                        {fmtPts(a.balance)}
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">
+                        {cdDate(a.updated_at)}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {canManage && c && (
+                          <button
+                            type="button"
+                            onClick={() => setAdjust(c)}
+                            className="h-8 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-600 hover:bg-slate-50"
+                          >
+                            Adjust
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {tab === "ledger" && (
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full min-w-[820px] text-sm">
+              {th([
+                "Date",
+                "Customer",
+                "Type",
+                "Points",
+                "Balance After",
+                "Note",
+                "By",
+              ])}
+              <tbody className="divide-y divide-slate-100">
+                {!shownLedger.length && empty(7, "No points activity yet.")}
+                {shownLedger.map((l) => (
+                  <tr key={l.id} className="hover:bg-slate-50/70">
+                    <td className="px-4 py-3 text-slate-600">
+                      {cdDate(l.created_at)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <LoyaltyCustomerCell c={cmap[String(l.customer_id)]} />
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {LOYALTY_TYPE_LABEL[l.type] || l.type}
+                    </td>
+                    <td
+                      className={`px-4 py-3 font-bold ${l.points > 0 ? "text-emerald-600" : "text-red-600"}`}
+                    >
+                      {l.points > 0 ? "+" : "−"}
+                      {fmtPts(Math.abs(l.points))}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {fmtPts(l.balance_after)}
+                    </td>
+                    <td className="px-4 py-3 text-slate-500">
+                      {l.note || "—"}
+                    </td>
+                    <td className="px-4 py-3 text-slate-500">
+                      {l.created_by || "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {tab === "settings" &&
+          (settings ? (
+            <LoyaltySettingsForm
+              key={String(settings.updated_at)}
+              settings={settings}
+              canManage={canManage}
+              onSaved={refresh}
+            />
+          ) : (
+            <p className="py-8 text-center text-sm text-slate-400">
+              {loading ? "Loading…" : "Settings are not available."}
+            </p>
+          ))}
+      </div>
+
+      {rewardModal && (
+        <LoyaltyRewardModal
+          row={rewardModal}
+          onClose={() => setRewardModal(null)}
+          onDone={() => {
+            setRewardModal(null);
+            refresh();
+          }}
+        />
+      )}
+      {cancelRow && (
+        <LoyaltyCancelModal
+          row={cancelRow}
+          onClose={() => setCancelRow(null)}
+          onDone={() => {
+            setCancelRow(null);
+            refresh();
+          }}
+        />
+      )}
+      {adjust && (
+        <LoyaltyAdjustModal
+          initialCustomer={adjust === true ? null : adjust}
+          onClose={() => setAdjust(null)}
+          onDone={() => {
+            setAdjust(null);
+            refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 function WalletTopUpPage() {
   const { user } = useAuth();
   const canTopUp = hasPermission(user, "payment.manage");
@@ -58624,6 +60662,7 @@ function AdminApp() {
                 element={<CustomerRecoveryPage />}
               />
               <Route path="/wallet-top-up" element={<WalletTopUpPage />} />
+              <Route path="/loyalty" element={<LoyaltyPage />} />
               <Route path="/reports/:key" element={<ReportsPage />} />
               <Route
                 path="/notifications"
@@ -58648,6 +60687,7 @@ function AdminApp() {
                     "/customer-recovery", // custom page above
                     "/settings",
                     "/wallet-top-up",
+                    "/loyalty", // custom page above
                     "/delivery",
                     "/shipments", // module removed — Container is the only grouping
                     "/air-shipments", // AIR / Indonesia is not part of this deployment
@@ -58814,7 +60854,7 @@ body{background:var(--cb-bg);color:var(--cb-text);}
 html,body{overscroll-behavior:none;}
 .cb-app{min-height:100vh;background:var(--cb-bg);}
 /* Admin shell follows the real visible viewport so fixed overlays and the shell stay aligned. */
-.cb-app.h-screen{height:100vh;height:100dvh;overflow:hidden;}
+.cb-app.h-screen{height:100vh;height:100dvh;overflow:hidden;overflow:clip;max-width:100vw;}
 .cb-app *{font-family:inherit;}
 .cb-surface{background:#fff;border:1px solid var(--cb-border);border-radius:16px;box-shadow:0 8px 30px rgba(15,31,61,.055);}
 .cb-sidebar{background:linear-gradient(180deg,#0b1b38 0%,#0f2346 100%);}
