@@ -752,6 +752,7 @@ const DEFAULT_SYSTEM_SETTINGS = {
     address: "",
     website: "",
     currency: "USD",
+    support: { serviceText: "", phones: [], socials: [] },
   },
   shipping: {
     pricingMethod: "fixed_size",
@@ -816,6 +817,15 @@ function mergeSystemSettings(saved) {
       ...DEFAULT_SYSTEM_SETTINGS.company,
       ...(value.company || {}),
       logoDataUrl: value.company?.logoDataUrl || "",
+      support: {
+        serviceText: value.company?.support?.serviceText || "",
+        phones: Array.isArray(value.company?.support?.phones)
+          ? value.company.support.phones
+          : [],
+        socials: Array.isArray(value.company?.support?.socials)
+          ? value.company.support.socials
+          : [],
+      },
     },
     shipping: {
       ...DEFAULT_SYSTEM_SETTINGS.shipping,
@@ -825,6 +835,185 @@ function mergeSystemSettings(saved) {
     },
     label: { ...DEFAULT_SYSTEM_SETTINGS.label, ...(value.label || {}) },
   };
+}
+
+// ------------------------------------------------------------
+// Help & Support contacts (Admin → System Settings → Help & Support)
+// Stored inside system_settings.company.support (no extra SQL needed) and
+// shown to customers at Profile → Help & Support.
+// ------------------------------------------------------------
+const SUPPORT_SOCIAL_TYPES = [
+  ["messenger", "Messenger"],
+  ["facebook", "Facebook"],
+  ["telegram", "Telegram"],
+  ["tiktok", "TikTok"],
+  ["instagram", "Instagram"],
+  ["youtube", "YouTube"],
+  ["whatsapp", "WhatsApp"],
+  ["website", "Website"],
+];
+const supportNewId = () =>
+  `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+// Turn whatever the admin typed (full link, @username, phone, domain) into a
+// tappable https link.
+function supportSocialUrl(type, raw) {
+  const v = String(raw || "").trim();
+  if (!v) return "";
+  if (/^https?:\/\//i.test(v)) return v;
+  const handle = v.replace(/^@/, "");
+  if (type === "telegram") return `https://t.me/${handle}`;
+  if (type === "messenger") return `https://m.me/${handle}`;
+  if (type === "whatsapp") return `https://wa.me/${v.replace(/\D/g, "")}`;
+  return `https://${v}`;
+}
+const supportTelUrl = (n) => `tel:${String(n || "").replace(/[^\d+]/g, "")}`;
+
+function SupportSettingsPanel({ settings, update }) {
+  const sup = settings.company.support;
+  const set = (next) => update("company", "support", { ...sup, ...next });
+  const input =
+    "w-full h-11 rounded-xl border border-slate-200 bg-white px-3.5 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
+  const patch = (key, id, p) =>
+    set({ [key]: sup[key].map((x) => (x.id === id ? { ...x, ...p } : x)) });
+  const remove = (key, id) =>
+    set({ [key]: sup[key].filter((x) => x.id !== id) });
+  const delBtn = (onClick) => (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Remove"
+      className="h-11 w-11 shrink-0 grid place-items-center rounded-xl border border-slate-200 text-slate-400 hover:text-red-600 hover:bg-red-50"
+    >
+      <Icons.Trash2 size={16} />
+    </button>
+  );
+  return (
+    <>
+      <div className="p-6 border-b border-slate-100">
+        <h2 className="text-lg font-bold text-slate-900">Help & Support</h2>
+        <p className="text-sm text-slate-500 mt-1">
+          Phone numbers and chat links shown to customers at Profile → Help &
+          Support. Customers tap a number to call, or a link to open the chat.
+        </p>
+      </div>
+      <div className="p-6 space-y-8">
+        <label className="block">
+          <span className="text-sm font-semibold text-slate-700">
+            Intro text
+          </span>
+          <input
+            className={`${input} mt-1.5`}
+            value={sup.serviceText}
+            maxLength={120}
+            placeholder="Chat or call to our customer support."
+            onChange={(e) => set({ serviceText: e.target.value })}
+          />
+        </label>
+
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold text-slate-900">Phone numbers</h3>
+            <button
+              type="button"
+              onClick={() =>
+                set({
+                  phones: [
+                    ...sup.phones,
+                    { id: supportNewId(), label: "", number: "" },
+                  ],
+                })
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+            >
+              <Icons.Plus size={15} /> Add phone
+            </button>
+          </div>
+          <div className="space-y-2.5">
+            {sup.phones.length === 0 && (
+              <p className="text-sm text-slate-400">No phone numbers yet.</p>
+            )}
+            {sup.phones.map((p) => (
+              <div key={p.id} className="flex gap-2">
+                <input
+                  className={input}
+                  value={p.label}
+                  placeholder="Label (e.g. Head Office)"
+                  onChange={(e) =>
+                    patch("phones", p.id, { label: e.target.value })
+                  }
+                />
+                <input
+                  className={input}
+                  type="tel"
+                  value={p.number}
+                  placeholder="069 329 701"
+                  onChange={(e) =>
+                    patch("phones", p.id, { number: e.target.value })
+                  }
+                />
+                {delBtn(() => remove("phones", p.id))}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold text-slate-900">Social media / chat</h3>
+            <button
+              type="button"
+              onClick={() =>
+                set({
+                  socials: [
+                    ...sup.socials,
+                    { id: supportNewId(), type: "messenger", url: "" },
+                  ],
+                })
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-700 hover:bg-blue-100"
+            >
+              <Icons.Plus size={15} /> Add link
+            </button>
+          </div>
+          <div className="space-y-2.5">
+            {sup.socials.length === 0 && (
+              <p className="text-sm text-slate-400">No links yet.</p>
+            )}
+            {sup.socials.map((s) => (
+              <div key={s.id} className="flex gap-2">
+                <select
+                  className={`${input} !w-40 shrink-0`}
+                  value={s.type}
+                  onChange={(e) =>
+                    patch("socials", s.id, { type: e.target.value })
+                  }
+                >
+                  {SUPPORT_SOCIAL_TYPES.map(([k, l]) => (
+                    <option key={k} value={k}>
+                      {l}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className={input}
+                  value={s.url}
+                  placeholder="Link or @username"
+                  onChange={(e) =>
+                    patch("socials", s.id, { url: e.target.value })
+                  }
+                />
+                {delBtn(() => remove("socials", s.id))}
+              </div>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-slate-400">
+            Paste the full link (https://…) or just the @username for Telegram /
+            Messenger. Rows with an empty link are hidden from customers.
+          </p>
+        </section>
+      </div>
+    </>
+  );
 }
 
 function getSystemSettings() {
@@ -32594,7 +32783,14 @@ const CustomerApp = (() => {
           ]
         : []),
       ...(feat("profile_help")
-        ? [[HelpCircle, "teal", tr("Help & Support", "ជំនួយ និងការគាំទ្រ")]]
+        ? [
+            [
+              HelpCircle,
+              "teal",
+              tr("Help & Support", "ជំនួយ និងការគាំទ្រ"),
+              () => nav(P("/profile/help")),
+            ],
+          ]
         : []),
     ];
     return (
@@ -32766,6 +32962,138 @@ const CustomerApp = (() => {
               {tr("Log Out", "ចាកចេញ")}
             </Btn>
           </div>
+        </div>
+      </>
+    );
+  }
+
+  // ---------- Help & Support (customer) ----------
+  // Contacts come from Admin → System Settings → Help & Support.
+  const SOCIAL_LOOK = {
+    messenger: [
+      "bg-gradient-to-br from-sky-400 via-blue-500 to-fuchsia-500",
+      Icons.MessageCircle,
+    ],
+    facebook: ["bg-[#1877F2]", null],
+    telegram: ["bg-[#29A9EA]", Icons.Send],
+    tiktok: ["bg-black", Icons.Music2],
+    instagram: [
+      "bg-gradient-to-br from-amber-400 via-rose-500 to-fuchsia-600",
+      Icons.Camera,
+    ],
+    youtube: ["bg-[#FF0000]", Icons.Play],
+    whatsapp: ["bg-[#25D366]", Icons.Phone],
+    website: ["bg-slate-600", Icons.Globe],
+  };
+  function CustomerHelp() {
+    const { tr } = useApp();
+    const sup = useSystemSettings()?.company?.support || {};
+    const phones = (sup.phones || []).filter((p) => p.number?.trim());
+    const socials = (sup.socials || []).filter((s) => s.url?.trim());
+    const nameOf = (type) =>
+      SUPPORT_SOCIAL_TYPES.find(([k]) => k === type)?.[1] || type;
+    return (
+      <>
+        <Top title={tr("Help & Support", "ជំនួយ និងការគាំទ្រ")} back />
+        <div className="px-4 pt-5 space-y-5">
+          <Card className="p-4 flex items-center gap-4">
+            <span className="w-14 h-14 rounded-2xl grid place-items-center shrink-0 text-white bg-gradient-to-br from-violet-400 to-purple-600 shadow-sm">
+              <Icons.Headset size={28} />
+            </span>
+            <div>
+              <p className="font-bold text-violet-700">
+                {tr("Customer Service", "សេវាកម្មអតិថិជន")}
+              </p>
+              <p className="text-sm text-slate-600 mt-0.5">
+                {sup.serviceText ||
+                  tr(
+                    "Chat or call to our customer support.",
+                    "ទាក់ទង ឬហៅមកក្រុមការងាររបស់យើង។",
+                  )}
+              </p>
+            </div>
+          </Card>
+
+          {phones.length > 0 && (
+            <section>
+              <h2 className="font-bold mb-2.5 px-0.5">
+                {tr("Contact By Phone Number", "ទាក់ទងតាមលេខទូរស័ព្ទ")}
+              </h2>
+              <div className="grid grid-cols-2 gap-3">
+                {phones.map((p) => (
+                  <a
+                    key={p.id}
+                    href={supportTelUrl(p.number)}
+                    className="bg-white rounded-2xl shadow-[0_2px_12px_-4px_rgba(15,40,90,.12)] p-3.5 active:bg-slate-50 block"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-[15px] font-semibold leading-snug">
+                        {p.label || tr("Call us", "ហៅមកយើង")}
+                      </span>
+                      <Icons.PhoneCall
+                        size={18}
+                        className="text-violet-600 shrink-0 mt-0.5"
+                      />
+                    </div>
+                    <p className="mt-2 text-[15px] text-slate-700">
+                      {p.number}
+                    </p>
+                  </a>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {socials.length > 0 && (
+            <section>
+              <h2 className="font-bold mb-2.5 px-0.5">
+                {tr("Official Social Media", "បណ្តាញសង្គមផ្លូវការ")}
+              </h2>
+              <div className="grid grid-cols-2 gap-3">
+                {socials.map((s) => {
+                  const [bg, G] = SOCIAL_LOOK[s.type] || SOCIAL_LOOK.website;
+                  return (
+                    <a
+                      key={s.id}
+                      href={supportSocialUrl(s.type, s.url)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="bg-white rounded-2xl shadow-[0_2px_12px_-4px_rgba(15,40,90,.12)] px-3 py-2.5 flex items-center gap-3 active:bg-slate-50"
+                    >
+                      <span
+                        className={`w-9 h-9 rounded-full grid place-items-center shrink-0 text-white ${bg}`}
+                      >
+                        {G ? (
+                          <G
+                            size={18}
+                            fill={
+                              s.type === "youtube" ? "currentColor" : "none"
+                            }
+                          />
+                        ) : (
+                          <span className="font-extrabold text-lg leading-none">
+                            f
+                          </span>
+                        )}
+                      </span>
+                      <span className="font-medium text-[15px] truncate">
+                        {nameOf(s.type)}
+                      </span>
+                    </a>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          {phones.length === 0 && socials.length === 0 && (
+            <p className="text-center text-sm text-slate-400 py-10">
+              {tr(
+                "Contact details are not available yet.",
+                "មិនទាន់មានព័ត៌មានទំនាក់ទំនងនៅឡើយទេ។",
+              )}
+            </p>
+          )}
         </div>
       </>
     );
@@ -33955,6 +34283,14 @@ const CustomerApp = (() => {
             <Route path="change-password" element={<ChangePassword />} />
             <Route path="profile" element={<Profile />} />
             <Route path="profile/settings" element={<CustomerSettings />} />
+            <Route
+              path="profile/help"
+              element={
+                <Gate k="profile_help">
+                  <CustomerHelp />
+                </Gate>
+              }
+            />
           </Route>
           <Route path="*" element={<Navigate to={P()} replace />} />
         </Routes>
@@ -49834,7 +50170,9 @@ function SettingsPage() {
           ? "Company profile is now synced to Supabase."
           : tab === "shipping"
             ? "Normal and Sensitive shipping policies are synced to Supabase and added to policy history."
-            : "Print label settings are now synced to Supabase.",
+            : tab === "support"
+              ? "Help & Support contacts are now synced to Supabase."
+              : "Print label settings are now synced to Supabase.",
       );
     } catch (err) {
       const msg = err?.message || "Unable to save settings.";
@@ -49926,6 +50264,7 @@ function SettingsPage() {
 
   const tabs = [
     ["company", "Company Profile", Icons.Building2],
+    ["support", "Help & Support", Icons.Headset],
     ["shipping", "Shipping & Pricing", Icons.BadgeDollarSign],
     ["history", "Policy History", Icons.History],
     ["label", "Print Label", Icons.Printer],
@@ -50494,6 +50833,9 @@ function SettingsPage() {
                   )}
                 </div>
               </>
+            )}
+            {tab === "support" && (
+              <SupportSettingsPanel settings={settings} update={update} />
             )}
             {tab === "label" && (
               <>
