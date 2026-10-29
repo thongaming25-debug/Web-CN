@@ -1295,6 +1295,22 @@ const NAV_SECTIONS = [
     ],
   },
   {
+    label: "Shop",
+    items: [
+      {
+        label: "Shop Dashboard",
+        icon: "LayoutDashboard",
+        path: "/shop/dashboard",
+      },
+      { label: "Shop Orders", icon: "ShoppingBag", path: "/shop/orders" },
+      { label: "Shop Products", icon: "Package", path: "/shop/products" },
+      { label: "Shop Categories", icon: "Tags", path: "/shop/categories" },
+      { label: "Shop Inventory", icon: "Boxes", path: "/shop/inventory" },
+      { label: "Sales Reports", icon: "BarChart3", path: "/shop/reports" },
+      { label: "Shop Settings", icon: "Settings", path: "/shop/settings" },
+    ],
+  },
+  {
     label: "Reports",
     items: [
       {
@@ -1476,6 +1492,26 @@ const PERMISSION_GROUPS = [
     ],
   },
   {
+    key: "shop",
+    label: "Online Shop",
+    perms: [
+      ["shop.view", "View Shop Catalog, Inventory & Settings"],
+      ["shop.product.edit", "Create / Edit Shop Products & Variants"],
+      [
+        "shop.product.delete",
+        "Delete Shop Products & Variants (never-ordered only)",
+      ],
+      ["shop.category.manage", "Manage Shop Categories"],
+      ["shop.stock.manage", "Receive / Adjust Shop Stock"],
+      ["shop.order.review", "View Shop Orders"],
+      ["shop.order.accept", "Accept Shop Orders / Cancel Unpaid"],
+      ["shop.order.refund", "Reject & Refund Shop Orders"],
+      ["shop.fulfill", "Prepare, Deliver & Complete Shop Orders"],
+      ["shop.report", "View Shop Sales Reports"],
+      ["shop.settings", "Edit Shop Settings"],
+    ],
+  },
+  {
     key: "warehouse",
     label: "Warehouses",
     perms: [
@@ -1551,6 +1587,13 @@ const PATH_VIEW = {
   "/exceptions": "exception.view",
   "/wallet-top-up": "payment.manage",
   "/loyalty": "points.view",
+  "/shop/dashboard": "shop.report",
+  "/shop/reports": "shop.report",
+  "/shop/orders": "shop.order.review",
+  "/shop/products": "shop.view",
+  "/shop/categories": "shop.view",
+  "/shop/inventory": "shop.view",
+  "/shop/settings": "shop.view",
   "/users": "user.view",
   "/roles": "role.view",
   "/customer-features": "role.view",
@@ -27863,6 +27906,13 @@ const CUSTOMER_FEATURES = [
   },
   {
     group: "Bottom navigation",
+    key: "tab_shop",
+    label: "Online Shop",
+    kh: "ហាងអនឡាញ",
+    desc: "Shop tab, product pages, cart, checkout and My Shop Orders.",
+  },
+  {
+    group: "Bottom navigation",
     key: "tab_address",
     label: "My Addresses",
     kh: "អាសយដ្ឋាន",
@@ -30159,6 +30209,7 @@ const CustomerApp = (() => {
         tr("CN Orders", "CN Orders"),
         feat("tab_cn_orders"),
       ],
+      [P("/shop"), Icons.Store, tr("Shop", "ហាង"), feat("tab_shop")],
       [
         P("/air-shipments"),
         Icons.Plane,
@@ -31540,6 +31591,8 @@ const CustomerApp = (() => {
         "CN order paid (cash)",
         "បានបង់ CN Order (សាច់ប្រាក់)",
       ),
+      shop_order_payment_wallet: tr("Shop order payment", "ការបង់ប្រាក់ហាង"),
+      shop_order_refund_wallet: tr("Shop order refund", "សងប្រាក់ហាងវិញ"),
     };
     return (
       <>
@@ -34201,6 +34254,2160 @@ const CustomerApp = (() => {
   // ---------- Root ----------
   // Mounted inside the admin App at /customer/* (see App.jsx snippet).
   // It has its own provider + auth check and does NOT use admin Layout.
+  // ============================================================
+  // ONLINE SHOP — Customer Portal (Phase 3)
+  // Customers never touch shop_* tables: everything goes through the
+  // customer-safe RPCs (shop_catalog, shop_cart_*, shop_place_order,
+  // shop_pay_order, shop_my_orders ...). Prices, stock and totals are
+  // always decided by the database, never by this screen.
+  // ============================================================
+  const SHOP_C_STATUS = {
+    "Waiting Payment": [
+      "Waiting Payment",
+      "រង់ចាំការបង់ប្រាក់",
+      "bg-amber-50 text-amber-700",
+    ],
+    Processing: ["Processing", "កំពុងពិនិត្យ", "bg-blue-50 text-blue-700"],
+    "Accepted / Preparing Order": [
+      "Preparing Order",
+      "កំពុងរៀបចំ",
+      "bg-indigo-50 text-indigo-700",
+    ],
+    "Ready for Pickup": [
+      "Ready for Pickup",
+      "រួចរាល់ មកយកបាន",
+      "bg-teal-50 text-teal-700",
+    ],
+    "Ready for Delivery": [
+      "Ready for Delivery",
+      "រួចរាល់ រង់ចាំដឹក",
+      "bg-teal-50 text-teal-700",
+    ],
+    Delivery: [
+      "Out for Delivery",
+      "កំពុងដឹកជូន",
+      "bg-violet-50 text-violet-700",
+    ],
+    "Complete Order": [
+      "Completed",
+      "បានបញ្ចប់",
+      "bg-emerald-50 text-emerald-700",
+    ],
+    "Rejected & Refunded": [
+      "Rejected & Refunded",
+      "បដិសេធ និងបានសងប្រាក់",
+      "bg-red-50 text-red-700",
+    ],
+    Canceled: ["Canceled", "បានលុបចោល", "bg-slate-100 text-slate-600"],
+  };
+  const SHOP_C_PAY = {
+    Unpaid: ["Unpaid", "មិនទាន់បង់"],
+    Paid: ["Paid", "បានបង់"],
+    Refunded: ["Refunded", "បានសងវិញ"],
+  };
+  function ShopCStatus({ status }) {
+    const { tr } = useApp();
+    const s = SHOP_C_STATUS[status] || [
+      status,
+      status,
+      "bg-slate-100 text-slate-600",
+    ];
+    return (
+      <span
+        className={`text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap shrink-0 ${s[2]}`}
+      >
+        {tr(s[0], s[1])}
+      </span>
+    );
+  }
+  // Friendly, translated messages. Raw database text is never shown.
+  function shopCErr(e, tr) {
+    const m = String(e?.message || e || "");
+    if (/SHOP_UNAVAILABLE/.test(m))
+      return tr("The shop is not available right now.", "ហាងមិនទាន់បើកទេ។");
+    const st = m.match(/only (\d+) available/);
+    if (/INSUFFICIENT_STOCK/.test(m))
+      return st
+        ? tr(`Only ${st[1]} left in stock.`, `នៅសល់ត្រឹម ${st[1]} ក្នុងស្តុក។`)
+        : tr("Not enough stock available.", "ស្តុកមិនគ្រប់គ្រាន់។");
+    if (/ITEM_UNAVAILABLE/.test(m))
+      return tr("A product is no longer available.", "ផលិតផលមួយមិនមានទៀតទេ។");
+    if (/Insufficient wallet balance/i.test(m))
+      return tr(
+        "Your wallet balance is not enough. Please top up first.",
+        "សមតុល្យកាបូបមិនគ្រប់គ្រាន់ សូមបញ្ចូលទឹកប្រាក់ជាមុន។",
+      );
+    if (/PRICE_CHANGED/.test(m))
+      return tr(
+        "Prices changed. Please review your cart.",
+        "តម្លៃបានផ្លាស់ប្តូរ។ សូមពិនិត្យកន្ត្រកឡើងវិញ។",
+      );
+    if (/SHOP_NOT_CONFIGURED/.test(m))
+      return tr(
+        "This option is not available yet. Please contact us.",
+        "ជម្រើសនេះមិនទាន់មានទេ។ សូមទាក់ទងមកយើង។",
+      );
+    if (/ORDER_NOT_(PAYABLE|CANCELABLE)/.test(m))
+      return tr(
+        "This order can no longer be changed.",
+        "ការបញ្ជាទិញនេះមិនអាចកែប្រែបានទៀតទេ។",
+      );
+    const mo = m.match(/MIN_ORDER.*?([\d.]+)/);
+    if (mo)
+      return tr(
+        `The minimum order is ${money(mo[1])}.`,
+        `ការបញ្ជាទិញអប្បបរមាគឺ ${money(mo[1])}។`,
+      );
+    if (/Your cart is empty/.test(m))
+      return tr("Your cart is empty.", "កន្ត្រករបស់អ្នកទទេ។");
+    if (/delivery address/i.test(m))
+      return tr(
+        "Please choose a delivery address.",
+        "សូមជ្រើសរើសអាសយដ្ឋានដឹកជូន។",
+      );
+    if (/Recipient name and phone/.test(m))
+      return tr(
+        "Recipient name and phone are required.",
+        "ត្រូវការឈ្មោះ និងលេខទូរស័ព្ទអ្នកទទួល។",
+      );
+    return tr(
+      "Something went wrong. Please try again.",
+      "មានបញ្ហា សូមព្យាយាមម្តងទៀត។",
+    );
+  }
+  const shopCLabel = (v) => [v?.color, v?.size].filter(Boolean).join(" / ");
+  const shopCVariantText = (snap) =>
+    Object.values(snap || {})
+      .filter(Boolean)
+      .join(" / ");
+  const shopCUuid = () =>
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : String(Date.now()) + Math.random().toString(36).slice(2);
+  const shopCDate = (x) =>
+    x
+      ? new Date(x).toLocaleString(dateLoc(), {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      : "—";
+
+  // Motion + touch styles for the shop screens. Everything respects "reduce motion".
+  const SHOP_C_CSS = `
+@keyframes cb-shop-up{from{opacity:0;transform:translate3d(0,14px,0)}to{opacity:1;transform:none}}
+@keyframes cb-shop-fade{from{opacity:0}to{opacity:1}}
+@keyframes cb-shop-pop{0%{transform:scale(.4)}60%{transform:scale(1.25)}100%{transform:scale(1)}}
+@keyframes cb-shop-bump{0%,100%{transform:none}30%{transform:translateY(-3px) scale(1.14)}65%{transform:scale(.96)}}
+@keyframes cb-shop-tick{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+@keyframes cb-shop-draw{to{stroke-dashoffset:0}}
+.cb-shop-up{animation:cb-shop-up .4s cubic-bezier(.22,1,.36,1) both;animation-delay:var(--d,0ms)}
+.cb-shop-fade{animation:cb-shop-fade .28s ease-out both}
+.cb-shop-pop{animation:cb-shop-pop .38s cubic-bezier(.34,1.56,.64,1) both}
+.cb-shop-bump{animation:cb-shop-bump .45s ease-out}
+.cb-shop-tick{display:inline-block;animation:cb-shop-tick .2s ease-out both}
+.cb-shop-draw{stroke-dasharray:24;stroke-dashoffset:24;animation:cb-shop-draw .4s .05s ease-out forwards}
+.cb-shop-press{touch-action:manipulation;transition:transform .12s ease,background-color .18s ease,border-color .18s ease,color .18s ease,box-shadow .18s ease,opacity .18s ease}
+.cb-shop-press:active:not(:disabled){transform:scale(.95)}
+.cb-shop-card{transition:transform .18s ease,box-shadow .2s ease}
+.cb-shop-card:active{transform:scale(.975)}
+.cb-shop-collapse{display:grid;grid-template-rows:1fr;transition:grid-template-rows .26s ease,opacity .2s ease}
+.cb-shop-collapse.closing{grid-template-rows:0fr;opacity:0}
+.cb-shop-collapse>div{min-height:0;overflow:hidden}
+.cb-shop-snap{scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none;overscroll-behavior-x:contain}
+.cb-shop-snap::-webkit-scrollbar{display:none}
+.cb-shop-hscroll{scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.cb-shop-hscroll::-webkit-scrollbar{display:none}
+.cb-shop-dim{opacity:.55;pointer-events:none;transition:opacity .2s ease}
+.cb-cust-dark .bg-white\\/95{background-color:rgba(21,28,44,.94)}
+.cb-cust-dark .border-emerald-200,.cb-cust-dark .border-emerald-300{border-color:rgba(16,185,129,.4)}
+.cb-cust-dark .text-emerald-700,.cb-cust-dark .text-emerald-800{color:#6ee7b7}
+.cb-cust-dark .border-amber-200{border-color:rgba(245,158,11,.35)}
+@media (prefers-reduced-motion:reduce){
+ .cb-shop-up,.cb-shop-fade,.cb-shop-pop,.cb-shop-bump,.cb-shop-tick{animation:none!important}
+ .cb-shop-draw{animation:none!important;stroke-dashoffset:0}
+ .cb-shop-press,.cb-shop-card,.cb-shop-collapse,.cb-shop-dim{transition:none!important}
+ .cb-shop-snap{scroll-behavior:auto}
+}`;
+  function useShopCss() {
+    useEffect(() => {
+      if (
+        typeof document === "undefined" ||
+        document.getElementById("cb-shop-css")
+      )
+        return;
+      const el = document.createElement("style");
+      el.id = "cb-shop-css";
+      el.textContent = SHOP_C_CSS;
+      document.head.appendChild(el);
+    }, []);
+  }
+  const shopCReduced = () =>
+    typeof window !== "undefined" &&
+    window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const shopCCartChanged = () => {
+    try {
+      window.dispatchEvent(new Event("cb-shop-cart"));
+    } catch (e) {
+      /* ignore */
+    }
+  };
+  const shopCBuzz = () => {
+    try {
+      if (!shopCReduced() && navigator.vibrate) navigator.vibrate(12);
+    } catch (e) {
+      /* ignore */
+    }
+  };
+  const SHOP_C_BAR = { bottom: "calc(56px + env(safe-area-inset-bottom))" };
+  function ShopCCheck({ size = 18 }) {
+    return (
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <path className="cb-shop-draw" d="M5 12.5l4.5 4.5L19 7.5" />
+      </svg>
+    );
+  }
+
+  function ShopCPrice({ final, list, big }) {
+    return (
+      <span>
+        <b className={big ? "text-xl" : "text-[15px]"}>{money(final)}</b>
+        {Number(list) > Number(final) && (
+          <s className="ml-1.5 text-xs text-slate-400">{money(list)}</s>
+        )}
+      </span>
+    );
+  }
+
+  function ShopCCartLink({ count }) {
+    return (
+      <Link
+        to={P("/shop/cart")}
+        aria-label="Cart"
+        className="cb-shop-press relative w-11 h-11 grid place-items-center rounded-full bg-white/15 active:bg-white/30"
+      >
+        <span
+          key={`i${count}`}
+          className="cb-shop-bump grid place-items-center"
+        >
+          <Icons.ShoppingCart size={20} />
+        </span>
+        {count > 0 && (
+          <span
+            key={`b${count}`}
+            className="cb-shop-pop absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center"
+          >
+            {count > 99 ? "99+" : count}
+          </span>
+        )}
+      </Link>
+    );
+  }
+
+  // Cart badge: refreshes after every cart change anywhere in the shop and whenever the app comes back to the screen.
+  function useShopCartCount() {
+    const [n, setN] = useState(0);
+    const alive = useRef(true);
+    const load = async () => {
+      const { data } = await supabase.rpc("shop_cart_get");
+      if (alive.current)
+        setN((data?.items || []).reduce((a, i) => a + i.quantity, 0));
+    };
+    useEffect(() => {
+      alive.current = true;
+      void load();
+      const on = () => void load();
+      window.addEventListener("cb-shop-cart", on);
+      window.addEventListener("focus", on);
+      document.addEventListener("visibilitychange", on);
+      return () => {
+        alive.current = false;
+        window.removeEventListener("cb-shop-cart", on);
+        window.removeEventListener("focus", on);
+        document.removeEventListener("visibilitychange", on);
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    return [n, load];
+  }
+
+  // Swipeable photo gallery (scroll-snap) with dots; taps on thumbnails scroll to the photo.
+  function ShopCGallery({ images, index, onIndex, alt }) {
+    const ref = useRef(null);
+    const raf = useRef(0);
+    useEffect(() => {
+      const el = ref.current;
+      if (!el || !el.clientWidth) return;
+      const target = index * el.clientWidth;
+      if (Math.abs(el.scrollLeft - target) > 4 && el.scrollTo)
+        el.scrollTo({
+          left: target,
+          behavior: shopCReduced() ? "auto" : "smooth",
+        });
+    }, [index, images.length]);
+    const onScroll = () => {
+      cancelAnimationFrame(raf.current);
+      raf.current = requestAnimationFrame(() => {
+        const el = ref.current;
+        if (!el || !el.clientWidth) return;
+        const i = Math.round(el.scrollLeft / el.clientWidth);
+        if (i !== index && i >= 0 && i < images.length) onIndex(i);
+      });
+    };
+    return (
+      <div className="relative">
+        <div
+          ref={ref}
+          onScroll={onScroll}
+          className="cb-shop-snap flex overflow-x-auto"
+        >
+          {(images.length ? images : [null]).map((u, i) => (
+            <div
+              key={u || "none"}
+              className="w-full shrink-0"
+              style={{ scrollSnapAlign: "center" }}
+            >
+              <AirImg
+                src={u}
+                alt={i === 0 ? alt : ""}
+                className="w-full aspect-square max-h-[46vh]"
+                fallbackSize={56}
+                FallbackIcon={Icons.Package}
+              />
+            </div>
+          ))}
+        </div>
+        {images.length > 1 && (
+          <div
+            className="absolute bottom-3 inset-x-0 flex justify-center gap-1.5 pointer-events-none"
+            aria-hidden="true"
+          >
+            {images.map((u, i) => (
+              <span
+                key={u}
+                className={`h-1.5 rounded-full bg-white shadow transition-all duration-300 ${i === index ? "w-5 opacity-100" : "w-1.5 opacity-60"}`}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ---------------- Shop home ----------------
+  function ShopCHomePage() {
+    useShopCss();
+    const { tr } = useApp();
+    const [q, setQ] = useState("");
+    const [cat, setCat] = useState("");
+    const [sort, setSort] = useState("newest");
+    const [cats, setCats] = useState([]);
+    const [items, setItems] = useState([]);
+    const [total, setTotal] = useState(0);
+    const [loading, setLoading] = useState(true);
+    const [more, setMore] = useState(false);
+    const [err, setErr] = useState("");
+    const [cartN] = useShopCartCount();
+    const [reload, setReload] = useState(0);
+    const chipsRef = useRef(null);
+    const PAGE = 20;
+    const [dq, setDq] = useState("");
+    useEffect(() => {
+      const t = setTimeout(() => setDq(q), 300);
+      return () => clearTimeout(t);
+    }, [q]);
+    useEffect(() => {
+      supabase
+        .rpc("shop_categories_public")
+        .then(({ data }) => setCats(data || []));
+    }, []);
+    useEffect(() => {
+      const el =
+        chipsRef.current &&
+        chipsRef.current.querySelector('[aria-selected="true"]');
+      if (el && el.scrollIntoView)
+        el.scrollIntoView({
+          inline: "center",
+          block: "nearest",
+          behavior: shopCReduced() ? "auto" : "smooth",
+        });
+    }, [cat, cats.length]);
+    const fetchPage = async (offset) => {
+      const { data, error } = await supabase.rpc("shop_catalog", {
+        p_search: dq.trim() || null,
+        p_category: cat || null,
+        p_sort: sort,
+        p_limit: PAGE,
+        p_offset: offset,
+      });
+      if (error) throw error;
+      return data;
+    };
+    useEffect(() => {
+      let alive = true;
+      setLoading(true);
+      fetchPage(0)
+        .then((d) => {
+          if (!alive) return;
+          setItems(d.items);
+          setTotal(d.total);
+          setErr("");
+        })
+        .catch((e) => alive && setErr(shopCErr(e, tr)))
+        .finally(() => alive && setLoading(false));
+      return () => {
+        alive = false;
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dq, cat, sort, reload]);
+    async function loadMore() {
+      if (more) return;
+      setMore(true);
+      try {
+        const d = await fetchPage(items.length);
+        setItems((cur) => [...cur, ...d.items]);
+        setTotal(d.total);
+      } catch (e) {
+        setErr(shopCErr(e, tr));
+      }
+      setMore(false);
+    }
+    return (
+      <>
+        <Top
+          title={tr("Shop", "ហាង")}
+          right={<ShopCCartLink count={cartN} />}
+        />
+        <div className="px-4 pt-4 space-y-3 cb-shop-fade">
+          <div className="flex gap-2">
+            <div className="flex-1 relative">
+              <Icons.Search
+                size={18}
+                className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"
+              />
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder={tr("Search products", "ស្វែងរកផលិតផល")}
+                aria-label={tr("Search products", "ស្វែងរកផលិតផល")}
+                enterKeyHint="search"
+                className="w-full h-12 pl-10 pr-10 rounded-xl border border-slate-200 bg-white text-[15px] outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+              />
+              {q && (
+                <button
+                  type="button"
+                  aria-label={tr("Clear search", "សម្អាត")}
+                  onClick={() => setQ("")}
+                  className="cb-shop-press absolute right-1 top-1/2 -translate-y-1/2 w-11 h-11 grid place-items-center rounded-full text-slate-400 active:bg-slate-100"
+                >
+                  <Icons.X size={16} />
+                </button>
+              )}
+            </div>
+            <Link
+              to={P("/shop/orders")}
+              className="cb-shop-press h-12 px-3.5 rounded-xl bg-white border border-slate-200 text-blue-700 text-[13px] font-semibold flex items-center gap-1.5 shrink-0 active:bg-blue-50"
+            >
+              <Icons.Receipt size={17} />
+              {tr("My Orders", "ការបញ្ជាទិញ")}
+            </Link>
+          </div>
+          <div
+            ref={chipsRef}
+            className="cb-shop-hscroll flex gap-2 overflow-x-auto -mx-4 px-4 pb-1"
+            role="tablist"
+          >
+            {[{ id: "", name: tr("All", "ទាំងអស់") }, ...cats].map((c) => (
+              <button
+                key={c.id || "all"}
+                role="tab"
+                aria-selected={cat === c.id}
+                onClick={() => setCat(c.id)}
+                className={`cb-shop-press h-11 px-5 rounded-full text-[14px] font-semibold whitespace-nowrap border ${cat === c.id ? "bg-blue-600 text-white border-blue-600 shadow-[0_6px_16px_-8px_rgba(37,99,235,.8)]" : "bg-white text-slate-600 border-slate-200 active:bg-slate-50"}`}
+              >
+                {c.name}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center justify-between text-[13px] text-slate-500">
+            <span>
+              {loading ? "…" : tr(`${total} products`, `ផលិតផល ${total}`)}
+            </span>
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value)}
+              aria-label={tr("Sort", "តម្រៀប")}
+              className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-[14px] outline-none focus:border-blue-500"
+            >
+              <option value="newest">{tr("Newest", "ថ្មីបំផុត")}</option>
+              <option value="featured">{tr("Featured", "ពិសេស")}</option>
+              <option value="price_asc">
+                {tr("Price: low to high", "តម្លៃ: ទាបទៅខ្ពស់")}
+              </option>
+              <option value="price_desc">
+                {tr("Price: high to low", "តម្លៃ: ខ្ពស់ទៅទាប")}
+              </option>
+              <option value="name">{tr("Name", "ឈ្មោះ")}</option>
+            </select>
+          </div>
+          {err && (
+            <div
+              role="alert"
+              className="rounded-xl bg-red-50 text-red-700 text-sm px-3 py-3 cb-shop-fade"
+            >
+              {err}{" "}
+              <button
+                className="font-semibold underline min-h-[44px] px-1"
+                onClick={() => setReload((n) => n + 1)}
+              >
+                {tr("Retry", "ព្យាយាមម្ដងទៀត")}
+              </button>
+            </div>
+          )}
+          {loading && items.length === 0 && !err && (
+            <div className="grid grid-cols-2 gap-3" aria-hidden="true">
+              {[0, 1, 2, 3].map((i) => (
+                <Card key={i} className="overflow-hidden">
+                  <Skeleton className="w-full aspect-square" delay={i * 80} />
+                  <div className="p-3 space-y-2">
+                    <Skeleton className="h-3.5 w-4/5 rounded" delay={i * 80} />
+                    <Skeleton className="h-4 w-2/5 rounded" delay={i * 80} />
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+          {!loading && !err && items.length === 0 && (
+            <Card className="p-8 text-center text-slate-500 text-sm cb-shop-up">
+              <Icons.PackageSearch
+                size={32}
+                className="mx-auto mb-2 text-slate-300"
+              />
+              {tr("No products found.", "រកមិនឃើញផលិតផលទេ។")}
+            </Card>
+          )}
+          <div
+            className={`grid grid-cols-2 gap-3 ${loading && items.length > 0 ? "cb-shop-dim" : ""}`}
+          >
+            {items.map((p, i) => (
+              <Link
+                key={p.id}
+                to={P(`/shop/p/${p.id}`)}
+                className="block cb-shop-up"
+                style={{ "--d": `${Math.min(i, 8) * 45}ms` }}
+              >
+                <Card className="cb-shop-card overflow-hidden h-full">
+                  <div className="relative">
+                    <AirImg
+                      src={p.image}
+                      alt={p.name}
+                      className="w-full aspect-square"
+                      fallbackSize={34}
+                      FallbackIcon={Icons.Package}
+                    />
+                    {!p.in_stock && (
+                      <span className="absolute inset-x-0 bottom-0 bg-slate-900/70 text-white text-[11px] font-semibold text-center py-1">
+                        {tr("Out of stock", "អស់ស្តុក")}
+                      </span>
+                    )}
+                    {p.has_discount && p.in_stock && (
+                      <span className="absolute left-2 top-2 bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow">
+                        {tr("SALE", "បញ្ចុះតម្លៃ")}
+                      </span>
+                    )}
+                  </div>
+                  <div className="p-3">
+                    <p className="text-[13px] font-semibold leading-snug line-clamp-2 min-h-[2.5rem]">
+                      {p.name}
+                    </p>
+                    <div className="mt-1">
+                      {Number(p.price_from) !== Number(p.price_to) && (
+                        <span className="text-[11px] text-slate-400 mr-1">
+                          {tr("from", "ចាប់ពី")}
+                        </span>
+                      )}
+                      <ShopCPrice
+                        final={p.price_from}
+                        list={
+                          p.has_discount && p.price_from === p.price_to
+                            ? p.list_price
+                            : null
+                        }
+                      />
+                    </div>
+                  </div>
+                </Card>
+              </Link>
+            ))}
+          </div>
+          {items.length < total && (
+            <button
+              onClick={loadMore}
+              disabled={more}
+              className="cb-shop-press w-full h-12 rounded-xl border border-slate-200 bg-white text-[14px] font-semibold text-blue-700 disabled:opacity-60 active:bg-blue-50"
+            >
+              {more ? "…" : tr("Load more", "មើលបន្ថែម")}
+            </button>
+          )}
+        </div>
+      </>
+    );
+  }
+
+  // ---------------- Product page ----------------
+  async function shopCAddToCart(variantId, qty) {
+    const { data: cart, error: e1 } = await supabase.rpc("shop_cart_get");
+    if (e1) throw e1;
+    const have =
+      (cart?.items || []).find((i) => i.variant_id === variantId)?.quantity ||
+      0;
+    const { error } = await supabase.rpc("shop_cart_set", {
+      p_variant_id: variantId,
+      p_quantity: have + qty,
+    });
+    if (error) throw error;
+    shopCCartChanged();
+  }
+
+  function ShopCProductPage() {
+    useShopCss();
+    const { id } = useParams();
+    const nav = useNavigate();
+    const { tr, say } = useApp();
+    const [p, setP] = useState(null);
+    const [err, setErr] = useState("");
+    const [loading, setLoading] = useState(true);
+    const [color, setColor] = useState(null);
+    const [size, setSize] = useState(null);
+    const [vid, setVid] = useState(null);
+    const [qty, setQty] = useState(1);
+    const [img, setImg] = useState(0);
+    const [busy, setBusy] = useState(false);
+    const [added, setAdded] = useState(false);
+    const [msg, setMsg] = useState("");
+    const [cartN] = useShopCartCount();
+    const addedTimer = useRef(0);
+    useEffect(() => () => clearTimeout(addedTimer.current), []);
+
+    useEffect(() => {
+      let alive = true;
+      supabase
+        .rpc("shop_product_detail", { p_product_id: id })
+        .then(({ data, error }) => {
+          if (!alive) return;
+          if (error)
+            setErr(
+              /not found/i.test(error.message)
+                ? tr("This product is not available.", "ផលិតផលនេះមិនមានទេ។")
+                : shopCErr(error, tr),
+            );
+          else {
+            setP(data);
+            const first =
+              data.variants.find((v) => v.in_stock) || data.variants[0];
+            if (first) {
+              setColor(first.color || null);
+              setSize(first.size || null);
+              setVid(first.id);
+            }
+          }
+          setLoading(false);
+        });
+      return () => {
+        alive = false;
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [id]);
+
+    const vars = p?.variants || [];
+    const colors = [...new Set(vars.map((v) => v.color).filter(Boolean))];
+    const sizes = [...new Set(vars.map((v) => v.size).filter(Boolean))];
+    const byOptions = colors.length > 0 || sizes.length > 0;
+    const sel = byOptions
+      ? vars.find(
+          (v) =>
+            (colors.length === 0 || v.color === color) &&
+            (sizes.length === 0 || v.size === size),
+        )
+      : vars.find((v) => v.id === vid) || vars[0];
+    const avail = sel ? sel.available : 0;
+    useEffect(() => {
+      if (qty > Math.max(avail, 1)) setQty(Math.max(avail, 1));
+    }, [avail]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const images = [
+      ...(sel?.image ? [sel.image] : []),
+      ...(p?.images || []),
+    ].filter((u, i, a) => a.indexOf(u) === i);
+    // Choosing another color / size shows that variant's own photo first.
+    useEffect(() => {
+      setImg(0);
+    }, [sel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Picking a color that does not come in the chosen size jumps to a size it does come in.
+    function pickColor(c) {
+      setColor(c);
+      if (sizes.length) {
+        const opts = vars.filter((v) => v.color === c);
+        if (!opts.some((v) => v.size === size)) {
+          const next = opts.find((v) => v.in_stock) || opts[0];
+          if (next) setSize(next.size || null);
+        }
+      }
+    }
+
+    async function add(buyNow) {
+      if (!sel || busy) return;
+      setBusy(true);
+      setMsg("");
+      try {
+        await shopCAddToCart(sel.id, qty);
+        shopCBuzz();
+        if (buyNow) nav(P("/shop/cart"));
+        else {
+          say(tr("Added to cart", "បានដាក់ក្នុងកន្ត្រក"));
+          setAdded(true);
+          clearTimeout(addedTimer.current);
+          addedTimer.current = setTimeout(() => setAdded(false), 1600);
+        }
+      } catch (e) {
+        setMsg(shopCErr(e, tr));
+      }
+      setBusy(false);
+    }
+
+    if (loading)
+      return (
+        <>
+          <Top title={tr("Product", "ផលិតផល")} back />
+          <div className="space-y-3" aria-hidden="true">
+            <Skeleton className="w-full aspect-square max-h-[46vh]" />
+            <div className="px-4 space-y-3">
+              <Skeleton className="h-6 w-2/3 rounded-lg" />
+              <Skeleton className="h-7 w-1/3 rounded-lg" delay={80} />
+              <Skeleton className="h-11 w-full rounded-xl" delay={160} />
+            </div>
+          </div>
+        </>
+      );
+    if (err || !p)
+      return (
+        <>
+          <Top title={tr("Product", "ផលិតផល")} back />
+          <div className="p-6 text-center text-slate-500 text-sm cb-shop-fade">
+            {err}
+          </div>
+        </>
+      );
+    const chip = (active, disabled, soldOut) =>
+      `cb-shop-press min-w-[48px] h-11 px-4 rounded-xl border text-[14px] font-semibold ${active ? "bg-blue-600 text-white border-blue-600 shadow-[0_6px_16px_-8px_rgba(37,99,235,.8)]" : "bg-white text-slate-700 border-slate-200 active:bg-slate-50"} ${disabled ? "opacity-30 pointer-events-none" : ""} ${soldOut && !active ? "line-through text-slate-400 opacity-70" : ""}`;
+    const pct =
+      sel && sel.unit_discount > 0
+        ? Math.round((sel.unit_discount / sel.unit_price) * 100)
+        : 0;
+    const canBuy = !!sel && avail > 0 && !busy;
+    const stockTone =
+      avail <= 0
+        ? "text-red-600"
+        : avail <= 5
+          ? "text-amber-600"
+          : "text-emerald-600";
+    const dot =
+      avail <= 0
+        ? "bg-red-500"
+        : avail <= 5
+          ? "bg-amber-500"
+          : "bg-emerald-500";
+    return (
+      <>
+        <Top
+          title={tr("Product", "ផលិតផល")}
+          back
+          right={<ShopCCartLink count={cartN} />}
+        />
+        <div>
+          <ShopCGallery
+            images={images}
+            index={img}
+            onIndex={setImg}
+            alt={p.name}
+          />
+          {images.length > 1 && (
+            <div className="cb-shop-hscroll flex gap-2 overflow-x-auto px-4 pt-3">
+              {images.map((u, i) => (
+                <button
+                  key={u}
+                  onClick={() => setImg(i)}
+                  aria-label={`${i + 1}`}
+                  className={`cb-shop-press shrink-0 rounded-xl overflow-hidden border-2 ${i === img ? "border-blue-600" : "border-transparent opacity-80"}`}
+                >
+                  <AirImg src={u} alt="" className="w-14 h-14" />
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="px-4 pt-4 pb-4 space-y-5 cb-shop-up">
+            <div>
+              {p.brand && (
+                <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide">
+                  {p.brand}
+                </p>
+              )}
+              <h1 className="text-xl font-bold leading-snug">{p.name}</h1>
+              {sel && (
+                <div
+                  key={sel.id}
+                  className="mt-1 flex items-center gap-2 cb-shop-tick"
+                >
+                  <ShopCPrice
+                    big
+                    final={sel.final_price}
+                    list={sel.unit_discount > 0 ? sel.unit_price : null}
+                  />
+                  {pct > 0 && (
+                    <span className="text-[11px] font-bold text-red-600 bg-red-50 rounded-full px-2 py-0.5">
+                      −{pct}%
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
+            {colors.length > 0 && (
+              <div>
+                <p className="text-[13px] font-semibold mb-2">
+                  {tr("Color", "ពណ៌")}:{" "}
+                  <span className="font-normal text-slate-500">{color}</span>
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {colors.map((c) => {
+                    const anyStock = vars.some(
+                      (v) => v.color === c && v.in_stock,
+                    );
+                    return (
+                      <button
+                        key={c}
+                        aria-pressed={color === c}
+                        className={chip(color === c, false, !anyStock)}
+                        onClick={() => pickColor(c)}
+                      >
+                        {c}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {sizes.length > 0 && (
+              <div>
+                <p className="text-[13px] font-semibold mb-2">
+                  {tr("Size", "ទំហំ")}:{" "}
+                  <span className="font-normal text-slate-500">{size}</span>
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {sizes.map((s) => {
+                    const match = vars.filter(
+                      (v) =>
+                        v.size === s &&
+                        (colors.length === 0 || v.color === color),
+                    );
+                    return (
+                      <button
+                        key={s}
+                        aria-pressed={size === s}
+                        disabled={match.length === 0}
+                        className={chip(
+                          size === s,
+                          match.length === 0,
+                          !match.some((v) => v.in_stock),
+                        )}
+                        onClick={() => setSize(s)}
+                      >
+                        {s}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {!byOptions && vars.length > 1 && (
+              <div>
+                <p className="text-[13px] font-semibold mb-2">
+                  {tr("Option", "ជម្រើស")}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {vars.map((v) => (
+                    <button
+                      key={v.id}
+                      aria-pressed={vid === v.id}
+                      className={chip(vid === v.id, false, !v.in_stock)}
+                      onClick={() => setVid(v.id)}
+                    >
+                      {Object.values(v.options || {})
+                        .filter(Boolean)
+                        .join(" / ") || v.sku}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {!sel && byOptions && (
+              <p className="text-sm text-amber-700 bg-amber-50 rounded-xl px-3 py-2 cb-shop-fade">
+                {tr("This combination is not available.", "ជម្រើសនេះមិនមានទេ។")}
+              </p>
+            )}
+            {sel && (
+              <div className="flex items-center justify-between">
+                <p
+                  key={`${sel.id}-${avail}`}
+                  className={`cb-shop-tick inline-flex items-center gap-2 text-[14px] font-semibold ${stockTone}`}
+                >
+                  <span
+                    className={`w-2 h-2 rounded-full ${dot}`}
+                    aria-hidden="true"
+                  />
+                  {avail > 0
+                    ? avail <= 5
+                      ? tr(`Only ${avail} left`, `នៅសល់ត្រឹម ${avail}`)
+                      : tr("In stock", "មានស្តុក")
+                    : tr("Out of stock", "អស់ស្តុក")}
+                </p>
+                <div
+                  className="flex items-center gap-1"
+                  aria-label={tr("Quantity", "ចំនួន")}
+                >
+                  <button
+                    aria-label="-"
+                    disabled={qty <= 1 || avail < 1}
+                    onClick={() => setQty(qty - 1)}
+                    className="cb-shop-press w-11 h-11 rounded-xl border border-slate-200 bg-white grid place-items-center disabled:opacity-40"
+                  >
+                    <Icons.Minus size={17} />
+                  </button>
+                  <span
+                    key={qty}
+                    className="cb-shop-tick w-10 text-center font-bold text-[16px]"
+                    data-testid="qty"
+                  >
+                    {qty}
+                  </span>
+                  <button
+                    aria-label="+"
+                    disabled={qty >= avail}
+                    onClick={() => setQty(qty + 1)}
+                    className="cb-shop-press w-11 h-11 rounded-xl border border-slate-200 bg-white grid place-items-center disabled:opacity-40"
+                  >
+                    <Icons.Plus size={17} />
+                  </button>
+                </div>
+              </div>
+            )}
+            {p.description && (
+              <p className="text-[14px] leading-relaxed text-slate-600 whitespace-pre-line">
+                {p.description}
+              </p>
+            )}
+            {(p.weight_kg || p.dimensions) && (
+              <p className="text-xs text-slate-400">
+                {[p.weight_kg ? `${p.weight_kg} kg` : "", p.dimensions]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </p>
+            )}
+            {msg && (
+              <p
+                role="alert"
+                className="text-sm font-semibold text-red-600 cb-shop-fade"
+              >
+                {msg}
+              </p>
+            )}
+          </div>
+          {/* Always-visible action bar: the buttons never scroll out of reach. */}
+          <div
+            className="sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100 flex items-center gap-2.5"
+            style={SHOP_C_BAR}
+          >
+            {sel && (
+              <div className="shrink-0 pr-1 leading-tight">
+                <p className="text-[11px] text-slate-400">
+                  {tr("Total", "សរុប")}
+                </p>
+                <p
+                  key={`${qty}-${sel.id}`}
+                  className="cb-shop-tick font-extrabold text-[16px]"
+                >
+                  {money(sel.final_price * qty)}
+                </p>
+              </div>
+            )}
+            <button
+              type="button"
+              disabled={!canBuy}
+              onClick={() => add(false)}
+              aria-live="polite"
+              className={`cb-shop-press flex-1 h-12 rounded-xl border font-semibold text-[15px] flex items-center justify-center gap-2 disabled:opacity-50 ${added ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-blue-200 bg-white text-blue-700 active:bg-blue-50"}`}
+            >
+              {added ? <ShopCCheck /> : <Icons.ShoppingCart size={18} />}
+              {tr("Add to cart", "ដាក់ក្នុងកន្ត្រក")}
+            </button>
+            <button
+              type="button"
+              disabled={!canBuy}
+              onClick={() => add(true)}
+              className="cb-shop-press flex-1 h-12 rounded-xl bg-blue-600 text-white font-semibold text-[15px] shadow-[0_8px_20px_-8px_rgba(37,99,235,.65)] disabled:opacity-50 active:bg-blue-700"
+            >
+              {tr("Buy now", "ទិញឥឡូវ")}
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ---------------- Cart ----------------
+  function ShopCCartPage() {
+    useShopCss();
+    const nav = useNavigate();
+    const { tr } = useApp();
+    const [cart, setCart] = useState(null);
+    const [err, setErr] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [removing, setRemoving] = useState({});
+    useEffect(() => {
+      supabase.rpc("shop_cart_get").then(({ data, error }) => {
+        if (error) setErr(shopCErr(error, tr));
+        else setCart(data);
+      });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    async function setQty(variantId, quantity) {
+      if (busy) return false;
+      setBusy(true);
+      setErr("");
+      const { data, error } = await supabase.rpc("shop_cart_set", {
+        p_variant_id: variantId,
+        p_quantity: quantity,
+      });
+      setBusy(false);
+      if (error) {
+        setErr(shopCErr(error, tr));
+        return false;
+      }
+      setCart(data);
+      shopCCartChanged();
+      return true;
+    }
+    // Removing a line: it folds away smoothly first, then the server is updated.
+    async function remove(variantId) {
+      if (busy || removing[variantId]) return;
+      setRemoving((r) => ({ ...r, [variantId]: true }));
+      if (!shopCReduced()) await new Promise((res) => setTimeout(res, 260));
+      const ok = await setQty(variantId, 0);
+      if (!ok) setRemoving((r) => ({ ...r, [variantId]: false }));
+    }
+    async function goCheckout() {
+      if (busy) return;
+      setBusy(true);
+      if (cart.items.some((i) => i.price_changed)) {
+        const { error } = await supabase.rpc("shop_cart_accept_prices");
+        if (error) {
+          setBusy(false);
+          return setErr(shopCErr(error, tr));
+        }
+      }
+      setBusy(false);
+      nav(P("/shop/checkout"));
+    }
+    const items = cart?.items || [];
+    const changed = items.some((i) => i.price_changed);
+    const units = items.reduce((a, i) => a + i.quantity, 0);
+    return (
+      <>
+        <Top title={tr("My Cart", "កន្ត្រករបស់ខ្ញុំ")} back />
+        <div className="px-4 pt-4 space-y-3 pb-4">
+          {!cart && !err && (
+            <div className="space-y-3" aria-hidden="true">
+              <Skeleton className="h-28 rounded-2xl" />
+              <Skeleton className="h-28 rounded-2xl" delay={90} />
+            </div>
+          )}
+          {err && (
+            <p
+              role="alert"
+              className="rounded-xl bg-red-50 text-red-700 text-sm px-3 py-2 cb-shop-fade"
+            >
+              {err}
+            </p>
+          )}
+          {cart && items.length === 0 && (
+            <Card className="p-8 text-center text-slate-500 text-sm cb-shop-up">
+              <Icons.ShoppingCart
+                size={32}
+                className="mx-auto mb-2 text-slate-300"
+              />
+              {tr("Your cart is empty.", "កន្ត្រករបស់អ្នកទទេ។")}
+              <Link
+                to={P("/shop")}
+                className="cb-shop-press mt-3 inline-flex items-center justify-center min-h-[44px] px-4 font-semibold text-blue-700"
+              >
+                {tr("Start shopping", "ចាប់ផ្តើមទិញ")}
+              </Link>
+            </Card>
+          )}
+          {changed && (
+            <p
+              role="status"
+              className="rounded-xl bg-amber-50 text-amber-800 text-[13px] px-3 py-2 cb-shop-fade"
+            >
+              {tr(
+                "Some prices changed since you added these items. Please check the new prices below.",
+                "តម្លៃខ្លះបានផ្លាស់ប្តូរ។ សូមពិនិត្យតម្លៃថ្មីខាងក្រោម។",
+              )}
+            </p>
+          )}
+          {items.map((i, k) => (
+            <div
+              key={i.variant_id}
+              className={`cb-shop-collapse ${removing[i.variant_id] ? "closing" : ""}`}
+            >
+              <div>
+                <div
+                  className="cb-shop-up"
+                  style={{ "--d": `${Math.min(k, 6) * 50}ms` }}
+                >
+                  <Card className="p-3 flex gap-3">
+                    <AirImg
+                      src={i.image}
+                      alt={i.name}
+                      className="w-20 h-20 rounded-xl"
+                      fallbackSize={24}
+                      FallbackIcon={Icons.Package}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[14px] font-semibold leading-snug line-clamp-2">
+                        {i.name}
+                      </p>
+                      {shopCLabel(i) && (
+                        <p className="text-xs text-slate-500">
+                          {shopCLabel(i)}
+                        </p>
+                      )}
+                      <div className="mt-1 text-[13px]">
+                        <ShopCPrice
+                          final={i.final_price}
+                          list={i.unit_discount > 0 ? i.unit_price : null}
+                        />
+                        {i.price_changed && (
+                          <span className="ml-2 text-[11px] font-semibold text-amber-600">
+                            {tr("was", "ពីមុន")} {money(i.price_at_add)}
+                          </span>
+                        )}
+                      </div>
+                      {!i.purchasable ? (
+                        <p className="text-[12px] font-semibold text-red-600 mt-1">
+                          {tr("No longer available", "មិនមានទៀតទេ")}
+                        </p>
+                      ) : i.quantity > i.available ? (
+                        <p className="text-[12px] font-semibold text-red-600 mt-1">
+                          {i.available > 0
+                            ? tr(
+                                `Only ${i.available} left`,
+                                `នៅសល់ត្រឹម ${i.available}`,
+                              )
+                            : tr("Out of stock", "អស់ស្តុក")}
+                        </p>
+                      ) : null}
+                      <div className="mt-2 flex items-center justify-between">
+                        <div className="flex items-center gap-1">
+                          <button
+                            aria-label="-"
+                            disabled={busy || i.quantity <= 1}
+                            onClick={() => setQty(i.variant_id, i.quantity - 1)}
+                            className="cb-shop-press w-11 h-11 rounded-xl border border-slate-200 bg-white grid place-items-center disabled:opacity-40"
+                          >
+                            <Icons.Minus size={15} />
+                          </button>
+                          <span
+                            key={i.quantity}
+                            className="cb-shop-tick w-8 text-center font-bold text-[15px]"
+                          >
+                            {i.quantity}
+                          </span>
+                          <button
+                            aria-label="+"
+                            disabled={busy || i.quantity >= i.available}
+                            onClick={() => setQty(i.variant_id, i.quantity + 1)}
+                            className="cb-shop-press w-11 h-11 rounded-xl border border-slate-200 bg-white grid place-items-center disabled:opacity-40"
+                          >
+                            <Icons.Plus size={15} />
+                          </button>
+                        </div>
+                        <b
+                          key={i.line_total}
+                          className="cb-shop-tick text-[15px]"
+                        >
+                          {money(i.line_total)}
+                        </b>
+                        <button
+                          aria-label={tr("Remove", "ដកចេញ")}
+                          disabled={busy}
+                          onClick={() => remove(i.variant_id)}
+                          className="cb-shop-press w-11 h-11 grid place-items-center rounded-xl text-red-500 active:bg-red-50"
+                        >
+                          <Icons.Trash2 size={18} />
+                        </button>
+                      </div>
+                    </div>
+                  </Card>
+                </div>
+              </div>
+            </div>
+          ))}
+          {items.length > 0 && (
+            <Card className="p-4 space-y-1.5 text-[14px] cb-shop-up">
+              <div className="flex justify-between">
+                <span className="text-slate-500">
+                  {tr("Subtotal", "សរុបរង")}
+                </span>
+                <span>{money(cart.subtotal)}</span>
+              </div>
+              {cart.discount_total > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">
+                    {tr("Discount", "បញ្ចុះតម្លៃ")}
+                  </span>
+                  <span className="text-emerald-600">
+                    −{money(cart.discount_total)}
+                  </span>
+                </div>
+              )}
+              <p className="pt-1 text-[12px] text-slate-400">
+                {tr(
+                  "Delivery fee is added at checkout.",
+                  "ថ្លៃដឹកនឹងបន្ថែមនៅពេលទូទាត់។",
+                )}
+              </p>
+              {cart?.has_issues && (
+                <p className="text-[12px] text-red-600">
+                  {tr(
+                    "Fix the items marked in red to continue.",
+                    "សូមកែទំនិញដែលមានសញ្ញាក្រហម។",
+                  )}
+                </p>
+              )}
+            </Card>
+          )}
+        </div>
+        {items.length > 0 && (
+          <div
+            className="sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100 flex items-center gap-3"
+            style={SHOP_C_BAR}
+          >
+            <div className="shrink-0 leading-tight">
+              <p className="text-[11px] text-slate-400">
+                {tr(`Total · ${units} items`, `សរុប · ${units} ទំនិញ`)}
+              </p>
+              <p
+                key={cart.items_total}
+                className="cb-shop-tick font-extrabold text-[18px]"
+              >
+                {money(cart.items_total)}
+              </p>
+            </div>
+            <Btn disabled={busy || cart.has_issues} onClick={goCheckout}>
+              {changed
+                ? tr(
+                    "Accept new prices & checkout",
+                    "ព្រមតាមតម្លៃថ្មី ហើយទូទាត់",
+                  )
+                : tr("Checkout", "ទូទាត់")}
+            </Btn>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  // ---------------- Checkout (Stage 1: place order, nothing is charged) ----------------
+  function ShopCCheckoutPage() {
+    useShopCss();
+    const nav = useNavigate();
+    const { tr, me, addrs, wallet } = useApp();
+    const [cart, setCart] = useState(null);
+    const [cfg, setCfg] = useState(null);
+    const [method, setMethod] = useState("");
+    const [addrId, setAddrId] = useState("");
+    const [rname, setRname] = useState(me?.name || "");
+    const [rphone, setRphone] = useState(me?.phone || "");
+    const [note, setNote] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
+    const idem = useRef(shopCUuid());
+    useEffect(() => {
+      Promise.all([
+        supabase.rpc("shop_cart_get"),
+        supabase.rpc("shop_public_settings"),
+      ]).then(([c, s]) => {
+        if (c.error || s.error) return setErr(shopCErr(c.error || s.error, tr));
+        setCart(c.data);
+        setCfg(s.data);
+        setMethod(
+          s.data.pickup_configured
+            ? "Pickup"
+            : s.data.delivery_configured
+              ? "Delivery"
+              : "",
+        );
+      });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    const list = addrs || [];
+    useEffect(() => {
+      if (!addrId && list.length)
+        setAddrId((list.find((a) => a.is_default) || list[0]).id);
+    }, [list.length]); // eslint-disable-line react-hooks/exhaustive-deps
+    const addr = list.find((a) => a.id === addrId);
+    useEffect(() => {
+      if (method === "Delivery" && addr) {
+        setRname(addr.recipient_name || me?.name || "");
+        setRphone(addr.phone || me?.phone || "");
+      }
+    }, [addrId, method]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!cart || !cfg)
+      return (
+        <>
+          <Top title={tr("Checkout", "ទូទាត់")} back />
+          <div className="p-4">
+            {err ? (
+              <p role="alert" className="text-sm text-red-600">
+                {err}
+              </p>
+            ) : (
+              <Skeleton className="h-40 rounded-2xl" />
+            )}
+          </div>
+        </>
+      );
+    if (cart.items.length === 0)
+      return (
+        <>
+          <Top title={tr("Checkout", "ទូទាត់")} back />
+          <div className="p-6 text-center text-sm text-slate-500">
+            {tr("Your cart is empty.", "កន្ត្រករបស់អ្នកទទេ។")}
+            <Link
+              to={P("/shop")}
+              className="block mt-3 font-semibold text-blue-700"
+            >
+              {tr("Start shopping", "ចាប់ផ្តើមទិញ")}
+            </Link>
+          </div>
+        </>
+      );
+    const fee = method === "Delivery" ? Number(cfg.delivery_fee || 0) : 0;
+    const total = Number(cart.items_total) + fee;
+    const noMethod = !cfg.pickup_configured && !cfg.delivery_configured;
+    const belowMin =
+      cfg.min_order_amount != null && total < Number(cfg.min_order_amount);
+    const bal = Number(wallet?.balance || 0);
+    async function place() {
+      if (busy) return;
+      setErr("");
+      if (method === "Delivery" && !addr)
+        return setErr(
+          tr(
+            "Please choose a delivery address.",
+            "សូមជ្រើសរើសអាសយដ្ឋានដឹកជូន។",
+          ),
+        );
+      if (method === "Delivery" && (!rname.trim() || !rphone.trim()))
+        return setErr(
+          tr(
+            "Recipient name and phone are required.",
+            "ត្រូវការឈ្មោះ និងលេខទូរស័ព្ទអ្នកទទួល។",
+          ),
+        );
+      setBusy(true);
+      const { data, error } = await supabase.rpc("shop_place_order", {
+        p_method: method,
+        p_address_id: method === "Delivery" ? addr.id : null,
+        p_recipient_name: rname.trim() || null,
+        p_recipient_phone: rphone.trim() || null,
+        p_note: note.trim() || null,
+        p_expected_total: total,
+        p_idempotency_key: idem.current,
+      });
+      if (error) {
+        setBusy(false);
+        return setErr(shopCErr(error, tr));
+      }
+      nav(P(`/shop/orders/${data.order_id}`), {
+        replace: true,
+        state: { placed: true },
+      });
+    }
+    const opt = (m, label, sub, disabled) => (
+      <button
+        type="button"
+        disabled={disabled}
+        aria-pressed={method === m}
+        onClick={() => setMethod(m)}
+        className={`cb-shop-press relative flex-1 min-h-[64px] p-3 rounded-xl border-2 text-left disabled:opacity-40 ${method === m ? "border-blue-600 bg-blue-50 shadow-[0_6px_16px_-10px_rgba(37,99,235,.8)]" : "border-slate-200 bg-white active:bg-slate-50"}`}
+      >
+        {method === m && (
+          <span
+            className="cb-shop-pop absolute right-2 top-2 w-5 h-5 rounded-full bg-blue-600 text-white grid place-items-center"
+            aria-hidden="true"
+          >
+            <Icons.Check size={12} strokeWidth={3} />
+          </span>
+        )}
+        <p className="font-semibold text-[14px]">{label}</p>
+        <p className="text-[12px] text-slate-500">{sub}</p>
+      </button>
+    );
+    return (
+      <>
+        <Top title={tr("Checkout", "ទូទាត់")} back />
+        <div className="px-4 pt-4 space-y-3 pb-4 cb-shop-fade">
+          {noMethod && (
+            <p
+              role="alert"
+              className="rounded-xl bg-amber-50 text-amber-800 text-sm px-3 py-3"
+            >
+              {tr(
+                "Checkout is not available yet. Please contact us.",
+                "ការទូទាត់មិនទាន់អាចប្រើបានទេ។ សូមទាក់ទងមកយើង។",
+              )}
+            </p>
+          )}
+          <Card className="p-4">
+            <p className="font-bold mb-2 text-[15px]">
+              {tr("How do you want to receive it?", "តើអ្នកចង់ទទួលដោយរបៀបណា?")}
+            </p>
+            <div className="flex gap-2">
+              {opt(
+                "Pickup",
+                tr("Pickup", "មកយកផ្ទាល់"),
+                tr("Free", "ឥតគិតថ្លៃ"),
+                !cfg.pickup_configured,
+              )}
+              {opt(
+                "Delivery",
+                tr("Delivery", "ដឹកជូនដល់ផ្ទះ"),
+                cfg.delivery_configured ? `+${money(cfg.delivery_fee)}` : "—",
+                !cfg.delivery_configured,
+              )}
+            </div>
+            {method === "Pickup" && cfg.pickup && (
+              <div className="mt-3 rounded-xl bg-slate-50 p-3 text-[13px] text-slate-600">
+                <p className="font-semibold text-slate-800">
+                  {cfg.pickup.name}
+                </p>
+                <p>{cfg.pickup.address}</p>
+                {cfg.pickup.hours && (
+                  <p className="text-slate-400">{cfg.pickup.hours}</p>
+                )}
+                {cfg.pickup.instructions && (
+                  <p className="mt-1">{cfg.pickup.instructions}</p>
+                )}
+              </div>
+            )}
+            {method === "Delivery" && (
+              <div className="mt-3 space-y-2">
+                {list.length === 0 ? (
+                  <p className="text-[13px] text-amber-700 bg-amber-50 rounded-xl px-3 py-2">
+                    {tr(
+                      "You have no saved address.",
+                      "អ្នកមិនទាន់មានអាសយដ្ឋានរក្សាទុកទេ។",
+                    )}{" "}
+                    <Link
+                      to={P("/addresses")}
+                      className="font-semibold underline"
+                    >
+                      {tr("Add one", "បន្ថែម")}
+                    </Link>
+                  </p>
+                ) : (
+                  <select
+                    value={addrId}
+                    onChange={(e) => setAddrId(e.target.value)}
+                    aria-label={tr("Delivery address", "អាសយដ្ឋានដឹកជូន")}
+                    className="w-full h-12 rounded-xl border border-slate-200 bg-white px-3 text-[15px] outline-none focus:border-blue-500"
+                  >
+                    {list.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {[a.label, a.address, a.province]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <input
+                  value={rname}
+                  onChange={(e) => setRname(e.target.value)}
+                  placeholder={tr("Recipient name", "ឈ្មោះអ្នកទទួល")}
+                  aria-label={tr("Recipient name", "ឈ្មោះអ្នកទទួល")}
+                  className="w-full h-12 rounded-xl border border-slate-200 bg-white px-3 text-[15px] outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                />
+                <input
+                  value={rphone}
+                  onChange={(e) => setRphone(e.target.value)}
+                  placeholder={tr("Recipient phone", "លេខទូរស័ព្ទអ្នកទទួល")}
+                  aria-label={tr("Recipient phone", "លេខទូរស័ព្ទអ្នកទទួល")}
+                  inputMode="tel"
+                  className="w-full h-12 rounded-xl border border-slate-200 bg-white px-3 text-[15px] outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                />
+              </div>
+            )}
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              maxLength={300}
+              placeholder={tr("Note (optional)", "កំណត់ចំណាំ (ជម្រើស)")}
+              aria-label={tr("Note", "កំណត់ចំណាំ")}
+              className="mt-3 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-[14px]"
+            />
+          </Card>
+          <Card className="p-4 space-y-2">
+            {cart.items.map((i) => (
+              <div
+                key={i.variant_id}
+                className="flex justify-between gap-3 text-[13px]"
+              >
+                <span className="truncate">
+                  {i.quantity}× {i.name}
+                  {shopCLabel(i) ? ` (${shopCLabel(i)})` : ""}
+                </span>
+                <span className="shrink-0">{money(i.line_total)}</span>
+              </div>
+            ))}
+            <div className="border-t border-slate-100 pt-2 space-y-1 text-[14px]">
+              <div className="flex justify-between">
+                <span className="text-slate-500">{tr("Items", "ទំនិញ")}</span>
+                <span>{money(cart.items_total)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">
+                  {tr("Delivery fee", "ថ្លៃដឹក")}
+                </span>
+                <span>{money(fee)}</span>
+              </div>
+              <div className="flex justify-between font-bold text-[17px]">
+                <span>{tr("Total", "សរុប")}</span>
+                <span>{money(total)}</span>
+              </div>
+            </div>
+          </Card>
+          <Card className="p-4 text-[13px]">
+            <div className="flex justify-between">
+              <span className="text-slate-500">
+                {tr("Wallet balance", "សមតុល្យកាបូប")}
+              </span>
+              <b>{money(bal)}</b>
+            </div>
+            {bal + 0.005 < total && (
+              <p className="mt-2 text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                {tr(
+                  "Your balance is lower than the total. You can still place the order and pay after topping up.",
+                  "សមតុល្យរបស់អ្នកទាបជាងតម្លៃសរុប។ អ្នកអាចបញ្ជាទិញបាន ហើយបង់ក្រោយពេលបញ្ចូលទឹកប្រាក់។",
+                )}
+              </p>
+            )}
+            <p className="mt-2 text-slate-400">
+              {tr(
+                "Nothing is charged now. You pay from your wallet on the next screen.",
+                "មិនទាន់កាត់លុយឥឡូវទេ។ អ្នកបង់ពីកាបូបនៅអេក្រង់បន្ទាប់។",
+              )}
+            </p>
+          </Card>
+          {belowMin && (
+            <p role="alert" className="text-sm text-red-600">
+              {tr(
+                `The minimum order is ${money(cfg.min_order_amount)}.`,
+                `ការបញ្ជាទិញអប្បបរមាគឺ ${money(cfg.min_order_amount)}។`,
+              )}
+            </p>
+          )}
+          {err && (
+            <p role="alert" className="text-sm font-semibold text-red-600">
+              {err}{" "}
+              {/Prices changed/i.test(err) ||
+              /តម្លៃបានផ្លាស់ប្តូរ/.test(err) ? (
+                <Link to={P("/shop/cart")} className="underline">
+                  {tr("Back to cart", "ត្រឡប់ទៅកន្ត្រក")}
+                </Link>
+              ) : null}
+            </p>
+          )}
+        </div>
+        <div
+          className="sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100"
+          style={SHOP_C_BAR}
+        >
+          <Btn
+            loading={busy}
+            disabled={noMethod || belowMin || !method}
+            onClick={place}
+          >
+            {tr("Place order", "បញ្ជាទិញ")} · {money(total)}
+          </Btn>
+        </div>
+      </>
+    );
+  }
+
+  // ---------------- My Shop Orders ----------------
+  const SHOP_C_FILTERS = [
+    "",
+    "Waiting Payment",
+    "Processing",
+    "Accepted / Preparing Order",
+    "Ready for Pickup",
+    "Ready for Delivery",
+    "Delivery",
+    "Complete Order",
+    "Rejected & Refunded",
+    "Canceled",
+  ];
+  function ShopCOrdersPage() {
+    useShopCss();
+    const { tr } = useApp();
+    const [status, setStatus] = useState("");
+    const [rows, setRows] = useState([]);
+    const [total, setTotal] = useState(0);
+    const [loading, setLoading] = useState(true);
+    const [err, setErr] = useState("");
+    const [more, setMore] = useState(false);
+    const fetchPage = async (offset) => {
+      const { data, error } = await supabase.rpc("shop_my_orders", {
+        p_limit: 20,
+        p_offset: offset,
+        p_status: status || null,
+      });
+      if (error) throw error;
+      return data;
+    };
+    useEffect(() => {
+      let alive = true;
+      setLoading(true);
+      fetchPage(0)
+        .then((d) => alive && (setRows(d.items), setTotal(d.total), setErr("")))
+        .catch((e) => alive && setErr(shopCErr(e, tr)))
+        .finally(() => alive && setLoading(false));
+      return () => {
+        alive = false;
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [status]);
+    async function loadMore() {
+      if (more) return;
+      setMore(true);
+      try {
+        const d = await fetchPage(rows.length);
+        setRows((c) => [...c, ...d.items]);
+      } catch (e) {
+        setErr(shopCErr(e, tr));
+      }
+      setMore(false);
+    }
+    return (
+      <>
+        <Top title={tr("My Shop Orders", "ការបញ្ជាទិញក្នុងហាង")} back />
+        <div className="px-4 pt-4 space-y-3 pb-6">
+          <div className="cb-shop-hscroll flex gap-2 overflow-x-auto -mx-4 px-4 pb-1">
+            {SHOP_C_FILTERS.map((s) => (
+              <button
+                key={s || "all"}
+                onClick={() => setStatus(s)}
+                aria-pressed={status === s}
+                className={`cb-shop-press h-11 px-4 rounded-full text-[13px] font-semibold whitespace-nowrap border ${status === s ? "bg-blue-600 text-white border-blue-600 shadow-[0_6px_16px_-8px_rgba(37,99,235,.8)]" : "bg-white text-slate-600 border-slate-200 active:bg-slate-50"}`}
+              >
+                {s
+                  ? tr(SHOP_C_STATUS[s][0], SHOP_C_STATUS[s][1])
+                  : tr("All", "ទាំងអស់")}
+              </button>
+            ))}
+          </div>
+          {err && (
+            <p
+              role="alert"
+              className="rounded-xl bg-red-50 text-red-700 text-sm px-3 py-2"
+            >
+              {err}
+            </p>
+          )}
+          {loading && rows.length === 0 && (
+            <div className="space-y-3" aria-hidden="true">
+              <Skeleton className="h-20 rounded-2xl" />
+              <Skeleton className="h-20 rounded-2xl" delay={90} />
+              <Skeleton className="h-20 rounded-2xl" delay={180} />
+            </div>
+          )}
+          {!loading && !err && rows.length === 0 && (
+            <Card className="p-8 text-center text-slate-500 text-sm">
+              {tr("No orders yet.", "មិនទាន់មានការបញ្ជាទិញទេ។")}
+            </Card>
+          )}
+          {rows.map((o, i) => (
+            <Link
+              key={o.id}
+              to={P(`/shop/orders/${o.id}`)}
+              className="block cb-shop-up"
+              style={{ "--d": `${Math.min(i, 8) * 40}ms` }}
+            >
+              <Card className="cb-shop-card p-3.5 flex items-center gap-3 min-h-[76px]">
+                <AirImg
+                  src={o.first_item?.image}
+                  alt=""
+                  className="w-14 h-14 rounded-xl"
+                  fallbackSize={22}
+                  FallbackIcon={Icons.ShoppingBag}
+                />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <b className="text-[15px] truncate">{o.order_no}</b>
+                    <ShopCStatus status={o.status} />
+                  </div>
+                  <p className="text-[13px] text-slate-500 truncate">
+                    {o.first_item?.name}
+                    {o.item_count > 1 ? ` +${o.item_count - 1}` : ""}
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    {shopCDate(o.created_at)} ·{" "}
+                    <b className="text-slate-600">{money(o.total_amount)}</b>
+                  </p>
+                  {o.status === "Waiting Payment" && (
+                    <p className="text-[12px] font-semibold text-amber-600 mt-0.5">
+                      {tr("Tap to pay", "ចុចដើម្បីបង់ប្រាក់")}
+                    </p>
+                  )}
+                </div>
+                <Icons.ChevronRight size={18} className="text-slate-300" />
+              </Card>
+            </Link>
+          ))}
+          {rows.length < total && (
+            <button
+              onClick={loadMore}
+              disabled={more}
+              className="cb-shop-press w-full h-12 rounded-xl border border-slate-200 bg-white text-[14px] font-semibold text-blue-700 disabled:opacity-60 active:bg-blue-50"
+            >
+              {more ? "…" : tr("Load more", "មើលបន្ថែម")}
+            </button>
+          )}
+        </div>
+      </>
+    );
+  }
+
+  // ---------------- Order detail (Stage 2: pay with wallet) ----------------
+  function ShopCOrderDetailPage() {
+    useShopCss();
+    const { id } = useParams();
+    const loc = useLocation();
+    const { tr, wallet, refreshMoney, say } = useApp();
+    const [o, setO] = useState(null);
+    const [err, setErr] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState("");
+    const [paidFlash, setPaidFlash] = useState(false);
+    const load = async () => {
+      const { data, error } = await supabase.rpc("shop_my_order", {
+        p_order_id: id,
+      });
+      if (error)
+        setErr(
+          /not found/i.test(error.message)
+            ? tr("Order not found.", "រកមិនឃើញការបញ្ជាទិញទេ។")
+            : shopCErr(error, tr),
+        );
+      else {
+        setO(data);
+        setErr("");
+      }
+    };
+    useEffect(() => {
+      void load();
+      // Pick up staff updates (accepted, ready, delivered...) while the page is open.
+      const t = setInterval(() => {
+        if (typeof document === "undefined" || !document.hidden) void load();
+      }, 20000);
+      return () => clearInterval(t);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [id]);
+    async function pay() {
+      if (busy) return;
+      const ok = await confirmDialog({
+        title: tr("Pay with Wallet?", "បង់ប្រាក់ពីកាបូប?"),
+        message: tr(
+          `${money(o.total_amount)} will be deducted from your wallet.`,
+          `${money(o.total_amount)} នឹងត្រូវកាត់ចេញពីកាបូបរបស់អ្នក។`,
+        ),
+        confirmText: tr("Pay", "បង់ប្រាក់"),
+        cancelText: tr("Cancel", "បោះបង់"),
+      });
+      if (!ok) return;
+      setBusy(true);
+      setMsg("");
+      const { error } = await supabase.rpc("shop_pay_order", {
+        p_order_id: id,
+      });
+      setBusy(false);
+      if (error) {
+        setMsg(shopCErr(error, tr));
+        return load();
+      }
+      say(tr("Payment successful", "បង់ប្រាក់បានជោគជ័យ"));
+      shopCBuzz();
+      setPaidFlash(true);
+      setTimeout(() => setPaidFlash(false), 5000);
+      void refreshMoney();
+      void load();
+    }
+    async function cancel() {
+      if (busy) return;
+      const ok = await confirmDialog({
+        title: tr("Cancel this order?", "បោះបង់ការបញ្ជាទិញនេះ?"),
+        message: tr(
+          "You have not paid yet, nothing will be charged.",
+          "អ្នកមិនទាន់បានបង់ប្រាក់ទេ គ្មានការកាត់លុយឡើយ។",
+        ),
+        confirmText: tr("Cancel order", "បោះបង់ការបញ្ជាទិញ"),
+        cancelText: tr("Keep order", "រក្សាទុក"),
+      });
+      if (!ok) return;
+      setBusy(true);
+      const { error } = await supabase.rpc("shop_cancel_order", {
+        p_order_id: id,
+        p_reason: "Canceled by customer",
+      });
+      setBusy(false);
+      if (error) setMsg(shopCErr(error, tr));
+      void load();
+    }
+    if (err)
+      return (
+        <>
+          <Top title={tr("Order", "ការបញ្ជាទិញ")} back />
+          <p className="p-6 text-center text-sm text-slate-500">{err}</p>
+        </>
+      );
+    if (!o)
+      return (
+        <>
+          <Top title={tr("Order", "ការបញ្ជាទិញ")} back />
+          <div className="p-4">
+            <Skeleton className="h-40 rounded-2xl" />
+          </div>
+        </>
+      );
+    const isPickup = o.fulfillment_method === "Pickup";
+    const bal = Number(wallet?.balance || 0);
+    const need =
+      o.status === "Waiting Payment" && o.payment_status === "Unpaid";
+    const addr = o.delivery_address;
+    const pk = o.pickup_location;
+    return (
+      <>
+        <Top title={o.order_no} back />
+        <div className="px-4 pt-4 space-y-3 pb-4 cb-shop-fade">
+          {paidFlash && (
+            <div
+              role="status"
+              className="cb-shop-pop flex items-center gap-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3"
+            >
+              <span className="w-9 h-9 rounded-full bg-emerald-500 text-white grid place-items-center shrink-0">
+                <ShopCCheck size={20} />
+              </span>
+              <p className="text-[14px] font-semibold">
+                {tr("Payment successful", "បង់ប្រាក់បានជោគជ័យ")}
+              </p>
+            </div>
+          )}
+          {loc.state?.placed && need && (
+            <p
+              role="status"
+              className="rounded-xl bg-emerald-50 text-emerald-800 text-[13px] px-3 py-2"
+            >
+              {tr(
+                "Order placed. Pay with your wallet to confirm it.",
+                "បានបង្កើតការបញ្ជាទិញ។ សូមបង់ប្រាក់ពីកាបូបដើម្បីបញ្ជាក់។",
+              )}
+            </p>
+          )}
+          <Card className="p-4">
+            <div className="flex items-center justify-between">
+              <ShopCStatus status={o.status} />
+              <span className="text-[12px] text-slate-500">
+                {tr(
+                  SHOP_C_PAY[o.payment_status]?.[0] || o.payment_status,
+                  SHOP_C_PAY[o.payment_status]?.[1] || o.payment_status,
+                )}
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 mt-2">
+              {shopCDate(o.created_at)} ·{" "}
+              {isPickup
+                ? tr("Pickup", "មកយកផ្ទាល់")
+                : tr("Delivery", "ដឹកជូនដល់ផ្ទះ")}
+            </p>
+          </Card>
+          {need && (
+            <Card className="p-4 space-y-3 border border-amber-200">
+              <div className="flex justify-between items-baseline">
+                <span className="text-[14px] text-slate-500">
+                  {tr("Amount due", "ចំនួនត្រូវបង់")}
+                </span>
+                <b className="text-2xl">{money(o.total_amount)}</b>
+              </div>
+              <div className="flex justify-between text-[13px]">
+                <span className="text-slate-500">
+                  {tr("Wallet balance", "សមតុល្យកាបូប")}
+                </span>
+                <b
+                  className={bal + 0.005 < o.total_amount ? "text-red-600" : ""}
+                >
+                  {money(bal)}
+                </b>
+              </div>
+              {bal + 0.005 < o.total_amount && (
+                <p className="text-[13px] text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                  {tr(
+                    "Your balance is not enough. Please top up with our staff, then pay.",
+                    "សមតុល្យមិនគ្រប់គ្រាន់។ សូមបញ្ចូលទឹកប្រាក់ជាមួយបុគ្គលិក រួចបង់ប្រាក់។",
+                  )}
+                </p>
+              )}
+              {msg && (
+                <p
+                  role="alert"
+                  className="text-sm font-semibold text-red-600 cb-shop-fade"
+                >
+                  {msg}
+                </p>
+              )}
+              <Btn danger disabled={busy} onClick={cancel}>
+                {tr("Cancel order", "បោះបង់ការបញ្ជាទិញ")}
+              </Btn>
+            </Card>
+          )}
+          {!need && msg && (
+            <p role="alert" className="text-sm font-semibold text-red-600">
+              {msg}
+            </p>
+          )}
+          {o.status === "Processing" && (
+            <p className="rounded-xl bg-blue-50 text-blue-800 text-[13px] px-3 py-2">
+              {tr(
+                "Payment received. We are reviewing your order.",
+                "បានទទួលការបង់ប្រាក់។ យើងកំពុងពិនិត្យការបញ្ជាទិញរបស់អ្នក។",
+              )}
+            </p>
+          )}
+          {o.status === "Ready for Pickup" && (
+            <p className="rounded-xl bg-teal-50 text-teal-800 text-[13px] px-3 py-2 font-semibold">
+              {tr(
+                "Your order is ready. Please come to collect it.",
+                "ការបញ្ជាទិញរបស់អ្នករួចរាល់។ សូមមកយក។",
+              )}
+            </p>
+          )}
+          {o.status === "Rejected & Refunded" && (
+            <Card className="p-4 border border-red-200 space-y-1.5">
+              <p className="font-bold text-red-700">
+                {tr("Order rejected", "ការបញ្ជាទិញត្រូវបានបដិសេធ")}
+              </p>
+              {o.reject_reason && (
+                <p className="text-[13px] text-slate-600">
+                  {tr("Reason", "មូលហេតុ")}: {o.reject_reason}
+                </p>
+              )}
+              <p className="text-[13px]">
+                {tr("Refund", "សងប្រាក់វិញ")}: <b>{money(o.refunded_amount)}</b>
+                {o.refund?.credited_to_wallet
+                  ? ` · ${tr("credited to your wallet", "បានបញ្ចូលទៅកាបូបរបស់អ្នក")}`
+                  : ""}
+              </p>
+              {o.refund?.processed_at && (
+                <p className="text-xs text-slate-400">
+                  {shopCDate(o.refund.processed_at)}
+                </p>
+              )}
+            </Card>
+          )}
+          {o.status === "Canceled" && o.cancel_reason && (
+            <p className="text-[13px] text-slate-500">
+              {tr("Canceled", "បានលុបចោល")}: {o.cancel_reason}
+            </p>
+          )}
+          <Card className="p-4 space-y-3">
+            {o.items.map((i, k) => (
+              <div key={k} className="flex gap-3">
+                <AirImg
+                  src={i.image}
+                  alt={i.name}
+                  className="w-14 h-14 rounded-xl"
+                  fallbackSize={20}
+                  FallbackIcon={Icons.Package}
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-[14px] font-semibold leading-snug line-clamp-2">
+                    {i.name}
+                  </p>
+                  {shopCVariantText(i.variant) && (
+                    <p className="text-xs text-slate-500">
+                      {shopCVariantText(i.variant)}
+                    </p>
+                  )}
+                  <p className="text-xs text-slate-400">
+                    {i.quantity} × {money(i.unit_price - i.unit_discount)}
+                  </p>
+                </div>
+                <b className="text-[14px]">{money(i.line_total)}</b>
+              </div>
+            ))}
+            <div className="border-t border-slate-100 pt-2 space-y-1 text-[13px]">
+              <div className="flex justify-between">
+                <span className="text-slate-500">
+                  {tr("Subtotal", "សរុបរង")}
+                </span>
+                <span>{money(o.subtotal)}</span>
+              </div>
+              {o.discount_total > 0 && (
+                <div className="flex justify-between">
+                  <span className="text-slate-500">
+                    {tr("Discount", "បញ្ចុះតម្លៃ")}
+                  </span>
+                  <span>−{money(o.discount_total)}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-slate-500">
+                  {tr("Delivery fee", "ថ្លៃដឹក")}
+                </span>
+                <span>{money(o.delivery_fee)}</span>
+              </div>
+              <div className="flex justify-between font-bold text-[15px]">
+                <span>{tr("Total", "សរុប")}</span>
+                <span>{money(o.total_amount)}</span>
+              </div>
+            </div>
+          </Card>
+          <Card className="p-4 text-[13px] text-slate-600 space-y-1">
+            <p className="font-bold text-slate-800 text-[14px]">
+              {isPickup
+                ? tr("Pickup location", "ទីតាំងមកយក")
+                : tr("Delivery details", "ព័ត៌មានដឹកជូន")}
+            </p>
+            {isPickup ? (
+              pk ? (
+                <>
+                  <p className="font-semibold">{pk.name}</p>
+                  <p>{pk.address}</p>
+                  {pk.hours && <p className="text-slate-400">{pk.hours}</p>}
+                  {pk.instructions && <p>{pk.instructions}</p>}
+                </>
+              ) : null
+            ) : (
+              <>
+                <p className="font-semibold">
+                  {o.recipient_name} · {o.recipient_phone}
+                </p>
+                {addr && (
+                  <p>
+                    {[addr.address, addr.commune, addr.district, addr.province]
+                      .filter(Boolean)
+                      .join(", ")}
+                  </p>
+                )}
+              </>
+            )}
+            {o.customer_note && (
+              <p className="text-slate-400">“{o.customer_note}”</p>
+            )}
+          </Card>
+          <Card className="p-4">
+            <p className="font-bold text-[14px] mb-3">
+              {tr("Order status", "ស្ថានភាពការបញ្ជាទិញ")}
+            </p>
+            <ol className="space-y-3">
+              {o.timeline.map((t, k) => (
+                <li
+                  key={k}
+                  className="flex gap-3 cb-shop-up"
+                  style={{ "--d": `${Math.min(k, 8) * 50}ms` }}
+                >
+                  <span className="relative mt-1.5 w-2.5 h-2.5 shrink-0">
+                    {k === o.timeline.length - 1 &&
+                      ![
+                        "Complete Order",
+                        "Canceled",
+                        "Rejected & Refunded",
+                      ].includes(o.status) && (
+                        <span
+                          className="absolute inset-0 rounded-full bg-blue-500 opacity-60 animate-ping motion-reduce:hidden"
+                          aria-hidden="true"
+                        />
+                      )}
+                    <span
+                      className={`relative block w-2.5 h-2.5 rounded-full ${k === o.timeline.length - 1 ? "bg-blue-600" : "bg-slate-300"}`}
+                    />
+                  </span>
+                  <div>
+                    <p className="text-[13px] font-semibold">
+                      {SHOP_C_STATUS[t.status]
+                        ? tr(
+                            SHOP_C_STATUS[t.status][0],
+                            SHOP_C_STATUS[t.status][1],
+                          )
+                        : t.status}
+                    </p>
+                    {t.note && (
+                      <p className="text-[12px] text-slate-500">{t.note}</p>
+                    )}
+                    <p className="text-[11px] text-slate-400">
+                      {shopCDate(t.at)}
+                    </p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </Card>
+        </div>
+        {need && (
+          <div
+            className="sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100"
+            style={SHOP_C_BAR}
+          >
+            <Btn
+              loading={busy}
+              disabled={bal + 0.005 < o.total_amount}
+              onClick={pay}
+            >
+              <Icons.Wallet size={18} />
+              {tr("Pay with Wallet", "បង់ប្រាក់ពីកាបូប")}
+            </Btn>
+          </div>
+        )}
+      </>
+    );
+  }
+
   function CustomerApp() {
     return (
       <Provider>
@@ -34237,6 +36444,54 @@ const CustomerApp = (() => {
               element={
                 <Gate k="tab_cn_orders">
                   <CustomerCnOrderDetail />
+                </Gate>
+              }
+            />
+            <Route
+              path="shop"
+              element={
+                <Gate k="tab_shop">
+                  <ShopCHomePage />
+                </Gate>
+              }
+            />
+            <Route
+              path="shop/p/:id"
+              element={
+                <Gate k="tab_shop">
+                  <ShopCProductPage />
+                </Gate>
+              }
+            />
+            <Route
+              path="shop/cart"
+              element={
+                <Gate k="tab_shop">
+                  <ShopCCartPage />
+                </Gate>
+              }
+            />
+            <Route
+              path="shop/checkout"
+              element={
+                <Gate k="tab_shop">
+                  <ShopCCheckoutPage />
+                </Gate>
+              }
+            />
+            <Route
+              path="shop/orders"
+              element={
+                <Gate k="tab_shop">
+                  <ShopCOrdersPage />
+                </Gate>
+              }
+            />
+            <Route
+              path="shop/orders/:id"
+              element={
+                <Gate k="tab_shop">
+                  <ShopCOrderDetailPage />
                 </Gate>
               }
             />
@@ -54953,6 +57208,8 @@ function CustomerDetailPage() {
           shipping_payment_wallet: "Shipping payment (wallet)",
           cn_order_payment_cash: "CN order paid by admin",
           cn_order_payment_wallet: "CN order payment (wallet)",
+          shop_order_payment_wallet: "Shop order payment (wallet)",
+          shop_order_refund_wallet: "Shop order refund (wallet)",
         })[r.type] || r.type,
     },
     {
@@ -61073,6 +63330,4248 @@ function DeletedAccountsPage() {
   );
 }
 
+// ============================================================
+// ONLINE SHOP — Admin / Staff (Phase 2)
+// Talks ONLY to the shop_* tables / RPCs created by shop_phase1.sql
+// (+ shop_phase1b.sql). Every privileged action is a server RPC; the
+// permission checks below only hide buttons — the database enforces them.
+// ============================================================
+const SHOP_INP =
+  "h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 disabled:bg-slate-50 disabled:text-slate-400";
+const SHOP_FILT =
+  "h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
+const SHOP_TXT =
+  "w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
+const SHOP_BTN =
+  "inline-flex h-10 items-center justify-center gap-1.5 rounded-xl px-4 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-50";
+const SHOP_BTN_PRIMARY = `${SHOP_BTN} bg-blue-600 text-white hover:bg-blue-700`;
+const SHOP_BTN_GHOST = `${SHOP_BTN} border border-slate-200 bg-white text-slate-700 hover:bg-slate-50`;
+const SHOP_BTN_DANGER = `${SHOP_BTN} bg-red-600 text-white hover:bg-red-700`;
+const SHOP_CARD = "rounded-2xl border border-slate-200 bg-white p-4 shadow-sm";
+
+const SHOP_STATUS_TONE = {
+  "Waiting Payment": "bg-amber-50 text-amber-700 ring-amber-200",
+  Processing: "bg-blue-50 text-blue-700 ring-blue-200",
+  "Accepted / Preparing Order": "bg-indigo-50 text-indigo-700 ring-indigo-200",
+  "Ready for Pickup": "bg-teal-50 text-teal-700 ring-teal-200",
+  "Ready for Delivery": "bg-teal-50 text-teal-700 ring-teal-200",
+  Delivery: "bg-violet-50 text-violet-700 ring-violet-200",
+  "Complete Order": "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  "Rejected & Refunded": "bg-red-50 text-red-700 ring-red-200",
+  Canceled: "bg-slate-100 text-slate-600 ring-slate-200",
+  Unpaid: "bg-amber-50 text-amber-700 ring-amber-200",
+  Paid: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  Refunded: "bg-red-50 text-red-700 ring-red-200",
+  Active: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  Draft: "bg-slate-100 text-slate-600 ring-slate-200",
+  Inactive: "bg-slate-100 text-slate-500 ring-slate-200",
+};
+const SHOP_ORDER_STATUSES = [
+  "Waiting Payment",
+  "Processing",
+  "Accepted / Preparing Order",
+  "Ready for Pickup",
+  "Ready for Delivery",
+  "Delivery",
+  "Complete Order",
+  "Rejected & Refunded",
+  "Canceled",
+];
+
+// User-facing error text: show our own business messages, never raw DB errors.
+function shopErr(e) {
+  if (e && e.shopMsg) return e.message;
+  const m = String(e?.message || e || "");
+  if (/bucket not found/i.test(m))
+    return "Image storage is not set up yet. Ask the admin to run shop_phase2b_storage.sql.";
+  if (/row-level security|permission denied/i.test(m))
+    return "You do not have permission to do this.";
+  if (/duplicate key|unique constraint/i.test(m))
+    return "That code / SKU / name already exists. Please use a different one.";
+  if (/violates foreign key/i.test(m))
+    return "This item is still in use and cannot be changed that way.";
+  const known =
+    /^(INSUFFICIENT_STOCK|ITEM_UNAVAILABLE|ORDER_NOT_[A-Z]+|SHOP_NOT_CONFIGURED|Permission denied|A rejection reason|A reason is required|Delivery person|Invalid status transition|An unpaid order|Quantity|Threshold|Shop order not found|Nothing to refund|Reservation|Inventory record|Invalid stock|PRODUCT_HAS_ORDERS|VARIANT_HAS_ORDERS|LAST_VARIANT|Product not found|Variant not found)/;
+  if (known.test(m)) return m.replace(/^[A-Z_]{4,}:\s*/, "");
+  return "Something went wrong. Please try again.";
+}
+const shopDt = (x) => (x ? new Date(x).toLocaleString() : "—");
+const shopNum = (v) => (v === "" || v == null ? null : Number(v));
+const shopSlug = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+const shopSearchSafe = (s) =>
+  String(s || "")
+    .replace(/[%,()*\\]/g, " ")
+    .trim();
+const shopVariantLabel = (v) =>
+  [v?.option_color, v?.option_size].filter(Boolean).join(" / ") || "Default";
+
+function useShopDebounced(value, ms = 300) {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
+
+function ShopBadge({ text }) {
+  return (
+    <span
+      className={`inline-flex whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-bold ring-1 ring-inset ${
+        SHOP_STATUS_TONE[text] || "bg-slate-100 text-slate-600 ring-slate-200"
+      }`}
+    >
+      {text}
+    </span>
+  );
+}
+
+function ShopField({ label, hint, children, className = "" }) {
+  return (
+    <label className={`block ${className}`}>
+      <span className="mb-1 block text-xs font-bold text-slate-600">
+        {label}
+      </span>
+      {children}
+      {hint && (
+        <span className="mt-1 block text-[11px] text-slate-400">{hint}</span>
+      )}
+    </label>
+  );
+}
+
+const shopModalStack = [];
+function ShopModal({ title, onClose, children, footer, wide }) {
+  const token = useRef({});
+  useEffect(() => {
+    const t = token.current;
+    shopModalStack.push(t);
+    return () => {
+      const i = shopModalStack.indexOf(t);
+      if (i >= 0) shopModalStack.splice(i, 1);
+    };
+  }, []);
+  useEffect(() => {
+    const onKey = (e) => {
+      if (
+        e.key === "Escape" &&
+        shopModalStack[shopModalStack.length - 1] === token.current
+      )
+        onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose]);
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[3px]"
+      onClick={onClose}
+      role="presentation"
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+        className={`flex max-h-[92vh] w-full flex-col rounded-2xl bg-white shadow-2xl ${
+          wide ? "max-w-3xl" : "max-w-lg"
+        }`}
+      >
+        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+          <h2 className="text-base font-extrabold text-slate-900">{title}</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-100"
+          >
+            <Icons.X size={18} />
+          </button>
+        </div>
+        <div className="overflow-y-auto px-5 py-4">{children}</div>
+        {footer && (
+          <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
+            {footer}
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// Generic small form dialog used for staff actions (accept / reject / ready / ...).
+function ShopActionModal({
+  title,
+  intro,
+  fields,
+  confirmLabel,
+  danger,
+  onSubmit,
+  onClose,
+}) {
+  const [vals, setVals] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  async function submit() {
+    if (busy) return;
+    for (const f of fields)
+      if (f.required && !String(vals[f.key] || "").trim()) {
+        setErr(`${f.label} is required.`);
+        return;
+      }
+    setBusy(true);
+    setErr("");
+    const msg = await onSubmit(vals);
+    setBusy(false);
+    if (msg) setErr(msg);
+  }
+  return (
+    <ShopModal
+      title={title}
+      onClose={busy ? () => {} : onClose}
+      footer={
+        <>
+          <button
+            type="button"
+            className={SHOP_BTN_GHOST}
+            onClick={onClose}
+            disabled={busy}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={danger ? SHOP_BTN_DANGER : SHOP_BTN_PRIMARY}
+            onClick={submit}
+            disabled={busy}
+          >
+            {busy ? "Working…" : confirmLabel}
+          </button>
+        </>
+      }
+    >
+      {intro && <p className="mb-3 text-sm text-slate-600">{intro}</p>}
+      <div className="space-y-3">
+        {fields.map((f) => (
+          <ShopField key={f.key} label={f.label + (f.required ? " *" : "")}>
+            {f.multiline ? (
+              <textarea
+                rows={3}
+                className={SHOP_TXT}
+                value={vals[f.key] || ""}
+                onChange={(e) => setVals({ ...vals, [f.key]: e.target.value })}
+              />
+            ) : (
+              <input
+                className={SHOP_INP}
+                value={vals[f.key] || ""}
+                onChange={(e) => setVals({ ...vals, [f.key]: e.target.value })}
+              />
+            )}
+          </ShopField>
+        ))}
+      </div>
+      {err && <p className="mt-3 text-sm font-semibold text-red-600">{err}</p>}
+    </ShopModal>
+  );
+}
+
+function ShopPager({ page, pageSize, total, onPage }) {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  return (
+    <div className="mt-3 flex items-center justify-between text-sm text-slate-500">
+      <span>
+        {total} result{total === 1 ? "" : "s"} · page {page + 1} of {pages}
+      </span>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          className={SHOP_BTN_GHOST}
+          disabled={page <= 0}
+          onClick={() => onPage(page - 1)}
+        >
+          Previous
+        </button>
+        <button
+          type="button"
+          className={SHOP_BTN_GHOST}
+          disabled={page + 1 >= pages}
+          onClick={() => onPage(page + 1)}
+        >
+          Next
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ShopGate({ perm, title, children }) {
+  const { user } = useAuth();
+  if (!hasPermission(user, perm))
+    return (
+      <div className="mx-auto max-w-xl rounded-2xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
+        You do not have permission to view {title}.
+      </div>
+    );
+  return children;
+}
+
+function ShopTable({ heads, loading, error, empty, children, minW = 760 }) {
+  return (
+    <div className="overflow-x-auto rounded-xl border border-slate-200">
+      <table className="w-full text-sm" style={{ minWidth: minW }}>
+        <thead>
+          <tr className="bg-slate-50 text-left text-[11px] font-bold uppercase tracking-wider text-slate-500">
+            {heads.map((h, i) => (
+              <th key={i} className="px-4 py-3">
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {loading && (
+            <tr>
+              <td
+                colSpan={heads.length}
+                className="px-4 py-10 text-center text-slate-400"
+              >
+                Loading…
+              </td>
+            </tr>
+          )}
+          {!loading && error && (
+            <tr>
+              <td
+                colSpan={heads.length}
+                className="px-4 py-10 text-center font-semibold text-red-600"
+              >
+                {error}
+              </td>
+            </tr>
+          )}
+          {!loading && !error && empty && (
+            <tr>
+              <td
+                colSpan={heads.length}
+                className="px-4 py-10 text-center text-slate-400"
+              >
+                {empty}
+              </td>
+            </tr>
+          )}
+          {!loading && !error && !empty && children}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// Categories
+// ------------------------------------------------------------
+function ShopCategoriesPage() {
+  const { user } = useAuth();
+  const canManage = hasPermission(user, "shop.category.manage");
+  const [rows, setRows] = useState([]);
+  const [counts, setCounts] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [edit, setEdit] = useState(null); // null | {} (new) | row
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      const [c, p] = await Promise.all([
+        supabase
+          .from("shop_categories")
+          .select("*")
+          .order("sort_order")
+          .order("name"),
+        supabase.from("shop_products").select("category_id").limit(5000),
+      ]);
+      if (!alive) return;
+      if (c.error) {
+        setError(shopErr(c.error));
+        setLoading(false);
+        return;
+      }
+      const tally = {};
+      (p.data || []).forEach(
+        (r) => (tally[r.category_id] = (tally[r.category_id] || 0) + 1),
+      );
+      setRows(c.data || []);
+      setCounts(tally);
+      setError("");
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [reload]);
+
+  async function toggle(row) {
+    if (row.is_active && (counts[row.id] || 0) > 0) {
+      const ok = await confirmDialog({
+        title: "Deactivate category?",
+        message: `${counts[row.id]} product(s) in "${row.name}" will be hidden from customers.`,
+        confirmText: "Deactivate",
+        cancelText: "Cancel",
+      });
+      if (!ok) return;
+    }
+    const { error: e } = await supabase
+      .from("shop_categories")
+      .update({ is_active: !row.is_active })
+      .eq("id", row.id);
+    if (e) emitCBToast("error", "Category", shopErr(e));
+    else setReload((n) => n + 1);
+  }
+
+  return (
+    <ShopGate perm="shop.view" title="Shop categories">
+      <div className="mx-auto max-w-5xl">
+        <div className="mb-5 flex items-center justify-between">
+          <h1 className="cb-page-title text-2xl font-extrabold text-slate-900">
+            Shop Categories
+          </h1>
+          {canManage && (
+            <button
+              type="button"
+              className={SHOP_BTN_PRIMARY}
+              onClick={() => setEdit({})}
+            >
+              <Icons.Plus size={16} /> New Category
+            </button>
+          )}
+        </div>
+        <div className={SHOP_CARD}>
+          <ShopTable
+            heads={["Name", "Slug", "Products", "Order", "Status", ""]}
+            loading={loading && rows.length === 0}
+            error={error}
+            empty={rows.length === 0 ? "No categories yet." : ""}
+          >
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td className="px-4 py-3 font-semibold text-slate-800">
+                  {r.name}
+                  {r.description && (
+                    <div className="text-xs font-normal text-slate-400">
+                      {r.description}
+                    </div>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-slate-500">{r.slug}</td>
+                <td className="px-4 py-3">{counts[r.id] || 0}</td>
+                <td className="px-4 py-3">{r.sort_order}</td>
+                <td className="px-4 py-3">
+                  <ShopBadge text={r.is_active ? "Active" : "Inactive"} />
+                </td>
+                <td className="px-4 py-3 text-right">
+                  {canManage && (
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        className={SHOP_BTN_GHOST}
+                        onClick={() => setEdit(r)}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        className={SHOP_BTN_GHOST}
+                        onClick={() => toggle(r)}
+                      >
+                        {r.is_active ? "Deactivate" : "Activate"}
+                      </button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </ShopTable>
+          <p className="mt-3 text-xs text-slate-400">
+            Categories that still contain products cannot be deleted —
+            deactivate them instead.
+          </p>
+        </div>
+        {edit && (
+          <ShopCategoryModal
+            row={edit}
+            onClose={() => setEdit(null)}
+            onSaved={() => {
+              setEdit(null);
+              setReload((n) => n + 1);
+            }}
+          />
+        )}
+      </div>
+    </ShopGate>
+  );
+}
+
+function ShopCategoryModal({ row, onClose, onSaved }) {
+  const isNew = !row.id;
+  const [v, setV] = useState({
+    name: row.name || "",
+    slug: row.slug || "",
+    description: row.description || "",
+    sort_order: row.sort_order ?? 0,
+    is_active: row.is_active ?? true,
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  async function save() {
+    if (busy) return;
+    if (!v.name.trim()) return setErr("Name is required.");
+    const payload = {
+      name: v.name.trim(),
+      slug: shopSlug(v.slug || v.name),
+      description: v.description.trim() || null,
+      sort_order: Number(v.sort_order) || 0,
+      is_active: !!v.is_active,
+    };
+    if (!payload.slug) return setErr("Slug is required.");
+    setBusy(true);
+    setErr("");
+    const { error: e } = isNew
+      ? await supabase.from("shop_categories").insert(payload)
+      : await supabase.from("shop_categories").update(payload).eq("id", row.id);
+    setBusy(false);
+    if (e) return setErr(shopErr(e));
+    emitCBToast("success", "Category", "Saved");
+    onSaved();
+  }
+  return (
+    <ShopModal
+      title={isNew ? "New Category" : "Edit Category"}
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" className={SHOP_BTN_GHOST} onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={SHOP_BTN_PRIMARY}
+            onClick={save}
+            disabled={busy}
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </>
+      }
+    >
+      <div className="space-y-3">
+        <ShopField label="Name *">
+          <input
+            className={SHOP_INP}
+            value={v.name}
+            onChange={(e) => setV({ ...v, name: e.target.value })}
+          />
+        </ShopField>
+        <ShopField label="Slug" hint="Leave empty to generate from the name.">
+          <input
+            className={SHOP_INP}
+            value={v.slug}
+            onChange={(e) => setV({ ...v, slug: e.target.value })}
+          />
+        </ShopField>
+        <ShopField label="Description">
+          <textarea
+            rows={2}
+            className={SHOP_TXT}
+            value={v.description}
+            onChange={(e) => setV({ ...v, description: e.target.value })}
+          />
+        </ShopField>
+        <div className="grid grid-cols-2 gap-3">
+          <ShopField label="Sort order">
+            <input
+              type="number"
+              className={SHOP_INP}
+              value={v.sort_order}
+              onChange={(e) => setV({ ...v, sort_order: e.target.value })}
+            />
+          </ShopField>
+          <ShopField label="Status">
+            <select
+              className={SHOP_INP}
+              value={v.is_active ? "1" : "0"}
+              onChange={(e) =>
+                setV({ ...v, is_active: e.target.value === "1" })
+              }
+            >
+              <option value="1">Active</option>
+              <option value="0">Inactive</option>
+            </select>
+          </ShopField>
+        </div>
+        {err && <p className="text-sm font-semibold text-red-600">{err}</p>}
+      </div>
+    </ShopModal>
+  );
+}
+
+// ------------------------------------------------------------
+// Product images (Supabase Storage bucket "shop-products")
+// Files are never deleted from storage: old orders keep a snapshot of the image URL.
+// ------------------------------------------------------------
+const SHOP_IMG_BUCKET = "shop-products";
+const SHOP_IMG_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const SHOP_MAX_IMAGES = 8;
+const shopMsgErr = (m) => Object.assign(new Error(m), { shopMsg: true });
+
+// Downscale big phone photos (max 1600px, WebP) so the shop loads fast on mobile data.
+async function shopResizeImage(file) {
+  try {
+    if (
+      typeof createImageBitmap !== "function" ||
+      typeof document === "undefined"
+    )
+      return file;
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bmp.width * scale));
+    canvas.height = Math.max(1, Math.round(bmp.height * scale));
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return file;
+    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((r) => canvas.toBlob(r, "image/webp", 0.85));
+    return blob && blob.type === "image/webp" && blob.size < file.size
+      ? blob
+      : file;
+  } catch (e) {
+    return file;
+  }
+}
+
+async function shopUploadImage(file) {
+  if (!SHOP_IMG_TYPES.includes(file.type))
+    throw shopMsgErr("Use a JPG, PNG or WebP image.");
+  if (file.size > 10 * 1024 * 1024)
+    throw shopMsgErr("Image is larger than 10 MB.");
+  const blob = await shopResizeImage(file);
+  if (blob.size > 5 * 1024 * 1024)
+    throw shopMsgErr(
+      "Image is still larger than 5 MB after resizing. Choose a smaller one.",
+    );
+  const ext =
+    blob.type === "image/png"
+      ? "png"
+      : blob.type === "image/webp"
+        ? "webp"
+        : "jpg";
+  const id =
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : String(Date.now()) + Math.random().toString(36).slice(2);
+  const path = `products/${new Date().toISOString().slice(0, 7)}/${id}.${ext}`;
+  const { error } = await supabase.storage
+    .from(SHOP_IMG_BUCKET)
+    .upload(path, blob, {
+      contentType: blob.type,
+      cacheControl: "31536000",
+      upsert: false,
+    });
+  if (error) throw error;
+  return supabase.storage.from(SHOP_IMG_BUCKET).getPublicUrl(path).data
+    .publicUrl;
+}
+
+function ShopImageManager({ images, onChange, disabled }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [url, setUrl] = useState("");
+  async function onFiles(e) {
+    const files = Array.from(e.target.files || []);
+    try {
+      e.target.value = "";
+    } catch (x) {
+      /* ignore */
+    }
+    if (!files.length || busy) return;
+    if (images.length + files.length > SHOP_MAX_IMAGES)
+      return setMsg(`Maximum ${SHOP_MAX_IMAGES} images per product.`);
+    setBusy(true);
+    setMsg("");
+    const added = [];
+    const errs = [];
+    for (const f of files) {
+      try {
+        added.push(await shopUploadImage(f));
+      } catch (err) {
+        errs.push(`${f.name}: ${shopErr(err)}`);
+      }
+    }
+    setBusy(false);
+    if (added.length) onChange([...images, ...added]);
+    if (errs.length) setMsg(errs.join("  "));
+  }
+  function addUrl() {
+    const u = url.trim();
+    if (!/^https?:\/\//i.test(u))
+      return setMsg("Enter a full image link starting with http(s)://");
+    if (images.includes(u)) return setMsg("That image is already added.");
+    if (images.length >= SHOP_MAX_IMAGES)
+      return setMsg(`Maximum ${SHOP_MAX_IMAGES} images per product.`);
+    setMsg("");
+    setUrl("");
+    onChange([...images, u]);
+  }
+  const makeMain = (i) =>
+    onChange([images[i], ...images.filter((_, k) => k !== i)]);
+  const remove = (i) => onChange(images.filter((_, k) => k !== i));
+  return (
+    <div>
+      <div className="mb-1 text-xs font-bold text-slate-600">
+        Product photos
+      </div>
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+        {images.map((u, i) => (
+          <div
+            key={u}
+            className="group relative aspect-square overflow-hidden rounded-xl border border-slate-200 bg-slate-50"
+          >
+            <img src={u} alt="" className="h-full w-full object-cover" />
+            {i === 0 && (
+              <span className="absolute left-1 top-1 rounded-md bg-blue-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                Main
+              </span>
+            )}
+            {!disabled && (
+              <div className="absolute inset-x-0 bottom-0 flex justify-between gap-1 bg-gradient-to-t from-slate-900/70 to-transparent p-1">
+                {i > 0 ? (
+                  <button
+                    type="button"
+                    className="rounded bg-white/90 px-1.5 py-0.5 text-[10px] font-bold text-slate-700"
+                    onClick={() => makeMain(i)}
+                  >
+                    Make main
+                  </button>
+                ) : (
+                  <span />
+                )}
+                <button
+                  type="button"
+                  aria-label="Remove photo"
+                  className="grid h-5 w-5 place-items-center rounded bg-white/90 text-red-600"
+                  onClick={() => remove(i)}
+                >
+                  <Icons.X size={12} />
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+        {!disabled && images.length < SHOP_MAX_IMAGES && (
+          <label
+            className={`grid aspect-square cursor-pointer place-items-center rounded-xl border-2 border-dashed border-slate-300 text-center text-xs font-semibold text-slate-500 hover:border-blue-400 hover:text-blue-600 ${busy ? "pointer-events-none opacity-60" : ""}`}
+          >
+            <span>
+              <Icons.ImagePlus size={22} className="mx-auto mb-1" />
+              {busy ? "Uploading…" : "Upload photos"}
+            </span>
+            <input
+              type="file"
+              multiple
+              accept="image/jpeg,image/png,image/webp"
+              className="sr-only"
+              aria-label="Upload photos"
+              disabled={busy}
+              onChange={onFiles}
+            />
+          </label>
+        )}
+      </div>
+      {!disabled && (
+        <div className="mt-2 flex gap-2">
+          <input
+            className={SHOP_INP}
+            placeholder="…or paste an image link (https://…)"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            disabled={busy}
+          />
+          <button
+            type="button"
+            className={SHOP_BTN_GHOST}
+            onClick={addUrl}
+            disabled={busy}
+          >
+            Add
+          </button>
+        </div>
+      )}
+      <p className="mt-1 text-[11px] text-slate-400">
+        JPG, PNG or WebP, up to {SHOP_MAX_IMAGES} photos. The first photo is the
+        main one customers see. Large photos are shrunk automatically.
+      </p>
+      {msg && <p className="mt-1 text-sm font-semibold text-red-600">{msg}</p>}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// Products (+ variants)
+// ------------------------------------------------------------
+// Permanent delete — only for products that were never ordered. Otherwise offer to hide (Inactive).
+async function shopDeleteProductFlow(product, reason, afterChange) {
+  const { error } = await supabase.rpc("shop_delete_product", {
+    p_product_id: product.id,
+    p_reason: reason,
+  });
+  if (!error) {
+    emitCBToast("success", "Product", "Deleted");
+    afterChange();
+    return "";
+  }
+  if (/PRODUCT_HAS_ORDERS/.test(error.message)) {
+    const ok = await confirmDialog({
+      title: "This product cannot be deleted",
+      message:
+        "It has been ordered before, and order history needs it. Hide it from customers instead (set status to Inactive)?",
+      confirmText: "Set Inactive",
+      cancelText: "Keep as is",
+    });
+    if (ok) {
+      const { error: e2 } = await supabase
+        .from("shop_products")
+        .update({ status: "Inactive" })
+        .eq("id", product.id);
+      if (e2) return shopErr(e2);
+      emitCBToast("success", "Product", "Set to Inactive");
+    }
+    afterChange();
+    return "";
+  }
+  return shopErr(error);
+}
+
+function ShopProductsPage() {
+  const { user } = useAuth();
+  const canEdit = hasPermission(user, "shop.product.edit");
+  const canDelete = hasPermission(user, "shop.product.delete");
+  const [del, setDel] = useState(null);
+  const [cats, setCats] = useState([]);
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [search, setSearch] = useState("");
+  const [cat, setCat] = useState("");
+  const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [edit, setEdit] = useState(null);
+  const [reload, setReload] = useState(0);
+  const PAGE = 20;
+  const s = useShopDebounced(search);
+
+  useEffect(() => {
+    supabase
+      .from("shop_categories")
+      .select("id,name,is_active")
+      .order("sort_order")
+      .order("name")
+      .then(({ data }) => setCats(data || []));
+  }, []);
+  useEffect(() => setPage(0), [s, cat, status]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      let skuIds = [];
+      const term = shopSearchSafe(s);
+      if (term) {
+        const { data } = await supabase
+          .from("shop_product_variants")
+          .select("product_id")
+          .ilike("sku", `%${term}%`)
+          .limit(100);
+        skuIds = [...new Set((data || []).map((r) => r.product_id))];
+      }
+      let q = supabase
+        .from("shop_products")
+        .select(
+          "id,product_code,name,brand,status,is_featured,selling_price,discount_price,cost_price,image_urls,category_id,shop_categories(name),shop_product_variants(id,is_active)",
+          { count: "exact" },
+        )
+        .order("created_at", { ascending: false })
+        .range(page * PAGE, page * PAGE + PAGE - 1);
+      if (status) q = q.eq("status", status);
+      if (cat) q = q.eq("category_id", cat);
+      if (term) {
+        const parts = [
+          `name.ilike.%${term}%`,
+          `product_code.ilike.%${term}%`,
+          `brand.ilike.%${term}%`,
+        ];
+        if (skuIds.length) parts.push(`id.in.(${skuIds.join(",")})`);
+        q = q.or(parts.join(","));
+      }
+      const { data, error: e, count } = await q;
+      if (!alive) return;
+      if (e) setError(shopErr(e));
+      else {
+        setError("");
+        setRows(data || []);
+        setTotal(count || 0);
+      }
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [s, cat, status, page, reload]);
+
+  return (
+    <ShopGate perm="shop.view" title="Shop products">
+      <div className="mx-auto max-w-7xl">
+        <div className="mb-5 flex items-center justify-between">
+          <h1 className="cb-page-title text-2xl font-extrabold text-slate-900">
+            Shop Products
+          </h1>
+          {canEdit && (
+            <button
+              type="button"
+              className={SHOP_BTN_PRIMARY}
+              onClick={() => setEdit({})}
+              disabled={cats.length === 0}
+              title={cats.length === 0 ? "Create a category first" : ""}
+            >
+              <Icons.Plus size={16} /> New Product
+            </button>
+          )}
+        </div>
+        <div className={SHOP_CARD}>
+          <div className="mb-4 flex flex-wrap gap-2">
+            <input
+              className={`${SHOP_FILT} w-64`}
+              placeholder="Search name, code, brand, SKU…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <select
+              className={`${SHOP_FILT} w-48`}
+              value={cat}
+              onChange={(e) => setCat(e.target.value)}
+            >
+              <option value="">All categories</option>
+              {cats.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <select
+              className={`${SHOP_FILT} w-40`}
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+            >
+              <option value="">All statuses</option>
+              {["Draft", "Active", "Inactive"].map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className={SHOP_BTN_GHOST}
+              onClick={() => setReload((n) => n + 1)}
+            >
+              <Icons.RefreshCw
+                size={15}
+                className={loading ? "animate-spin" : ""}
+              />
+            </button>
+          </div>
+          <ShopTable
+            heads={[
+              "Product",
+              "Category",
+              "Price",
+              "Cost",
+              "Variants",
+              "Status",
+              "",
+            ]}
+            loading={loading && rows.length === 0}
+            error={error}
+            empty={rows.length === 0 ? "No products found." : ""}
+            minW={900}
+          >
+            {rows.map((r) => (
+              <tr key={r.id}>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-lg bg-slate-100 text-slate-300">
+                      {r.image_urls?.[0] ? (
+                        <img
+                          src={r.image_urls[0]}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <Icons.Package size={18} />
+                      )}
+                    </div>
+                    <div>
+                      <div className="font-semibold text-slate-800">
+                        {r.name}
+                        {r.is_featured && (
+                          <Icons.Star
+                            size={13}
+                            className="ml-1 inline text-amber-500"
+                          />
+                        )}
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        {r.product_code}
+                        {r.brand ? ` · ${r.brand}` : ""}
+                      </div>
+                    </div>
+                  </div>
+                </td>
+                <td className="px-4 py-3">{r.shop_categories?.name || "—"}</td>
+                <td className="px-4 py-3">
+                  {r.discount_price != null ? (
+                    <>
+                      <b>{money(r.discount_price)}</b>{" "}
+                      <s className="text-xs text-slate-400">
+                        {money(r.selling_price)}
+                      </s>
+                    </>
+                  ) : (
+                    money(r.selling_price)
+                  )}
+                </td>
+                <td className="px-4 py-3 text-slate-500">
+                  {r.cost_price != null ? money(r.cost_price) : "—"}
+                </td>
+                <td className="px-4 py-3">
+                  {
+                    (r.shop_product_variants || []).filter((x) => x.is_active)
+                      .length
+                  }
+                </td>
+                <td className="px-4 py-3">
+                  <ShopBadge text={r.status} />
+                </td>
+                <td className="px-4 py-3 text-right">
+                  <div className="flex justify-end gap-1.5">
+                    <button
+                      type="button"
+                      className={SHOP_BTN_GHOST}
+                      onClick={() => setEdit(r)}
+                    >
+                      {canEdit ? "Edit" : "View"}
+                    </button>
+                    {canDelete && (
+                      <button
+                        type="button"
+                        className={`${SHOP_BTN_GHOST} text-red-600`}
+                        aria-label={`Delete ${r.name}`}
+                        title="Delete product"
+                        onClick={() => setDel(r)}
+                      >
+                        <Icons.Trash2 size={15} />
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </ShopTable>
+          <ShopPager
+            page={page}
+            pageSize={PAGE}
+            total={total}
+            onPage={setPage}
+          />
+        </div>
+        {del && (
+          <ShopActionModal
+            title={`Delete “${del.name}”?`}
+            intro="This permanently deletes the product, its variants and their stock records. It only works for products that were never ordered. Otherwise set the product to Inactive. The deletion is logged."
+            fields={[
+              {
+                key: "reason",
+                label: "Reason",
+                required: true,
+                multiline: true,
+              },
+            ]}
+            confirmLabel="Delete permanently"
+            danger
+            onClose={() => setDel(null)}
+            onSubmit={async (vals) => {
+              const msg = await shopDeleteProductFlow(del, vals.reason, () => {
+                setDel(null);
+                setEdit(null);
+                setReload((n) => n + 1);
+              });
+              return msg;
+            }}
+          />
+        )}
+        {edit && (
+          <ShopProductModal
+            product={edit}
+            cats={cats}
+            canEdit={canEdit}
+            canDelete={canDelete}
+            onDelete={() => {
+              setDel(edit);
+              setEdit(null);
+            }}
+            onClose={() => setEdit(null)}
+            onSaved={() => {
+              setEdit(null);
+              setReload((n) => n + 1);
+            }}
+          />
+        )}
+      </div>
+    </ShopGate>
+  );
+}
+
+const shopBlankVariant = () => ({
+  _key: Math.random().toString(36).slice(2),
+  id: null,
+  sku: "",
+  barcode: "",
+  option_color: "",
+  option_size: "",
+  price_override: "",
+  cost_override: "",
+  image_url: "",
+  stock: "",
+  is_active: true,
+  is_default: false,
+});
+
+function ShopProductModal({
+  product,
+  cats,
+  canEdit,
+  canDelete,
+  onDelete,
+  onClose,
+  onSaved,
+}) {
+  const isNew = !product.id;
+  const { user } = useAuth();
+  const canStock = hasPermission(user, "shop.stock.manage");
+  const [genColors, setGenColors] = useState("");
+  const [genSizes, setGenSizes] = useState("");
+  const [genMsg, setGenMsg] = useState("");
+  const [openStock, setOpenStock] = useState("");
+  const [delVar, setDelVar] = useState(null);
+  const [productId, setProductId] = useState(product.id || null);
+  const [v, setV] = useState({
+    product_code: product.product_code || "",
+    name: product.name || "",
+    description: product.description || "",
+    category_id: product.category_id || "",
+    brand: product.brand || "",
+    cost_price: product.cost_price ?? "",
+    selling_price: product.selling_price ?? "",
+    discount_price: product.discount_price ?? "",
+    status: product.status || "Draft",
+    is_featured: !!product.is_featured,
+    weight_kg: product.weight_kg ?? "",
+    dimensions: product.dimensions || "",
+  });
+  const [imgs, setImgs] = useState(product.image_urls || []);
+  const [hasVariants, setHasVariants] = useState(false);
+  const [variants, setVariants] = useState([]);
+  const [loadingV, setLoadingV] = useState(!isNew);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (isNew) return;
+    let alive = true;
+    (async () => {
+      const [{ data: full }, { data: vs, error: e }] = await Promise.all([
+        supabase
+          .from("shop_products")
+          .select("*")
+          .eq("id", product.id)
+          .single(),
+        supabase
+          .from("shop_product_variants")
+          .select("*")
+          .eq("product_id", product.id)
+          .order("created_at"),
+      ]);
+      if (!alive) return;
+      if (e) setErr(shopErr(e));
+      if (full)
+        setV((cur) => ({
+          ...cur,
+          description: full.description || "",
+          weight_kg: full.weight_kg ?? "",
+          dimensions: full.dimensions || "",
+        }));
+      if (full) setImgs(full.image_urls || []);
+      const list = (vs || []).map((x) => ({
+        ...shopBlankVariant(),
+        ...x,
+        barcode: x.barcode || "",
+        option_color: x.option_color || "",
+        option_size: x.option_size || "",
+        price_override: x.price_override ?? "",
+        cost_override: x.cost_override ?? "",
+        image_url: x.image_url || "",
+      }));
+      setVariants(list);
+      setHasVariants(list.some((x) => !x.is_default));
+      setLoadingV(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [isNew, product.id]);
+
+  const setVar = (key, patch) =>
+    setVariants((list) =>
+      list.map((x) => (x._key === key ? { ...x, ...patch } : x)),
+    );
+
+  // Quick add: "Red, Black" x "S, M, L" -> every combination, SKUs built from the product code.
+  function generate() {
+    const split = (str) => {
+      const seen = new Set();
+      return String(str || "")
+        .split(/[,\n،]+/)
+        .map((x) => x.trim())
+        .filter((x) => {
+          const k = x.toLowerCase();
+          if (!x || seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+    };
+    const cs = split(genColors);
+    const ss = split(genSizes);
+    if (!cs.length && !ss.length)
+      return setGenMsg(
+        "Type at least one color or size (separate several with commas).",
+      );
+    const base = v.product_code.trim();
+    if (!base)
+      return setGenMsg(
+        "Enter the product code first — it is used to build each SKU.",
+      );
+    const keep = variants.filter(
+      (x) =>
+        x.id || x.sku.trim() || x.option_color.trim() || x.option_size.trim(),
+    );
+    const have = new Set(
+      keep.map(
+        (x) =>
+          `${x.option_color.trim().toLowerCase()}|${x.option_size.trim().toLowerCase()}`,
+      ),
+    );
+    const skus = new Set(keep.map((x) => x.sku.trim().toLowerCase()));
+    const added = [];
+    let skipped = 0;
+    for (const c of cs.length ? cs : [""]) {
+      for (const sz of ss.length ? ss : [""]) {
+        const key = `${c.toLowerCase()}|${sz.toLowerCase()}`;
+        if (have.has(key)) {
+          skipped++;
+          continue;
+        }
+        have.add(key);
+        const ca = c
+          ? c
+              .replace(/[^A-Za-z0-9]/g, "")
+              .slice(0, 3)
+              .toUpperCase() || `C${cs.indexOf(c) + 1}`
+          : "";
+        const sa = sz
+          ? sz.replace(/[^A-Za-z0-9]/g, "").toUpperCase() ||
+            `S${ss.indexOf(sz) + 1}`
+          : "";
+        const root = [base, ca, sa].filter(Boolean).join("-").toUpperCase();
+        let sku = root;
+        let n = 2;
+        while (skus.has(sku.toLowerCase())) sku = `${root}-${n++}`;
+        skus.add(sku.toLowerCase());
+        added.push({
+          ...shopBlankVariant(),
+          sku,
+          option_color: c,
+          option_size: sz,
+        });
+      }
+    }
+    setVariants([...keep, ...added]);
+    setHasVariants(true);
+    setGenMsg(
+      added.length
+        ? `Added ${added.length} variant(s)${skipped ? `, skipped ${skipped} that already exist` : ""}. Enter opening stock for each, then Save.`
+        : "Nothing new to add — all of those combinations already exist.",
+    );
+    setGenColors("");
+    setGenSizes("");
+  }
+
+  function validate() {
+    if (!v.product_code.trim()) return "Product code is required.";
+    const badStock = (val) =>
+      val !== "" && (!Number.isInteger(Number(val)) || Number(val) < 0);
+    if (!hasVariants && isNew && badStock(openStock))
+      return "Opening stock must be a whole number, 0 or more.";
+    if (hasVariants && variants.some((x) => !x.id && badStock(x.stock)))
+      return "Opening stock must be a whole number, 0 or more.";
+    if (!v.name.trim()) return "Product name is required.";
+    if (!v.category_id) return "Choose a category.";
+    const sp = shopNum(v.selling_price);
+    if (sp == null || sp < 0) return "Selling price must be 0 or more.";
+    const dp = shopNum(v.discount_price);
+    if (dp != null && (dp < 0 || dp > sp))
+      return "Discounted price must be between 0 and the selling price.";
+    const cp = shopNum(v.cost_price);
+    if (cp != null && cp < 0) return "Cost price must be 0 or more.";
+    if (hasVariants) {
+      if (variants.length === 0) return "Add at least one variant.";
+      const seen = new Set();
+      for (const x of variants) {
+        const sku = x.sku.trim().toLowerCase();
+        if (!sku) return "Every variant needs a SKU.";
+        if (seen.has(sku)) return `Duplicate SKU in this form: ${x.sku}`;
+        seen.add(sku);
+        const po = shopNum(x.price_override);
+        if (po != null && po < 0) return "Variant price must be 0 or more.";
+      }
+    }
+    return "";
+  }
+
+  async function save() {
+    if (busy || !canEdit) return;
+    const bad = validate();
+    if (bad) return setErr(bad);
+    setBusy(true);
+    setErr("");
+    try {
+      const payload = {
+        product_code: v.product_code.trim(),
+        name: v.name.trim(),
+        description: v.description.trim() || null,
+        category_id: v.category_id,
+        brand: v.brand.trim() || null,
+        cost_price: shopNum(v.cost_price),
+        selling_price: shopNum(v.selling_price),
+        discount_price: shopNum(v.discount_price),
+        is_featured: !!v.is_featured,
+        weight_kg: shopNum(v.weight_kg),
+        dimensions: v.dimensions.trim() || null,
+        image_urls: imgs,
+      };
+      let id = productId;
+      if (!id) {
+        // New products start as Draft and only get their final status after the
+        // variants exist, so a half-saved product can never be sold.
+        const { data, error: e } = await supabase
+          .from("shop_products")
+          .insert({ ...payload, status: "Draft" })
+          .select("id")
+          .single();
+        if (e) throw e;
+        id = data.id;
+        setProductId(id);
+      } else {
+        const { error: e } = await supabase
+          .from("shop_products")
+          .update({ ...payload, status: v.status })
+          .eq("id", id);
+        if (e) throw e;
+      }
+
+      const rows = hasVariants
+        ? variants
+        : variants.length
+          ? variants.map((x) => ({
+              ...x,
+              sku: x.is_default ? v.product_code.trim() : x.sku,
+            }))
+          : [
+              {
+                ...shopBlankVariant(),
+                sku: v.product_code.trim(),
+                is_default: true,
+                stock: openStock,
+              },
+            ];
+      const toStock = [];
+      for (const x of rows) {
+        const vp = {
+          product_id: id,
+          sku: x.sku.trim(),
+          barcode: x.barcode?.trim() || null,
+          option_color: x.option_color?.trim() || null,
+          option_size: x.option_size?.trim() || null,
+          price_override: shopNum(x.price_override),
+          cost_override: shopNum(x.cost_override),
+          image_url: x.image_url?.trim() || null,
+          is_active: !!x.is_active,
+          is_default: !hasVariants,
+        };
+        if (x.id) {
+          const { error: e } = await supabase
+            .from("shop_product_variants")
+            .update(vp)
+            .eq("id", x.id);
+          if (e) throw e;
+        } else {
+          const { data: ins, error: e } = await supabase
+            .from("shop_product_variants")
+            .insert(vp)
+            .select("id")
+            .single();
+          if (e) throw e;
+          x.id = ins.id; // a retry after a later failure will update, not duplicate
+          setVar(x._key, { id: ins.id, stock: "" });
+          if (canStock && Number(x.stock) > 0)
+            toStock.push({ id: ins.id, qty: Number(x.stock), sku: vp.sku });
+        }
+      }
+      if (isNew || v.status !== "Draft") {
+        const { error: e } = await supabase
+          .from("shop_products")
+          .update({ status: v.status })
+          .eq("id", id);
+        if (e) throw e;
+      }
+      const failed = [];
+      for (const st of toStock) {
+        const { error: e } = await supabase.rpc("shop_stock_move", {
+          p_variant_id: st.id,
+          p_type: "receive",
+          p_quantity: st.qty,
+          p_reason: "Opening stock",
+          p_idempotency_key: `opening:${st.id}`,
+        });
+        if (e) failed.push(st.sku);
+      }
+      if (failed.length)
+        emitCBToast(
+          "error",
+          "Opening stock",
+          `Product saved, but stock was not added for: ${failed.join(", ")}. Use Inventory → Receive.`,
+        );
+      else emitCBToast("success", "Product", "Saved");
+      onSaved();
+    } catch (e) {
+      setErr(shopErr(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const ro = !canEdit;
+  return (
+    <ShopModal
+      wide
+      title={isNew ? "New Product" : ro ? "Product" : "Edit Product"}
+      onClose={busy ? () => {} : onClose}
+      footer={
+        <>
+          {canDelete && !isNew && (
+            <button
+              type="button"
+              className={`${SHOP_BTN_GHOST} mr-auto text-red-600`}
+              onClick={onDelete}
+              disabled={busy}
+            >
+              <Icons.Trash2 size={15} /> Delete product
+            </button>
+          )}
+          <button
+            type="button"
+            className={SHOP_BTN_GHOST}
+            onClick={onClose}
+            disabled={busy}
+          >
+            Close
+          </button>
+          {canEdit && (
+            <button
+              type="button"
+              className={SHOP_BTN_PRIMARY}
+              onClick={save}
+              disabled={busy || loadingV}
+            >
+              {busy ? "Saving…" : "Save Product"}
+            </button>
+          )}
+        </>
+      }
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <ShopField label="Product code (SKU) *">
+          <input
+            className={SHOP_INP}
+            disabled={ro}
+            value={v.product_code}
+            onChange={(e) => setV({ ...v, product_code: e.target.value })}
+          />
+        </ShopField>
+        <ShopField label="Category *">
+          <select
+            className={SHOP_INP}
+            disabled={ro}
+            value={v.category_id}
+            onChange={(e) => setV({ ...v, category_id: e.target.value })}
+          >
+            <option value="">Select…</option>
+            {cats.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+                {c.is_active ? "" : " (inactive)"}
+              </option>
+            ))}
+          </select>
+        </ShopField>
+        <ShopField label="Product name *" className="sm:col-span-2">
+          <input
+            className={SHOP_INP}
+            disabled={ro}
+            value={v.name}
+            onChange={(e) => setV({ ...v, name: e.target.value })}
+          />
+        </ShopField>
+        <ShopField label="Description" className="sm:col-span-2">
+          <textarea
+            rows={3}
+            className={SHOP_TXT}
+            disabled={ro}
+            value={v.description}
+            onChange={(e) => setV({ ...v, description: e.target.value })}
+          />
+        </ShopField>
+        <ShopField label="Brand">
+          <input
+            className={SHOP_INP}
+            disabled={ro}
+            value={v.brand}
+            onChange={(e) => setV({ ...v, brand: e.target.value })}
+          />
+        </ShopField>
+        <ShopField label="Status">
+          <select
+            className={SHOP_INP}
+            disabled={ro}
+            value={v.status}
+            onChange={(e) => setV({ ...v, status: e.target.value })}
+          >
+            {["Draft", "Active", "Inactive"].map((x) => (
+              <option key={x}>{x}</option>
+            ))}
+          </select>
+        </ShopField>
+        <ShopField label="Selling price (USD) *">
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            className={SHOP_INP}
+            disabled={ro}
+            value={v.selling_price}
+            onChange={(e) => setV({ ...v, selling_price: e.target.value })}
+          />
+        </ShopField>
+        <ShopField label="Discounted price" hint="Leave empty for no discount.">
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            className={SHOP_INP}
+            disabled={ro}
+            value={v.discount_price}
+            onChange={(e) => setV({ ...v, discount_price: e.target.value })}
+          />
+        </ShopField>
+        <ShopField
+          label="Cost price"
+          hint="Internal only — customers never see it."
+        >
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            className={SHOP_INP}
+            disabled={ro}
+            value={v.cost_price}
+            onChange={(e) => setV({ ...v, cost_price: e.target.value })}
+          />
+        </ShopField>
+        <ShopField label="Featured">
+          <select
+            className={SHOP_INP}
+            disabled={ro}
+            value={v.is_featured ? "1" : "0"}
+            onChange={(e) =>
+              setV({ ...v, is_featured: e.target.value === "1" })
+            }
+          >
+            <option value="0">No</option>
+            <option value="1">Yes</option>
+          </select>
+        </ShopField>
+        <ShopField label="Weight (kg)">
+          <input
+            type="number"
+            min="0"
+            step="0.001"
+            className={SHOP_INP}
+            disabled={ro}
+            value={v.weight_kg}
+            onChange={(e) => setV({ ...v, weight_kg: e.target.value })}
+          />
+        </ShopField>
+        <ShopField label="Dimensions">
+          <input
+            className={SHOP_INP}
+            disabled={ro}
+            placeholder="e.g. 30 x 20 x 10 cm"
+            value={v.dimensions}
+            onChange={(e) => setV({ ...v, dimensions: e.target.value })}
+          />
+        </ShopField>
+        <div className="sm:col-span-2">
+          <ShopImageManager images={imgs} onChange={setImgs} disabled={ro} />
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-xl border border-slate-200 p-3">
+        <div className="mb-2 flex items-center justify-between">
+          <div>
+            <div className="text-sm font-extrabold text-slate-800">
+              Variants
+            </div>
+            <div className="text-xs text-slate-400">
+              Each variant has its own SKU, stock and (optionally) its own
+              photo. Opening stock can be entered here; later changes are made
+              in Inventory.
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+            <input
+              type="checkbox"
+              disabled={ro || variants.some((x) => x.id && !x.is_default)}
+              checked={hasVariants}
+              onChange={(e) => {
+                setHasVariants(e.target.checked);
+                if (e.target.checked && variants.length === 0)
+                  setVariants([shopBlankVariant()]);
+                if (!e.target.checked)
+                  setVariants((l) => l.filter((x) => x.id));
+              }}
+            />
+            Has Color / Size options
+          </label>
+        </div>
+        {loadingV && (
+          <p className="text-sm text-slate-400">Loading variants…</p>
+        )}
+        {canEdit && !loadingV && (
+          <div className="mb-3 rounded-lg border border-dashed border-slate-300 bg-white p-3">
+            <div className="mb-2 text-xs font-bold text-slate-600">
+              Quick add — type colors and sizes, we create every combination
+            </div>
+            <div className="grid items-end gap-2 sm:grid-cols-12">
+              <ShopField
+                label="Colors (comma separated)"
+                className="sm:col-span-5"
+              >
+                <input
+                  className={SHOP_INP}
+                  placeholder="e.g. Red, Black, Blue"
+                  value={genColors}
+                  onChange={(e) => setGenColors(e.target.value)}
+                />
+              </ShopField>
+              <ShopField
+                label="Sizes (comma separated)"
+                className="sm:col-span-5"
+              >
+                <input
+                  className={SHOP_INP}
+                  placeholder="e.g. S, M, L, XL"
+                  value={genSizes}
+                  onChange={(e) => setGenSizes(e.target.value)}
+                />
+              </ShopField>
+              <div className="sm:col-span-2">
+                <button
+                  type="button"
+                  className={SHOP_BTN_PRIMARY}
+                  onClick={generate}
+                >
+                  Generate
+                </button>
+              </div>
+            </div>
+            {genMsg && (
+              <p className="mt-2 text-xs font-semibold text-slate-600">
+                {genMsg}
+              </p>
+            )}
+          </div>
+        )}
+        {!hasVariants && !loadingV && (
+          <div>
+            <p className="text-sm text-slate-500">
+              This product is sold as a single item (SKU = product code).
+            </p>
+            {isNew && canStock && (
+              <div className="mt-2 max-w-[220px]">
+                <ShopField label="Opening stock (optional)">
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    className={SHOP_INP}
+                    value={openStock}
+                    onChange={(e) => setOpenStock(e.target.value)}
+                  />
+                </ShopField>
+              </div>
+            )}
+          </div>
+        )}
+        {hasVariants && (
+          <div className="space-y-2">
+            {variants.map((x) => (
+              <div
+                key={x._key}
+                className="grid items-end gap-2 rounded-lg bg-slate-50 p-2 sm:grid-cols-12"
+              >
+                <ShopField label="SKU *" className="sm:col-span-3">
+                  <input
+                    className={SHOP_INP}
+                    disabled={ro || !!x.id}
+                    value={x.sku}
+                    onChange={(e) => setVar(x._key, { sku: e.target.value })}
+                  />
+                </ShopField>
+                <ShopField label="Color" className="sm:col-span-2">
+                  <input
+                    className={SHOP_INP}
+                    disabled={ro}
+                    value={x.option_color}
+                    onChange={(e) =>
+                      setVar(x._key, { option_color: e.target.value })
+                    }
+                  />
+                </ShopField>
+                <ShopField label="Size" className="sm:col-span-2">
+                  <input
+                    className={SHOP_INP}
+                    disabled={ro}
+                    value={x.option_size}
+                    onChange={(e) =>
+                      setVar(x._key, { option_size: e.target.value })
+                    }
+                  />
+                </ShopField>
+                <ShopField label="Price override" className="sm:col-span-2">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className={SHOP_INP}
+                    disabled={ro}
+                    value={x.price_override}
+                    onChange={(e) =>
+                      setVar(x._key, { price_override: e.target.value })
+                    }
+                  />
+                </ShopField>
+                {!x.id && canStock ? (
+                  <ShopField label="Opening stock" className="sm:col-span-2">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      className={SHOP_INP}
+                      disabled={ro}
+                      value={x.stock}
+                      onChange={(e) =>
+                        setVar(x._key, { stock: e.target.value })
+                      }
+                    />
+                  </ShopField>
+                ) : (
+                  <ShopField label="Active" className="sm:col-span-2">
+                    <select
+                      className={SHOP_INP}
+                      disabled={ro}
+                      value={x.is_active ? "1" : "0"}
+                      onChange={(e) =>
+                        setVar(x._key, { is_active: e.target.value === "1" })
+                      }
+                    >
+                      <option value="1">Yes</option>
+                      <option value="0">No</option>
+                    </select>
+                  </ShopField>
+                )}
+                <div className="sm:col-span-1">
+                  {!x.id && !ro && (
+                    <button
+                      type="button"
+                      className={SHOP_BTN_GHOST}
+                      title="Remove row"
+                      onClick={() =>
+                        setVariants((l) => l.filter((y) => y._key !== x._key))
+                      }
+                    >
+                      <Icons.X size={14} />
+                    </button>
+                  )}
+                  {x.id && canDelete && (
+                    <button
+                      type="button"
+                      className={`${SHOP_BTN_GHOST} text-red-600`}
+                      title="Delete variant"
+                      aria-label={`Delete variant ${x.sku}`}
+                      onClick={() => setDelVar(x)}
+                    >
+                      <Icons.Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+                {(imgs.length > 0 || x.image_url) && (
+                  <div className="flex items-center gap-2 sm:col-span-12">
+                    <div className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-lg bg-slate-200 text-slate-400">
+                      {x.image_url ? (
+                        <img
+                          src={x.image_url}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <Icons.Image size={15} />
+                      )}
+                    </div>
+                    <select
+                      aria-label="Variant photo"
+                      className={`${SHOP_INP} max-w-xs`}
+                      disabled={ro}
+                      value={x.image_url || ""}
+                      onChange={(e) =>
+                        setVar(x._key, { image_url: e.target.value })
+                      }
+                    >
+                      <option value="">Photo: same as product (main)</option>
+                      {[
+                        ...imgs,
+                        ...(x.image_url && !imgs.includes(x.image_url)
+                          ? [x.image_url]
+                          : []),
+                      ].map((u, i) => (
+                        <option key={u} value={u}>
+                          {imgs.includes(u)
+                            ? `Photo ${imgs.indexOf(u) + 1}${imgs.indexOf(u) === 0 ? " (main)" : ""}`
+                            : "Previous photo"}
+                        </option>
+                      ))}
+                    </select>
+                    {!ro &&
+                      x.option_color.trim() &&
+                      x.image_url &&
+                      variants.some(
+                        (y) =>
+                          y._key !== x._key &&
+                          y.option_color.trim().toLowerCase() ===
+                            x.option_color.trim().toLowerCase() &&
+                          y.image_url !== x.image_url,
+                      ) && (
+                        <button
+                          type="button"
+                          className="text-xs font-bold text-blue-700 underline"
+                          onClick={() =>
+                            setVariants((l) =>
+                              l.map((y) =>
+                                y.option_color.trim().toLowerCase() ===
+                                x.option_color.trim().toLowerCase()
+                                  ? { ...y, image_url: x.image_url }
+                                  : y,
+                              ),
+                            )
+                          }
+                        >
+                          Use for all {x.option_color.trim()}
+                        </button>
+                      )}
+                  </div>
+                )}
+              </div>
+            ))}
+            {variants.some(
+              (x) => x.id && !x.option_color.trim() && !x.option_size.trim(),
+            ) &&
+              variants.some(
+                (x) => x.option_color.trim() || x.option_size.trim(),
+              ) && (
+                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  The original item (no color / size) cannot be chosen by
+                  customers once options exist. Give it a color / size, or set
+                  Active = No.
+                </p>
+              )}
+            {canEdit && (
+              <button
+                type="button"
+                className={SHOP_BTN_GHOST}
+                onClick={() => setVariants((l) => [...l, shopBlankVariant()])}
+              >
+                <Icons.Plus size={14} /> Add variant
+              </button>
+            )}
+            <p className="text-[11px] text-slate-400">
+              Saved variants are never deleted (order history depends on them) —
+              set Active = No to stop selling one.
+            </p>
+          </div>
+        )}
+      </div>
+      {err && <p className="mt-3 text-sm font-semibold text-red-600">{err}</p>}
+      {delVar && (
+        <ShopActionModal
+          title={`Delete variant ${delVar.sku}?`}
+          intro="Permanently deletes this variant and its stock records. Only possible if it was never ordered (otherwise set Active = No). The deletion is logged."
+          fields={[
+            { key: "reason", label: "Reason", required: true, multiline: true },
+          ]}
+          confirmLabel="Delete variant"
+          danger
+          onClose={() => setDelVar(null)}
+          onSubmit={async (vals) => {
+            const { error } = await supabase.rpc("shop_delete_variant", {
+              p_variant_id: delVar.id,
+              p_reason: vals.reason,
+            });
+            if (error) return shopErr(error);
+            emitCBToast("success", "Variant", "Deleted");
+            setVariants((l) => l.filter((y) => y.id !== delVar.id));
+            setDelVar(null);
+            return "";
+          }}
+        />
+      )}
+    </ShopModal>
+  );
+}
+
+// ------------------------------------------------------------
+// Inventory
+// ------------------------------------------------------------
+const SHOP_MOVE_TYPES = [
+  ["receive", "Receive stock (from supplier)"],
+  ["return_in", "Customer return (inspected, sellable)"],
+  ["adjust", "Adjustment (+/−) / remove stock"],
+  ["damage", "Damaged stock"],
+  ["lost", "Lost stock"],
+];
+
+function ShopInventoryPage() {
+  const { user } = useAuth();
+  const canStock = hasPermission(user, "shop.stock.manage");
+  const [rows, setRows] = useState([]);
+  const [cats, setCats] = useState([]);
+  const [defaultThr, setDefaultThr] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [cat, setCat] = useState("");
+  const [stockF, setStockF] = useState("");
+  const [page, setPage] = useState(0);
+  const [move, setMove] = useState(null); // { row, type }
+  const [hist, setHist] = useState(null);
+  const [thr, setThr] = useState(null);
+  const [reload, setReload] = useState(0);
+  const PAGE = 25;
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      const [inv, c, st] = await Promise.all([
+        supabase
+          .from("shop_inventory")
+          .select(
+            "variant_id,on_hand,reserved,low_stock_threshold,shop_product_variants!inner(id,sku,option_color,option_size,is_active,shop_products!inner(id,name,product_code,status,category_id,shop_categories(name)))",
+          )
+          .limit(2000),
+        supabase.from("shop_categories").select("id,name").order("name"),
+        supabase
+          .from("shop_settings")
+          .select("value")
+          .eq("key", "default_low_stock_threshold")
+          .maybeSingle(),
+      ]);
+      if (!alive) return;
+      setCats(c.data || []);
+      setDefaultThr(st.data ? Number(st.data.value) : null);
+      if (inv.error) {
+        setError(shopErr(inv.error));
+      } else {
+        setError("");
+        setRows(
+          (inv.data || [])
+            .map((r) => {
+              const vr = r.shop_product_variants;
+              const p = vr.shop_products;
+              return {
+                variant_id: r.variant_id,
+                on_hand: r.on_hand,
+                reserved: r.reserved,
+                available: r.on_hand - r.reserved,
+                threshold: r.low_stock_threshold,
+                sku: vr.sku,
+                label: shopVariantLabel(vr),
+                vActive: vr.is_active,
+                product: p.name,
+                code: p.product_code,
+                pStatus: p.status,
+                category_id: p.category_id,
+                category: p.shop_categories?.name || "",
+              };
+            })
+            .sort(
+              (a, b) =>
+                a.product.localeCompare(b.product) ||
+                a.sku.localeCompare(b.sku),
+            ),
+        );
+      }
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [reload]);
+
+  const stateOf = (r) => {
+    if (r.available <= 0) return "out";
+    const t = r.threshold ?? defaultThr;
+    if (t != null && r.available <= t) return "low";
+    return "ok";
+  };
+  const shown = useMemo(() => {
+    const s = search.trim().toLowerCase();
+    return rows.filter((r) => {
+      if (cat && r.category_id !== cat) return false;
+      if (stockF && stateOf(r) !== stockF) return false;
+      if (!s) return true;
+      return [r.product, r.sku, r.code, r.label].some((x) =>
+        String(x).toLowerCase().includes(s),
+      );
+    });
+  }, [rows, search, cat, stockF, defaultThr]);
+  useEffect(() => setPage(0), [search, cat, stockF]);
+  const pageRows = shown.slice(page * PAGE, page * PAGE + PAGE);
+  const lowN = rows.filter((r) => stateOf(r) === "low").length;
+  const outN = rows.filter((r) => stateOf(r) === "out").length;
+  const stat = (label, value, tone) => (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="text-xs font-semibold text-slate-500">{label}</div>
+      <div className={`text-2xl font-extrabold ${tone || "text-slate-900"}`}>
+        {value}
+      </div>
+    </div>
+  );
+
+  return (
+    <ShopGate perm="shop.view" title="Shop inventory">
+      <div className="mx-auto max-w-7xl">
+        <h1 className="cb-page-title mb-5 text-2xl font-extrabold text-slate-900">
+          Shop Inventory
+        </h1>
+        <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          {stat("Variants", rows.length)}
+          {stat(
+            "On hand (units)",
+            rows.reduce((a, r) => a + r.on_hand, 0),
+          )}
+          {stat(
+            "Reserved (units)",
+            rows.reduce((a, r) => a + r.reserved, 0),
+          )}
+          {stat("Low stock", lowN, lowN ? "text-amber-600" : "")}
+          {stat("Out of stock", outN, outN ? "text-red-600" : "")}
+        </div>
+        {defaultThr == null && (
+          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+            No default low-stock threshold is set (Shop Settings). Only variants
+            with their own threshold are flagged as low stock.
+          </div>
+        )}
+        <div className={SHOP_CARD}>
+          <div className="mb-4 flex flex-wrap gap-2">
+            <input
+              className={`${SHOP_FILT} w-64`}
+              placeholder="Search product, SKU…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <select
+              className={`${SHOP_FILT} w-48`}
+              value={cat}
+              onChange={(e) => setCat(e.target.value)}
+            >
+              <option value="">All categories</option>
+              {cats.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+            <select
+              className={`${SHOP_FILT} w-44`}
+              value={stockF}
+              onChange={(e) => setStockF(e.target.value)}
+            >
+              <option value="">All stock levels</option>
+              <option value="low">Low stock</option>
+              <option value="out">Out of stock</option>
+              <option value="ok">In stock</option>
+            </select>
+            <button
+              type="button"
+              className={SHOP_BTN_GHOST}
+              onClick={() => setReload((n) => n + 1)}
+            >
+              <Icons.RefreshCw
+                size={15}
+                className={loading ? "animate-spin" : ""}
+              />
+            </button>
+          </div>
+          <ShopTable
+            heads={[
+              "Product",
+              "SKU",
+              "On hand",
+              "Reserved",
+              "Available",
+              "Alert at",
+              "Level",
+              "",
+            ]}
+            loading={loading && rows.length === 0}
+            error={error}
+            empty={shown.length === 0 ? "No inventory found." : ""}
+            minW={980}
+          >
+            {pageRows.map((r) => {
+              const st = stateOf(r);
+              return (
+                <tr key={r.variant_id}>
+                  <td className="px-4 py-3">
+                    <div className="font-semibold text-slate-800">
+                      {r.product}
+                    </div>
+                    <div className="text-xs text-slate-400">
+                      {r.label}
+                      {!r.vActive || r.pStatus !== "Active"
+                        ? " · not on sale"
+                        : ""}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-slate-600">{r.sku}</td>
+                  <td className="px-4 py-3">{r.on_hand}</td>
+                  <td className="px-4 py-3">{r.reserved}</td>
+                  <td className="px-4 py-3 font-bold">{r.available}</td>
+                  <td className="px-4 py-3 text-slate-500">
+                    {r.threshold ??
+                      (defaultThr != null ? `${defaultThr} (default)` : "—")}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span
+                      className={`rounded-full px-2.5 py-0.5 text-[11px] font-bold ${st === "out" ? "bg-red-50 text-red-700" : st === "low" ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"}`}
+                    >
+                      {st === "out"
+                        ? "Out of stock"
+                        : st === "low"
+                          ? "Low stock"
+                          : "In stock"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-wrap justify-end gap-1.5">
+                      {canStock && (
+                        <>
+                          <button
+                            type="button"
+                            className={SHOP_BTN_PRIMARY}
+                            onClick={() => setMove({ row: r, type: "receive" })}
+                          >
+                            Receive
+                          </button>
+                          <button
+                            type="button"
+                            className={SHOP_BTN_GHOST}
+                            onClick={() => setMove({ row: r, type: "adjust" })}
+                          >
+                            Adjust
+                          </button>
+                          <button
+                            type="button"
+                            className={SHOP_BTN_GHOST}
+                            onClick={() => setThr(r)}
+                            title="Low-stock alert level"
+                          >
+                            <Icons.Bell size={14} />
+                          </button>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        className={SHOP_BTN_GHOST}
+                        onClick={() => setHist(r)}
+                        title="Movement history"
+                      >
+                        <Icons.History size={14} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </ShopTable>
+          <ShopPager
+            page={page}
+            pageSize={PAGE}
+            total={shown.length}
+            onPage={setPage}
+          />
+        </div>
+        {move && (
+          <ShopStockModal
+            row={move.row}
+            startType={move.type}
+            onClose={() => setMove(null)}
+            onDone={() => {
+              setMove(null);
+              setReload((n) => n + 1);
+            }}
+          />
+        )}
+        {hist && (
+          <ShopMovementsModal row={hist} onClose={() => setHist(null)} />
+        )}
+        {thr && (
+          <ShopActionModal
+            title={`Low-stock alert — ${thr.sku}`}
+            intro="Alert when available stock is at or below this number. Leave empty to use the default."
+            fields={[{ key: "t", label: "Alert level (units)" }]}
+            confirmLabel="Save"
+            onClose={() => setThr(null)}
+            onSubmit={async (vals) => {
+              const t = vals.t === "" || vals.t == null ? null : Number(vals.t);
+              if (t != null && (!Number.isInteger(t) || t < 0))
+                return "Enter a whole number, 0 or more.";
+              const { error: e } = await supabase.rpc(
+                "shop_set_low_stock_threshold",
+                { p_variant_id: thr.variant_id, p_threshold: t },
+              );
+              if (e) return shopErr(e);
+              setThr(null);
+              setReload((n) => n + 1);
+              return "";
+            }}
+          />
+        )}
+      </div>
+    </ShopGate>
+  );
+}
+
+function ShopStockModal({ row, startType, onClose, onDone }) {
+  const [type, setType] = useState(startType);
+  const [qty, setQty] = useState("");
+  const [reason, setReason] = useState("");
+  const [supplier, setSupplier] = useState("");
+  const [cost, setCost] = useState("");
+  const [ref, setRef] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  // One idempotency key per dialog: a double click / retry can never add stock twice.
+  const idem = useRef(
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : String(Date.now()) + Math.random(),
+  );
+  async function submit() {
+    if (busy) return;
+    const q = Number(qty);
+    if (!Number.isInteger(q) || q === 0)
+      return setErr("Enter a whole quantity (not zero).");
+    if (type !== "adjust" && q < 0)
+      return setErr("Quantity must be positive for this type.");
+    if (type !== "receive" && !reason.trim())
+      return setErr("A reason is required.");
+    setBusy(true);
+    setErr("");
+    const { error: e } = await supabase.rpc("shop_stock_move", {
+      p_variant_id: row.variant_id,
+      p_type: type,
+      p_quantity: q,
+      p_reason: reason.trim() || null,
+      p_supplier: supplier.trim() || null,
+      p_unit_cost: cost === "" ? null : Number(cost),
+      p_reference: ref.trim() || null,
+      p_idempotency_key: idem.current,
+    });
+    setBusy(false);
+    if (e) return setErr(shopErr(e));
+    emitCBToast("success", "Inventory", "Stock updated");
+    onDone();
+  }
+  return (
+    <ShopModal
+      title={`Stock — ${row.product} (${row.sku})`}
+      onClose={busy ? () => {} : onClose}
+      footer={
+        <>
+          <button
+            type="button"
+            className={SHOP_BTN_GHOST}
+            onClick={onClose}
+            disabled={busy}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className={SHOP_BTN_PRIMARY}
+            onClick={submit}
+            disabled={busy}
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </>
+      }
+    >
+      <p className="mb-3 text-sm text-slate-500">
+        On hand <b>{row.on_hand}</b> · Reserved <b>{row.reserved}</b> ·
+        Available <b>{row.available}</b>
+      </p>
+      <div className="space-y-3">
+        <ShopField label="Type">
+          <select
+            className={SHOP_INP}
+            value={type}
+            onChange={(e) => setType(e.target.value)}
+          >
+            {SHOP_MOVE_TYPES.map(([k, l]) => (
+              <option key={k} value={k}>
+                {l}
+              </option>
+            ))}
+          </select>
+        </ShopField>
+        <ShopField
+          label="Quantity *"
+          hint={
+            type === "adjust"
+              ? "Use a negative number to remove stock."
+              : undefined
+          }
+        >
+          <input
+            type="number"
+            step="1"
+            className={SHOP_INP}
+            value={qty}
+            onChange={(e) => setQty(e.target.value)}
+          />
+        </ShopField>
+        {row.available > 0 && (
+          <button
+            type="button"
+            className="text-xs font-bold text-red-600 underline"
+            onClick={() => {
+              setType("adjust");
+              setQty(String(-row.available));
+            }}
+          >
+            Remove all available stock ({row.available})
+          </button>
+        )}
+        <ShopField label={type === "receive" ? "Note (optional)" : "Reason *"}>
+          <input
+            className={SHOP_INP}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+          />
+        </ShopField>
+        {type === "receive" && (
+          <div className="grid grid-cols-3 gap-3">
+            <ShopField label="Supplier">
+              <input
+                className={SHOP_INP}
+                value={supplier}
+                onChange={(e) => setSupplier(e.target.value)}
+              />
+            </ShopField>
+            <ShopField label="Unit cost">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                className={SHOP_INP}
+                value={cost}
+                onChange={(e) => setCost(e.target.value)}
+              />
+            </ShopField>
+            <ShopField label="Reference / PO">
+              <input
+                className={SHOP_INP}
+                value={ref}
+                onChange={(e) => setRef(e.target.value)}
+              />
+            </ShopField>
+          </div>
+        )}
+        {err && <p className="text-sm font-semibold text-red-600">{err}</p>}
+      </div>
+    </ShopModal>
+  );
+}
+
+function ShopMovementsModal({ row, onClose }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    supabase
+      .from("shop_inventory_movements")
+      .select(
+        "id,movement_type,on_hand_delta,reserved_delta,on_hand_after,reserved_after,reason,supplier,unit_cost,reference,created_by_name,created_at,order_id",
+      )
+      .eq("variant_id", row.variant_id)
+      .order("created_at", { ascending: false })
+      .limit(100)
+      .then(({ data, error: e }) => {
+        if (e) setErr(shopErr(e));
+        setRows(data || []);
+        setLoading(false);
+      });
+  }, [row.variant_id]);
+  return (
+    <ShopModal
+      wide
+      title={`Movements — ${row.product} (${row.sku})`}
+      onClose={onClose}
+    >
+      <ShopTable
+        heads={[
+          "When",
+          "Type",
+          "On hand Δ",
+          "Reserved Δ",
+          "After (OH / Res)",
+          "Reason / Ref",
+          "By",
+        ]}
+        loading={loading && rows.length === 0}
+        error={err}
+        empty={rows.length === 0 ? "No movements yet." : ""}
+        minW={720}
+      >
+        {rows.map((m) => (
+          <tr key={m.id}>
+            <td className="px-4 py-2 text-xs">{shopDt(m.created_at)}</td>
+            <td className="px-4 py-2 font-semibold">{m.movement_type}</td>
+            <td className="px-4 py-2">
+              {m.on_hand_delta > 0 ? `+${m.on_hand_delta}` : m.on_hand_delta}
+            </td>
+            <td className="px-4 py-2">
+              {m.reserved_delta > 0 ? `+${m.reserved_delta}` : m.reserved_delta}
+            </td>
+            <td className="px-4 py-2">
+              {m.on_hand_after} / {m.reserved_after}
+            </td>
+            <td className="px-4 py-2 text-xs text-slate-500">
+              {[
+                m.reason,
+                m.supplier,
+                m.reference,
+                m.unit_cost != null ? `cost ${money(m.unit_cost)}` : "",
+              ]
+                .filter(Boolean)
+                .join(" · ") || "—"}
+            </td>
+            <td className="px-4 py-2 text-xs">{m.created_by_name || "—"}</td>
+          </tr>
+        ))}
+      </ShopTable>
+    </ShopModal>
+  );
+}
+
+// ------------------------------------------------------------
+// Orders — list
+// ------------------------------------------------------------
+function ShopOrdersPage() {
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("");
+  const [pay, setPay] = useState("");
+  const [method, setMethod] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [staff, setStaff] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [counts, setCounts] = useState({});
+  const [reload, setReload] = useState(0);
+  const PAGE = 20;
+  const s = useShopDebounced(search);
+  const st = useShopDebounced(staff);
+  useEffect(() => setPage(0), [s, status, pay, method, from, to, st]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const keys = [
+        "Waiting Payment",
+        "Processing",
+        "Accepted / Preparing Order",
+        "Ready for Pickup",
+        "Ready for Delivery",
+        "Delivery",
+      ];
+      const res = await Promise.all(
+        keys.map((k) =>
+          supabase
+            .from("shop_orders")
+            .select("id", { count: "exact", head: true })
+            .eq("status", k),
+        ),
+      );
+      if (!alive) return;
+      const c = {};
+      keys.forEach((k, i) => (c[k] = res[i].count || 0));
+      setCounts(c);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [reload]);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      const term = shopSearchSafe(s);
+      const ors = [];
+      if (term) {
+        ors.push(`order_no.ilike.%${term}%`);
+        const [cu, it] = await Promise.all([
+          supabase
+            .from("customers")
+            .select("id")
+            .or(`customer_code.ilike.%${term}%,name.ilike.%${term}%`)
+            .limit(50),
+          supabase
+            .from("shop_order_items")
+            .select("order_id")
+            .or(
+              `sku_snapshot.ilike.%${term}%,product_name_snapshot.ilike.%${term}%`,
+            )
+            .limit(200),
+        ]);
+        const cids = (cu.data || []).map((r) => r.id);
+        const oids = [...new Set((it.data || []).map((r) => r.order_id))];
+        if (cids.length) ors.push(`customer_id.in.(${cids.join(",")})`);
+        if (oids.length) ors.push(`id.in.(${oids.join(",")})`);
+      }
+      let q = supabase
+        .from("shop_orders")
+        .select(
+          "id,order_no,status,payment_status,fulfillment_method,total_amount,created_at,accepted_by_name,customers(customer_code,name),shop_order_items(quantity)",
+          { count: "exact" },
+        )
+        .order("created_at", { ascending: false })
+        .range(page * PAGE, page * PAGE + PAGE - 1);
+      if (ors.length) q = q.or(ors.join(","));
+      if (status) q = q.eq("status", status);
+      if (pay) q = q.eq("payment_status", pay);
+      if (method) q = q.eq("fulfillment_method", method);
+      if (from)
+        q = q.gte("created_at", new Date(`${from}T00:00:00`).toISOString());
+      if (to) q = q.lte("created_at", new Date(`${to}T23:59:59`).toISOString());
+      const sf = shopSearchSafe(st);
+      if (sf) q = q.ilike("accepted_by_name", `%${sf}%`);
+      const { data, error: e, count } = await q;
+      if (!alive) return;
+      if (e) setError(shopErr(e));
+      else {
+        setError("");
+        setRows(data || []);
+        setTotal(count || 0);
+      }
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [s, status, pay, method, from, to, st, page, reload]);
+
+  return (
+    <ShopGate perm="shop.order.review" title="Shop orders">
+      <div className="mx-auto max-w-7xl">
+        <h1 className="cb-page-title mb-5 text-2xl font-extrabold text-slate-900">
+          Shop Orders
+        </h1>
+        <div className="mb-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          {Object.entries(counts).map(([k, n]) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setStatus(status === k ? "" : k)}
+              className={`rounded-2xl border p-3 text-left shadow-sm ${status === k ? "border-blue-500 bg-blue-50" : "border-slate-200 bg-white"}`}
+            >
+              <div className="text-[11px] font-semibold text-slate-500">
+                {k === "Processing" ? "Paid — needs review" : k}
+              </div>
+              <div className="text-xl font-extrabold text-slate-900">{n}</div>
+            </button>
+          ))}
+        </div>
+        <div className={SHOP_CARD}>
+          <div className="mb-4 flex flex-wrap gap-2">
+            <input
+              className={`${SHOP_FILT} w-64`}
+              placeholder="Order ID, customer, product, SKU…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            <select
+              className={`${SHOP_FILT} w-52`}
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+            >
+              <option value="">All statuses</option>
+              {SHOP_ORDER_STATUSES.map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </select>
+            <select
+              className={`${SHOP_FILT} w-36`}
+              value={pay}
+              onChange={(e) => setPay(e.target.value)}
+            >
+              <option value="">All payments</option>
+              {["Unpaid", "Paid", "Refunded"].map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </select>
+            <select
+              className={`${SHOP_FILT} w-36`}
+              value={method}
+              onChange={(e) => setMethod(e.target.value)}
+            >
+              <option value="">Pickup & Delivery</option>
+              <option>Pickup</option>
+              <option>Delivery</option>
+            </select>
+            <input
+              type="date"
+              className={`${SHOP_FILT} w-40`}
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+              aria-label="From date"
+            />
+            <input
+              type="date"
+              className={`${SHOP_FILT} w-40`}
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+              aria-label="To date"
+            />
+            <input
+              className={`${SHOP_FILT} w-40`}
+              placeholder="Accepted by…"
+              value={staff}
+              onChange={(e) => setStaff(e.target.value)}
+            />
+            <button
+              type="button"
+              className={SHOP_BTN_GHOST}
+              onClick={() => setReload((n) => n + 1)}
+            >
+              <Icons.RefreshCw
+                size={15}
+                className={loading ? "animate-spin" : ""}
+              />
+            </button>
+          </div>
+          <ShopTable
+            heads={[
+              "Order",
+              "Customer",
+              "Items",
+              "Total",
+              "Method",
+              "Payment",
+              "Status",
+              "Created",
+            ]}
+            loading={loading && rows.length === 0}
+            error={error}
+            empty={rows.length === 0 ? "No orders found." : ""}
+            minW={1000}
+          >
+            {rows.map((o) => (
+              <tr key={o.id} className="hover:bg-slate-50">
+                <td className="px-4 py-3">
+                  <Link
+                    to={`/shop/orders/${o.id}`}
+                    className="font-bold text-blue-700 hover:underline"
+                  >
+                    {o.order_no}
+                  </Link>
+                </td>
+                <td className="px-4 py-3">
+                  <div className="font-semibold text-slate-800">
+                    {o.customers?.name || "—"}
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    {o.customers?.customer_code}
+                  </div>
+                </td>
+                <td className="px-4 py-3">
+                  {(o.shop_order_items || []).reduce(
+                    (a, i) => a + i.quantity,
+                    0,
+                  )}
+                </td>
+                <td className="px-4 py-3 font-bold">{money(o.total_amount)}</td>
+                <td className="px-4 py-3">{o.fulfillment_method}</td>
+                <td className="px-4 py-3">
+                  <ShopBadge text={o.payment_status} />
+                </td>
+                <td className="px-4 py-3">
+                  <ShopBadge text={o.status} />
+                </td>
+                <td className="px-4 py-3 text-xs text-slate-500">
+                  {shopDt(o.created_at)}
+                </td>
+              </tr>
+            ))}
+          </ShopTable>
+          <ShopPager
+            page={page}
+            pageSize={PAGE}
+            total={total}
+            onPage={setPage}
+          />
+        </div>
+      </div>
+    </ShopGate>
+  );
+}
+
+// ------------------------------------------------------------
+// Orders — detail + actions
+// ------------------------------------------------------------
+function ShopOrderDetailPage() {
+  const { id } = useParams();
+  const { user } = useAuth();
+  const can = (k) => hasPermission(user, k);
+  const [o, setO] = useState(null);
+  const [items, setItems] = useState([]);
+  const [hist, setHist] = useState([]);
+  const [refunds, setRefunds] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [dlg, setDlg] = useState(null);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      const [a, b, c, d] = await Promise.all([
+        supabase
+          .from("shop_orders")
+          .select("*,customers(customer_code,name,phone)")
+          .eq("id", id)
+          .maybeSingle(),
+        supabase
+          .from("shop_order_items")
+          .select("*")
+          .eq("order_id", id)
+          .order("created_at"),
+        supabase
+          .from("shop_order_status_history")
+          .select("*")
+          .eq("order_id", id)
+          .order("created_at"),
+        supabase.from("shop_refunds").select("*").eq("order_id", id),
+      ]);
+      if (!alive) return;
+      if (a.error || !a.data)
+        setError(a.error ? shopErr(a.error) : "Order not found.");
+      else setError("");
+      setO(a.data || null);
+      setItems(b.data || []);
+      setHist(c.data || []);
+      setRefunds(d.data || []);
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [id, reload]);
+
+  async function rpc(fn, args) {
+    setBusy(true);
+    const { error: e } = await supabase.rpc(fn, args);
+    setBusy(false);
+    if (e) return shopErr(e);
+    emitCBToast("success", "Shop order", "Updated");
+    setReload((n) => n + 1);
+    setDlg(null);
+    return "";
+  }
+
+  if (loading && !o)
+    return <div className="p-10 text-center text-slate-400">Loading…</div>;
+  if (error || !o)
+    return (
+      <div className="mx-auto max-w-xl p-10 text-center">
+        <p className="mb-4 text-slate-500">{error || "Order not found."}</p>
+        <Link to="/shop/orders" className="font-bold text-blue-700">
+          ← Back to Shop Orders
+        </Link>
+      </div>
+    );
+
+  const isPickup = o.fulfillment_method === "Pickup";
+  const actions = [];
+  if (o.status === "Waiting Payment" && can("shop.order.accept"))
+    actions.push({ k: "cancel", label: "Cancel unpaid order", tone: "ghost" });
+  if (o.status === "Processing" && o.payment_status === "Paid") {
+    if (can("shop.order.accept"))
+      actions.push({ k: "accept", label: "Accept order", tone: "primary" });
+    if (can("shop.order.refund"))
+      actions.push({ k: "reject", label: "Reject & refund", tone: "danger" });
+  }
+  if (can("shop.fulfill")) {
+    if (o.status === "Accepted / Preparing Order")
+      actions.push(
+        isPickup
+          ? { k: "ready_pickup", label: "Ready for Pickup", tone: "primary" }
+          : {
+              k: "ready_delivery",
+              label: "Ready for Delivery",
+              tone: "primary",
+            },
+      );
+    if (o.status === "Ready for Delivery")
+      actions.push({
+        k: "start_delivery",
+        label: "Start delivery",
+        tone: "primary",
+      });
+    if (o.status === "Ready for Pickup" || o.status === "Delivery")
+      actions.push({
+        k: "complete",
+        label: isPickup
+          ? "Confirm handover — Complete"
+          : "Confirm delivered — Complete",
+        tone: "primary",
+      });
+  }
+
+  const dialogs = {
+    cancel: {
+      title: "Cancel unpaid order",
+      fields: [{ key: "reason", label: "Reason", multiline: true }],
+      confirmLabel: "Cancel order",
+      danger: true,
+      submit: (v) =>
+        rpc("shop_cancel_order", {
+          p_order_id: o.id,
+          p_reason: v.reason || null,
+        }),
+    },
+    accept: {
+      title: "Accept order",
+      intro: `Accept ${o.order_no} and start preparing it. The customer will see "Accepted / Preparing Order".`,
+      fields: [
+        { key: "note", label: "Internal note (staff only)", multiline: true },
+      ],
+      confirmLabel: "Accept order",
+      submit: (v) =>
+        rpc("shop_accept_order", {
+          p_order_id: o.id,
+          p_internal_note: v.note || null,
+        }),
+    },
+    reject: {
+      title: "Reject & refund",
+      intro: `This refunds ${money(o.paid_amount)} to the customer's wallet and releases the reserved stock. It can only be done once.`,
+      fields: [
+        {
+          key: "reason",
+          label: "Reason (shown to customer)",
+          required: true,
+          multiline: true,
+        },
+      ],
+      confirmLabel: `Reject & refund ${money(o.paid_amount)}`,
+      danger: true,
+      submit: (v) =>
+        rpc("shop_reject_refund_order", {
+          p_order_id: o.id,
+          p_reason: v.reason,
+        }),
+    },
+    ready_pickup: {
+      title: "Ready for Pickup",
+      fields: [
+        { key: "note", label: "Note to customer (optional)", multiline: true },
+      ],
+      confirmLabel: "Mark ready",
+      submit: (v) =>
+        rpc("shop_set_fulfillment_status", {
+          p_order_id: o.id,
+          p_new_status: "Ready for Pickup",
+          p_note: v.note || null,
+        }),
+    },
+    ready_delivery: {
+      title: "Ready for Delivery",
+      fields: [{ key: "note", label: "Note (optional)", multiline: true }],
+      confirmLabel: "Mark ready",
+      submit: (v) =>
+        rpc("shop_set_fulfillment_status", {
+          p_order_id: o.id,
+          p_new_status: "Ready for Delivery",
+          p_note: v.note || null,
+        }),
+    },
+    start_delivery: {
+      title: "Start delivery",
+      fields: [
+        { key: "person", label: "Delivery person / driver", required: true },
+        { key: "note", label: "Note (optional)", multiline: true },
+      ],
+      confirmLabel: "Start delivery",
+      submit: (v) =>
+        rpc("shop_set_fulfillment_status", {
+          p_order_id: o.id,
+          p_new_status: "Delivery",
+          p_note: v.note || null,
+          p_delivery_person: v.person,
+        }),
+    },
+    complete: {
+      title: isPickup ? "Confirm handover" : "Confirm delivery",
+      intro:
+        "This completes the order and deducts the stock from inventory. It cannot be undone.",
+      fields: [
+        {
+          key: "note",
+          label: isPickup
+            ? "Handover note (e.g. who collected)"
+            : "Proof / handover note",
+          multiline: true,
+        },
+      ],
+      confirmLabel: "Complete order",
+      submit: (v) =>
+        rpc("shop_set_fulfillment_status", {
+          p_order_id: o.id,
+          p_new_status: "Complete Order",
+          p_note: v.note || null,
+        }),
+    },
+  };
+  const d = dlg ? dialogs[dlg] : null;
+  const addr = o.delivery_address;
+  const pk = o.pickup_location;
+
+  return (
+    <ShopGate perm="shop.order.review" title="this order">
+      <div className="mx-auto max-w-6xl">
+        <Link
+          to="/shop/orders"
+          className="mb-3 inline-flex items-center gap-1 text-sm font-semibold text-blue-700"
+        >
+          <Icons.ArrowLeft size={15} /> Shop Orders
+        </Link>
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <h1 className="cb-page-title text-2xl font-extrabold text-slate-900">
+            {o.order_no}
+          </h1>
+          <ShopBadge text={o.status} />
+          <ShopBadge text={o.payment_status} />
+          <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-bold text-slate-600">
+            {o.fulfillment_method}
+          </span>
+          <div className="ml-auto flex flex-wrap gap-2">
+            {actions.map((a) => (
+              <button
+                key={a.k}
+                type="button"
+                disabled={busy}
+                onClick={() => setDlg(a.k)}
+                className={
+                  a.tone === "danger"
+                    ? SHOP_BTN_DANGER
+                    : a.tone === "ghost"
+                      ? SHOP_BTN_GHOST
+                      : SHOP_BTN_PRIMARY
+                }
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-3">
+          <div className="space-y-4 lg:col-span-2">
+            <div className={SHOP_CARD}>
+              <h2 className="mb-3 text-sm font-extrabold text-slate-800">
+                Items
+              </h2>
+              <ShopTable
+                heads={["Product", "SKU", "Qty", "Unit", "Line total", "Stock"]}
+                minW={640}
+              >
+                {items.map((i) => (
+                  <tr key={i.id}>
+                    <td className="px-4 py-3">
+                      <div className="font-semibold text-slate-800">
+                        {i.product_name_snapshot}
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        {Object.values(i.variant_snapshot || {})
+                          .filter(Boolean)
+                          .join(" / ")}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-600">
+                      {i.sku_snapshot}
+                    </td>
+                    <td className="px-4 py-3">{i.quantity}</td>
+                    <td className="px-4 py-3">
+                      {i.unit_discount > 0 ? (
+                        <>
+                          {money(i.unit_price - i.unit_discount)}{" "}
+                          <s className="text-xs text-slate-400">
+                            {money(i.unit_price)}
+                          </s>
+                        </>
+                      ) : (
+                        money(i.unit_price)
+                      )}
+                    </td>
+                    <td className="px-4 py-3 font-bold">
+                      {money(i.line_total)}
+                    </td>
+                    <td className="px-4 py-3 text-xs capitalize text-slate-500">
+                      {i.reservation_state}
+                    </td>
+                  </tr>
+                ))}
+              </ShopTable>
+              <dl className="ml-auto mt-4 w-full max-w-xs space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <dt className="text-slate-500">Subtotal</dt>
+                  <dd>{money(o.subtotal)}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-slate-500">Discount</dt>
+                  <dd>−{money(o.discount_total)}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-slate-500">Delivery fee</dt>
+                  <dd>{money(o.delivery_fee)}</dd>
+                </div>
+                <div className="flex justify-between border-t border-slate-200 pt-1 font-extrabold">
+                  <dt>Total</dt>
+                  <dd>{money(o.total_amount)}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-slate-500">Paid</dt>
+                  <dd>{money(o.paid_amount)}</dd>
+                </div>
+                {Number(o.refunded_amount) > 0 && (
+                  <div className="flex justify-between text-red-600">
+                    <dt>Refunded</dt>
+                    <dd>{money(o.refunded_amount)}</dd>
+                  </div>
+                )}
+              </dl>
+            </div>
+
+            <div className={SHOP_CARD}>
+              <h2 className="mb-3 text-sm font-extrabold text-slate-800">
+                History
+              </h2>
+              <ol className="space-y-3">
+                {hist.map((h) => (
+                  <li key={h.id} className="border-l-2 border-slate-200 pl-3">
+                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                      <b className="text-slate-800">
+                        {h.new_status || h.event}
+                      </b>
+                      {h.new_payment_status &&
+                        h.new_payment_status !== h.previous_payment_status && (
+                          <ShopBadge text={h.new_payment_status} />
+                        )}
+                      <span className="text-xs text-slate-400">
+                        {shopDt(h.created_at)} · {h.actor_name || h.actor_type}
+                      </span>
+                    </div>
+                    {h.note && (
+                      <div className="text-sm text-slate-600">{h.note}</div>
+                    )}
+                    {h.internal_note && (
+                      <div className="text-xs text-amber-700">
+                        Internal: {h.internal_note}
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className={SHOP_CARD}>
+              <h2 className="mb-2 text-sm font-extrabold text-slate-800">
+                Customer
+              </h2>
+              <div className="text-sm font-semibold text-slate-800">
+                {o.customers?.name || "—"}
+              </div>
+              <div className="text-xs text-slate-500">
+                {o.customers?.customer_code}{" "}
+                {o.customers?.phone ? `· ${o.customers.phone}` : ""}
+              </div>
+              {o.customer_note && (
+                <p className="mt-3 rounded-lg bg-slate-50 p-2 text-sm text-slate-600">
+                  “{o.customer_note}”
+                </p>
+              )}
+            </div>
+            <div className={SHOP_CARD}>
+              <h2 className="mb-2 text-sm font-extrabold text-slate-800">
+                {isPickup ? "Pickup" : "Delivery"}
+              </h2>
+              {isPickup ? (
+                pk ? (
+                  <div className="text-sm text-slate-600">
+                    <div className="font-semibold text-slate-800">
+                      {pk.name}
+                    </div>
+                    <div>{pk.address}</div>
+                    {pk.hours && (
+                      <div className="text-xs text-slate-400">{pk.hours}</div>
+                    )}
+                  </div>
+                ) : (
+                  <span className="text-sm text-slate-400">—</span>
+                )
+              ) : (
+                <div className="text-sm text-slate-600">
+                  <div className="font-semibold text-slate-800">
+                    {o.recipient_name}
+                  </div>
+                  <div>{o.recipient_phone}</div>
+                  {addr && (
+                    <div className="mt-1">
+                      {[
+                        addr.address,
+                        addr.commune,
+                        addr.district,
+                        addr.province,
+                      ]
+                        .filter(Boolean)
+                        .join(", ")}
+                      {addr.additional_info && (
+                        <div className="text-xs text-slate-400">
+                          {addr.additional_info}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {o.delivery_person && (
+                    <div className="mt-2 text-xs">
+                      Driver: <b>{o.delivery_person}</b>
+                    </div>
+                  )}
+                </div>
+              )}
+              {o.handover_note && (
+                <div className="mt-2 text-xs text-slate-500">
+                  Handover: {o.handover_note}
+                </div>
+              )}
+            </div>
+            <div className={SHOP_CARD}>
+              <h2 className="mb-2 text-sm font-extrabold text-slate-800">
+                Payment & refund
+              </h2>
+              <div className="space-y-1 text-sm text-slate-600">
+                <div>Paid at: {shopDt(o.paid_at)}</div>
+                {o.accepted_by_name && (
+                  <div>
+                    Accepted by <b>{o.accepted_by_name}</b> ·{" "}
+                    {shopDt(o.accepted_at)}
+                  </div>
+                )}
+                {o.rejected_by_name && (
+                  <div>
+                    Rejected by <b>{o.rejected_by_name}</b> ·{" "}
+                    {shopDt(o.rejected_at)}
+                  </div>
+                )}
+                {o.reject_reason && (
+                  <div className="text-red-600">Reason: {o.reject_reason}</div>
+                )}
+                {o.cancel_reason && <div>Cancel reason: {o.cancel_reason}</div>}
+                {refunds.map((r) => (
+                  <div
+                    key={r.id}
+                    className="rounded-lg bg-red-50 p-2 text-xs text-red-700"
+                  >
+                    Refund {money(r.amount)} · {r.status} ·{" "}
+                    {shopDt(r.processed_at)} · by {r.processed_by_name || "—"}
+                    <div className="text-red-500">
+                      Credited to wallet:{" "}
+                      {r.wallet_transaction_id ? "yes" : "no"}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {o.internal_note && (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                <div className="mb-1 text-xs font-bold uppercase">
+                  Internal note
+                </div>
+                {o.internal_note}
+              </div>
+            )}
+          </div>
+        </div>
+        {d && (
+          <ShopActionModal
+            title={d.title}
+            intro={d.intro}
+            fields={d.fields}
+            confirmLabel={d.confirmLabel}
+            danger={d.danger}
+            onClose={() => setDlg(null)}
+            onSubmit={d.submit}
+          />
+        )}
+      </div>
+    </ShopGate>
+  );
+}
+
+// ------------------------------------------------------------
+// Settings
+// ------------------------------------------------------------
+function ShopSettingsPage() {
+  const { user } = useAuth();
+  const canEdit = hasPermission(user, "shop.settings");
+  const [v, setV] = useState({
+    delivery_fee: "",
+    min_order_amount: "",
+    default_low_stock_threshold: "",
+    pk_name: "",
+    pk_address: "",
+    pk_hours: "",
+    pk_instructions: "",
+  });
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState({ ok: true, text: "" });
+
+  useEffect(() => {
+    supabase
+      .from("shop_settings")
+      .select("key,value")
+      .then(({ data, error: e }) => {
+        if (e) setMsg({ ok: false, text: shopErr(e) });
+        const m = Object.fromEntries((data || []).map((r) => [r.key, r.value]));
+        const pk = m.pickup || {};
+        setV({
+          delivery_fee: m.delivery_fee ?? "",
+          min_order_amount: m.min_order_amount ?? "",
+          default_low_stock_threshold: m.default_low_stock_threshold ?? "",
+          pk_name: pk.name || "",
+          pk_address: pk.address || "",
+          pk_hours: pk.hours || "",
+          pk_instructions: pk.instructions || "",
+        });
+        setLoading(false);
+      });
+  }, []);
+
+  async function save() {
+    if (busy || !canEdit) return;
+    const rows = [];
+    const numKey = (key, raw, label, int) => {
+      if (raw === "" || raw == null) return null;
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0 || (int && !Number.isInteger(n)))
+        return `${label} must be ${int ? "a whole number" : "a number"} 0 or more.`;
+      rows.push({ key, value: n });
+      return null;
+    };
+    const bad =
+      numKey("delivery_fee", v.delivery_fee, "Delivery fee") ||
+      numKey("min_order_amount", v.min_order_amount, "Minimum order amount") ||
+      numKey(
+        "default_low_stock_threshold",
+        v.default_low_stock_threshold,
+        "Low-stock threshold",
+        true,
+      );
+    if (bad) return setMsg({ ok: false, text: bad });
+    if (v.pk_name.trim() || v.pk_address.trim()) {
+      if (!v.pk_name.trim() || !v.pk_address.trim())
+        return setMsg({
+          ok: false,
+          text: "Pickup needs both a location name and an address.",
+        });
+      rows.push({
+        key: "pickup",
+        value: {
+          name: v.pk_name.trim(),
+          address: v.pk_address.trim(),
+          hours: v.pk_hours.trim(),
+          instructions: v.pk_instructions.trim(),
+        },
+      });
+    }
+    if (!rows.length) return setMsg({ ok: false, text: "Nothing to save." });
+    setBusy(true);
+    const { error: e } = await supabase
+      .from("shop_settings")
+      .upsert(rows, { onConflict: "key" });
+    setBusy(false);
+    if (e) return setMsg({ ok: false, text: shopErr(e) });
+    setMsg({ ok: true, text: "Settings saved." });
+  }
+
+  const missingDelivery = v.delivery_fee === "";
+  const missingPickup = !v.pk_name.trim() || !v.pk_address.trim();
+  return (
+    <ShopGate perm="shop.view" title="Shop settings">
+      <div className="mx-auto max-w-3xl">
+        <h1 className="cb-page-title mb-5 text-2xl font-extrabold text-slate-900">
+          Shop Settings
+        </h1>
+        {!loading && (missingDelivery || missingPickup) && (
+          <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            {missingDelivery && (
+              <div>
+                • Delivery fee is not set — customers cannot place Delivery
+                orders.
+              </div>
+            )}
+            {missingPickup && (
+              <div>
+                • Pickup location is not set — customers cannot place Pickup
+                orders.
+              </div>
+            )}
+          </div>
+        )}
+        <div className={`${SHOP_CARD} space-y-4`}>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <ShopField
+              label="Delivery fee (USD)"
+              hint="Required for Delivery orders. Enter 0 for free delivery."
+            >
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                className={SHOP_INP}
+                disabled={!canEdit}
+                value={v.delivery_fee}
+                onChange={(e) => setV({ ...v, delivery_fee: e.target.value })}
+              />
+            </ShopField>
+            <ShopField label="Minimum order (USD)" hint="Optional.">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                className={SHOP_INP}
+                disabled={!canEdit}
+                value={v.min_order_amount}
+                onChange={(e) =>
+                  setV({ ...v, min_order_amount: e.target.value })
+                }
+              />
+            </ShopField>
+            <ShopField label="Default low-stock alert" hint="Units. Optional.">
+              <input
+                type="number"
+                min="0"
+                step="1"
+                className={SHOP_INP}
+                disabled={!canEdit}
+                value={v.default_low_stock_threshold}
+                onChange={(e) =>
+                  setV({ ...v, default_low_stock_threshold: e.target.value })
+                }
+              />
+            </ShopField>
+          </div>
+          <div className="rounded-xl border border-slate-200 p-3">
+            <div className="mb-2 text-sm font-extrabold text-slate-800">
+              Pickup location
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <ShopField label="Location name *">
+                <input
+                  className={SHOP_INP}
+                  disabled={!canEdit}
+                  value={v.pk_name}
+                  onChange={(e) => setV({ ...v, pk_name: e.target.value })}
+                />
+              </ShopField>
+              <ShopField label="Business hours">
+                <input
+                  className={SHOP_INP}
+                  disabled={!canEdit}
+                  placeholder="e.g. Mon–Sat 8:00–17:00"
+                  value={v.pk_hours}
+                  onChange={(e) => setV({ ...v, pk_hours: e.target.value })}
+                />
+              </ShopField>
+              <ShopField label="Address *" className="sm:col-span-2">
+                <input
+                  className={SHOP_INP}
+                  disabled={!canEdit}
+                  value={v.pk_address}
+                  onChange={(e) => setV({ ...v, pk_address: e.target.value })}
+                />
+              </ShopField>
+              <ShopField label="Pickup instructions" className="sm:col-span-2">
+                <textarea
+                  rows={2}
+                  className={SHOP_TXT}
+                  disabled={!canEdit}
+                  value={v.pk_instructions}
+                  onChange={(e) =>
+                    setV({ ...v, pk_instructions: e.target.value })
+                  }
+                />
+              </ShopField>
+            </div>
+          </div>
+          {msg.text && (
+            <p
+              className={`text-sm font-semibold ${msg.ok ? "text-emerald-600" : "text-red-600"}`}
+            >
+              {msg.text}
+            </p>
+          )}
+          {canEdit && (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                className={SHOP_BTN_PRIMARY}
+                onClick={save}
+                disabled={busy || loading}
+              >
+                {busy ? "Saving…" : "Save settings"}
+              </button>
+            </div>
+          )}
+          <p className="text-xs text-slate-400">
+            Prices are in USD, the same currency as the customer wallet. Tax,
+            return rules and notification preferences are not configured yet.
+          </p>
+        </div>
+      </div>
+    </ShopGate>
+  );
+}
+
+// ------------------------------------------------------------
+// Dashboard & Sales Reports (Phase 4) — all numbers come from the
+// read-only RPCs shop_dashboard_kpis / shop_sales_report (see shop_phase4.sql
+// for the exact accounting definitions).
+// ------------------------------------------------------------
+const SHOP_PRESETS = [
+  ["today", "Today"],
+  ["7d", "Last 7 days"],
+  ["month", "This month"],
+  ["30d", "Last 30 days"],
+  ["custom", "Custom"],
+];
+const shopDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+const shopAddDays = (d, n) =>
+  new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+const shopYmd = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+// Returns the exclusive [from, to) range as ISO strings, in the viewer's local time.
+function shopRangeOf(preset, customFrom, customTo) {
+  const today = shopDay(new Date());
+  let a = today;
+  let b = shopAddDays(today, 1);
+  if (preset === "7d") a = shopAddDays(today, -6);
+  else if (preset === "30d") a = shopAddDays(today, -29);
+  else if (preset === "month")
+    a = new Date(today.getFullYear(), today.getMonth(), 1);
+  else if (preset === "custom") {
+    if (!customFrom || !customTo) return null;
+    a = new Date(`${customFrom}T00:00:00`);
+    b = shopAddDays(new Date(`${customTo}T00:00:00`), 1);
+    if (!(b > a)) return null;
+  }
+  return {
+    from: a.toISOString(),
+    to: b.toISOString(),
+    todayFrom: today.toISOString(),
+  };
+}
+
+function ShopRangePicker({ preset, setPreset, cFrom, setCFrom, cTo, setCTo }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {SHOP_PRESETS.map(([k, label]) => (
+        <button
+          key={k}
+          type="button"
+          aria-pressed={preset === k}
+          onClick={() => setPreset(k)}
+          className={`h-9 rounded-full border px-3.5 text-xs font-bold ${preset === k ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 bg-white text-slate-600"}`}
+        >
+          {label}
+        </button>
+      ))}
+      {preset === "custom" && (
+        <>
+          <input
+            type="date"
+            aria-label="From date"
+            className={`${SHOP_FILT} w-40`}
+            value={cFrom}
+            onChange={(e) => setCFrom(e.target.value)}
+          />
+          <span className="text-slate-400">→</span>
+          <input
+            type="date"
+            aria-label="To date"
+            className={`${SHOP_FILT} w-40`}
+            value={cTo}
+            onChange={(e) => setCTo(e.target.value)}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+function useShopRange(initial = "30d") {
+  const [preset, setPreset] = useState(initial);
+  const [cFrom, setCFrom] = useState(shopYmd(shopAddDays(new Date(), -29)));
+  const [cTo, setCTo] = useState(shopYmd(new Date()));
+  const range = useMemo(
+    () => shopRangeOf(preset, cFrom, cTo),
+    [preset, cFrom, cTo],
+  );
+  return { preset, setPreset, cFrom, setCFrom, cTo, setCTo, range };
+}
+
+function ShopKpi({ label, value, hint, tone, sub, to }) {
+  const body = (
+    <div
+      className={`h-full rounded-2xl border bg-white p-4 shadow-sm ${tone === "warn" ? "border-amber-300" : tone === "bad" ? "border-red-300" : "border-slate-200"}`}
+      title={hint}
+    >
+      <div className="text-xs font-semibold text-slate-500">{label}</div>
+      <div
+        className={`text-2xl font-extrabold ${tone === "bad" ? "text-red-600" : tone === "warn" ? "text-amber-600" : "text-slate-900"}`}
+      >
+        {value}
+      </div>
+      {sub && (
+        <div className="mt-0.5 text-[11px] font-semibold text-amber-700">
+          {sub}
+        </div>
+      )}
+    </div>
+  );
+  return to ? (
+    <Link to={to} className="block">
+      {body}
+    </Link>
+  ) : (
+    body
+  );
+}
+
+function ShopDashboardPage() {
+  const rg = useShopRange("30d");
+  const [k, setK] = useState(null);
+  const [days, setDays] = useState([]);
+  const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    if (!rg.range) return;
+    let alive = true;
+    setLoading(true);
+    (async () => {
+      const [a, b] = await Promise.all([
+        supabase.rpc("shop_dashboard_kpis", {
+          p_from: rg.range.from,
+          p_to: rg.range.to,
+          p_today_from: rg.range.todayFrom,
+        }),
+        supabase.rpc("shop_sales_report", {
+          p_from: rg.range.from,
+          p_to: rg.range.to,
+          p_group: "day",
+          p_tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        }),
+      ]);
+      if (!alive) return;
+      if (a.error) setErr(shopErr(a.error));
+      else {
+        setErr("");
+        setK(a.data);
+        setDays(b.data?.rows || []);
+      }
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [rg.range, reload]);
+  const maxBar = Math.max(
+    1,
+    ...days.map((d) => Math.max(Number(d.net_collected), 0)),
+  );
+  const profitEst = k && !k.profit_complete;
+  return (
+    <ShopGate perm="shop.report" title="the Shop dashboard">
+      <div className="mx-auto max-w-7xl">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h1 className="cb-page-title text-2xl font-extrabold text-slate-900">
+            Shop Dashboard
+          </h1>
+          <button
+            type="button"
+            className={SHOP_BTN_GHOST}
+            onClick={() => setReload((n) => n + 1)}
+          >
+            <Icons.RefreshCw
+              size={15}
+              className={loading ? "animate-spin" : ""}
+            />{" "}
+            Refresh
+          </button>
+        </div>
+        <ShopRangePicker {...rg} />
+        {!rg.range && (
+          <p className="mt-3 text-sm font-semibold text-red-600">
+            Choose a valid From / To date.
+          </p>
+        )}
+        {err && (
+          <p
+            role="alert"
+            className="mt-3 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700"
+          >
+            {err}
+          </p>
+        )}
+        {k && (
+          <>
+            <h2 className="mb-2 mt-5 text-sm font-extrabold text-slate-700">
+              Needs attention now
+            </h2>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <ShopKpi
+                label="Today's orders"
+                value={k.today_orders}
+                to="/shop/orders"
+              />
+              <ShopKpi
+                label="Waiting payment"
+                value={k.waiting_payment}
+                to="/shop/orders"
+              />
+              <ShopKpi
+                label="Paid — awaiting review"
+                value={k.awaiting_review}
+                tone={k.awaiting_review ? "warn" : ""}
+                to="/shop/orders"
+                hint="Paid orders that staff have not accepted or rejected yet"
+              />
+              <ShopKpi
+                label="Being prepared"
+                value={k.preparing}
+                to="/shop/orders"
+              />
+              <ShopKpi
+                label="Ready for pickup"
+                value={k.ready_pickup}
+                to="/shop/orders"
+              />
+              <ShopKpi
+                label="Ready for delivery"
+                value={k.ready_delivery}
+                to="/shop/orders"
+              />
+              <ShopKpi
+                label="In delivery"
+                value={k.in_delivery}
+                to="/shop/orders"
+              />
+              <ShopKpi
+                label="Refund pending"
+                value={k.refund_pending}
+                tone={k.refund_pending ? "bad" : ""}
+              />
+            </div>
+            <h2 className="mb-2 mt-5 text-sm font-extrabold text-slate-700">
+              Stock alerts
+            </h2>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <ShopKpi
+                label="Low-stock variants"
+                value={k.low_stock_variants}
+                tone={k.low_stock_variants ? "warn" : ""}
+                to="/shop/inventory"
+                sub={
+                  k.default_low_stock_threshold == null
+                    ? "No default alert level set"
+                    : ""
+                }
+              />
+              <ShopKpi
+                label="Out-of-stock variants"
+                value={k.out_of_stock_variants}
+                tone={k.out_of_stock_variants ? "bad" : ""}
+                to="/shop/inventory"
+              />
+              <ShopKpi label="Active variants" value={k.variants_total} />
+            </div>
+            <h2 className="mb-1 mt-5 text-sm font-extrabold text-slate-700">
+              Money — orders placed in the selected dates
+            </h2>
+            <p className="mb-2 text-xs text-slate-400">
+              Each order is counted once. Hover a card for its definition.
+            </p>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <ShopKpi
+                label="Orders placed"
+                value={k.orders_placed}
+                hint="Every order created in the period, any status"
+              />
+              <ShopKpi
+                label="Completed orders"
+                value={k.completed_orders}
+                hint="Handed over / delivered. Only these count as sales"
+              />
+              <ShopKpi
+                label="Rejected (refunded)"
+                value={k.rejected_orders}
+                hint="Never counted as sales"
+              />
+              <ShopKpi
+                label="Canceled"
+                value={k.canceled_orders}
+                hint="Unpaid orders canceled — no money moved"
+              />
+              <ShopKpi
+                label="Outstanding unpaid"
+                value={money(k.outstanding_unpaid)}
+                tone={Number(k.outstanding_unpaid) ? "warn" : ""}
+                hint="Orders still waiting for payment. NOT revenue"
+              />
+              <ShopKpi
+                label="Total collected"
+                value={money(k.collected)}
+                hint="Money received from customer wallets (before refunds)"
+              />
+              <ShopKpi
+                label="Refunds"
+                value={money(k.refunded)}
+                hint="Money returned to customer wallets"
+              />
+              <ShopKpi
+                label="Net collected"
+                value={money(k.net_collected)}
+                hint="Collected − Refunds"
+              />
+              <ShopKpi
+                label="Product sales"
+                value={money(k.product_sales)}
+                hint="Completed orders: subtotal − discounts, excluding delivery fee"
+              />
+              <ShopKpi
+                label="Delivery income"
+                value={money(k.delivery_income)}
+                hint="Delivery fees on completed orders. Delivery expense is not tracked"
+              />
+              <ShopKpi
+                label="Cost of goods sold"
+                value={money(k.cogs)}
+                hint="Completed items: cost snapshot × quantity (items with a known cost only)"
+              />
+              <ShopKpi
+                label={profitEst ? "Gross profit (estimate)" : "Gross profit"}
+                value={k.gross_profit == null ? "—" : money(k.gross_profit)}
+                tone={profitEst ? "warn" : ""}
+                sub={
+                  profitEst
+                    ? `${k.cost_missing_items} completed item(s) have no cost — profit is overstated`
+                    : ""
+                }
+                hint="Product sales − COGS"
+              />
+            </div>
+            <h2 className="mb-2 mt-5 text-sm font-extrabold text-slate-700">
+              Net collected per day
+            </h2>
+            <div className={`${SHOP_CARD}`}>
+              {days.length === 0 ? (
+                <p className="text-sm text-slate-400">
+                  No orders in this period.
+                </p>
+              ) : days.length > 62 ? (
+                <p className="text-sm text-slate-400">
+                  Pick a shorter period (up to 62 days) to see the daily chart.
+                  Use Sales Reports for the full table.
+                </p>
+              ) : (
+                <div
+                  className="flex h-36 items-end gap-1"
+                  role="img"
+                  aria-label="Net collected per day"
+                >
+                  {days.map((d) => (
+                    <div
+                      key={d.key}
+                      className="group flex min-w-[6px] flex-1 flex-col items-center justify-end"
+                      title={`${d.key}: ${money(d.net_collected)} (${d.orders} orders)`}
+                    >
+                      <div
+                        className="w-full rounded-t bg-blue-500"
+                        style={{
+                          height: `${Math.max(2, (Math.max(Number(d.net_collected), 0) / maxBar) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <details className="mt-5 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
+              <summary className="cursor-pointer font-bold text-slate-800">
+                How are these numbers calculated?
+              </summary>
+              <ul className="mt-2 list-disc space-y-1 pl-5">
+                <li>
+                  Every figure covers orders <b>created</b> inside the chosen
+                  dates, so an order is never counted twice.
+                </li>
+                <li>
+                  <b>Collected</b> is money actually received from a paid order.
+                  An unpaid order adds 0.
+                </li>
+                <li>
+                  <b>Sales</b> are completed orders only (handed over or
+                  delivered). Rejected, refunded and canceled orders are never
+                  sales.
+                </li>
+                <li>
+                  <b>Cost of goods sold</b> uses the cost saved on each order
+                  line when it was placed. Items without a cost are not
+                  included, and the profit is then marked as an estimate.
+                </li>
+                <li>
+                  <b>Gross profit</b> = Product sales − Cost of goods sold.
+                  Delivery expense and tax are not tracked, so they are not
+                  deducted.
+                </li>
+                <li>
+                  "Needs attention" and stock numbers are the situation{" "}
+                  <b>right now</b>, not limited to the dates.
+                </li>
+              </ul>
+            </details>
+          </>
+        )}
+        {!k && loading && !err && (
+          <p className="mt-6 text-sm text-slate-400">Loading…</p>
+        )}
+      </div>
+    </ShopGate>
+  );
+}
+
+// ---- CSV helpers ----
+function shopToCsv(headers, rows) {
+  const esc = (v) => {
+    const s = v == null ? "" : String(v);
+    // Neutralise spreadsheet formulas coming from names (=, +, -, @).
+    const safe = /^[=+\-@]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s) ? `'${s}` : s;
+    return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+  };
+  return [
+    headers.map(esc).join(","),
+    ...rows.map((r) => r.map(esc).join(",")),
+  ].join("\r\n");
+}
+function shopDownload(name, text) {
+  const blob = new Blob(["\ufeff" + text], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+const SHOP_REPORT_GROUPS = [
+  ["day", "By day"],
+  ["status", "By order status"],
+  ["method", "Pickup vs Delivery"],
+  ["product", "By product"],
+  ["category", "By category"],
+];
+const SHOP_ORDER_COLS = [
+  ["orders", "Orders", "n"],
+  ["order_value", "Order value", "m"],
+  ["unpaid_value", "Unpaid", "m"],
+  ["collected", "Collected", "m"],
+  ["refunded", "Refunded", "m"],
+  ["net_collected", "Net collected", "m"],
+  ["completed_orders", "Completed", "n"],
+  ["product_sales", "Product sales", "m"],
+  ["delivery_income", "Delivery income", "m"],
+  ["cogs", "COGS", "m"],
+  ["gross_profit", "Gross profit", "p"],
+];
+const SHOP_ITEM_COLS = [
+  ["units_ordered", "Units ordered", "n"],
+  ["units_sold", "Units sold", "n"],
+  ["sales", "Sales", "m"],
+  ["refunded_value", "Refunded value", "m"],
+  ["cogs", "COGS", "m"],
+  ["gross_profit", "Gross profit", "p"],
+];
+
+function ShopReportsPage() {
+  const rg = useShopRange("30d");
+  const [group, setGroup] = useState("day");
+  const [status, setStatus] = useState("");
+  const [pay, setPay] = useState("");
+  const [method, setMethod] = useState("");
+  const [cat, setCat] = useState("");
+  const [prod, setProd] = useState("");
+  const [cats, setCats] = useState([]);
+  const [prods, setProds] = useState([]);
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const itemLevel = group === "product" || group === "category";
+  useEffect(() => {
+    supabase
+      .from("shop_categories")
+      .select("id,name")
+      .order("name")
+      .then(({ data }) => setCats(data || []));
+    supabase
+      .from("shop_products")
+      .select("id,name")
+      .order("name")
+      .limit(500)
+      .then(({ data }) => setProds(data || []));
+  }, []);
+  useEffect(() => {
+    if (!rg.range) return;
+    let alive = true;
+    setLoading(true);
+    supabase
+      .rpc("shop_sales_report", {
+        p_from: rg.range.from,
+        p_to: rg.range.to,
+        p_group: group,
+        p_category: itemLevel && cat ? cat : null,
+        p_product: itemLevel && prod ? prod : null,
+        p_method: method || null,
+        p_status: status || null,
+        p_payment: pay || null,
+        p_tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      })
+      .then(({ data, error }) => {
+        if (!alive) return;
+        if (error) setErr(shopErr(error));
+        else {
+          setErr("");
+          setRows(data.rows || []);
+        }
+        setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [rg.range, group, status, pay, method, cat, prod, itemLevel]);
+  const cols = itemLevel ? SHOP_ITEM_COLS : SHOP_ORDER_COLS;
+  const totals = useMemo(() => {
+    const t = { cost_missing: 0 };
+    cols.forEach(
+      ([k]) => (t[k] = rows.reduce((a, r) => a + Number(r[k] || 0), 0)),
+    );
+    t.cost_missing = rows.reduce((a, r) => a + Number(r.cost_missing || 0), 0);
+    return t;
+  }, [rows, cols]);
+  const cell = (r, [k, , kind]) => {
+    const v = r[k];
+    if (kind === "n") return Number(v).toLocaleString();
+    if (kind === "p")
+      return `${Number(r.cost_missing) > 0 ? "≈ " : ""}${money(v)}`;
+    return money(v);
+  };
+  function exportCsv() {
+    const head = [
+      itemLevel
+        ? group === "product"
+          ? "Product"
+          : "Category"
+        : group === "day"
+          ? "Day"
+          : group === "status"
+            ? "Order status"
+            : "Fulfilment",
+      ...cols.map((c) => c[1]),
+      "Items without cost",
+    ];
+    const body = rows.map((r) => [
+      r.label,
+      ...cols.map(([k, , kind]) =>
+        kind === "n" ? r[k] : Number(r[k]).toFixed(2),
+      ),
+      r.cost_missing,
+    ]);
+    body.push([
+      "TOTAL",
+      ...cols.map(([k, , kind]) =>
+        kind === "n" ? totals[k] : Number(totals[k]).toFixed(2),
+      ),
+      totals.cost_missing,
+    ]);
+    shopDownload(
+      `shop-report-${group}-${shopYmd(new Date())}.csv`,
+      shopToCsv(head, body),
+    );
+  }
+  return (
+    <ShopGate perm="shop.report" title="Shop reports">
+      <div className="mx-auto max-w-7xl">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h1 className="cb-page-title text-2xl font-extrabold text-slate-900">
+            Shop Sales Reports
+          </h1>
+          <button
+            type="button"
+            className={SHOP_BTN_GHOST}
+            onClick={exportCsv}
+            disabled={!rows.length}
+          >
+            <Icons.Download size={15} /> Export CSV
+          </button>
+        </div>
+        <ShopRangePicker {...rg} />
+        <div className={`${SHOP_CARD} mt-3`}>
+          <div className="mb-3 flex flex-wrap gap-2">
+            <select
+              aria-label="Group by"
+              className={`${SHOP_FILT} w-48`}
+              value={group}
+              onChange={(e) => setGroup(e.target.value)}
+            >
+              {SHOP_REPORT_GROUPS.map(([k, l]) => (
+                <option key={k} value={k}>
+                  {l}
+                </option>
+              ))}
+            </select>
+            <select
+              aria-label="Order status"
+              className={`${SHOP_FILT} w-52`}
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+            >
+              <option value="">All order statuses</option>
+              {SHOP_ORDER_STATUSES.map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </select>
+            <select
+              aria-label="Payment status"
+              className={`${SHOP_FILT} w-40`}
+              value={pay}
+              onChange={(e) => setPay(e.target.value)}
+            >
+              <option value="">All payments</option>
+              {["Unpaid", "Paid", "Refunded"].map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </select>
+            <select
+              aria-label="Fulfilment"
+              className={`${SHOP_FILT} w-40`}
+              value={method}
+              onChange={(e) => setMethod(e.target.value)}
+            >
+              <option value="">Pickup & Delivery</option>
+              <option>Pickup</option>
+              <option>Delivery</option>
+            </select>
+            {itemLevel && (
+              <>
+                <select
+                  aria-label="Category"
+                  className={`${SHOP_FILT} w-44`}
+                  value={cat}
+                  onChange={(e) => setCat(e.target.value)}
+                >
+                  <option value="">All categories</option>
+                  {cats.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  aria-label="Product"
+                  className={`${SHOP_FILT} w-48`}
+                  value={prod}
+                  onChange={(e) => setProd(e.target.value)}
+                >
+                  <option value="">All products</option>
+                  {prods.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
+          </div>
+          {!rg.range && (
+            <p className="mb-2 text-sm font-semibold text-red-600">
+              Choose a valid From / To date.
+            </p>
+          )}
+          <ShopTable
+            heads={[
+              itemLevel
+                ? group === "product"
+                  ? "Product"
+                  : "Category"
+                : group === "day"
+                  ? "Day"
+                  : group === "status"
+                    ? "Order status"
+                    : "Fulfilment",
+              ...cols.map((c) => c[1]),
+            ]}
+            loading={loading && rows.length === 0}
+            error={err}
+            empty={rows.length === 0 ? "No orders match these filters." : ""}
+            minW={itemLevel ? 800 : 1100}
+          >
+            {rows.map((r) => (
+              <tr key={r.key}>
+                <td className="px-4 py-2.5 font-semibold text-slate-800">
+                  {r.label}
+                </td>
+                {cols.map((c) => (
+                  <td
+                    key={c[0]}
+                    className={`px-4 py-2.5 ${c[2] === "p" && Number(r.cost_missing) > 0 ? "text-amber-700" : ""}`}
+                    title={
+                      c[2] === "p" && Number(r.cost_missing) > 0
+                        ? `Estimate: ${r.cost_missing} sold item(s) have no cost`
+                        : undefined
+                    }
+                  >
+                    {cell(r, c)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            {rows.length > 0 && (
+              <tr className="bg-slate-50 font-extrabold">
+                <td className="px-4 py-2.5">Total</td>
+                {cols.map((c) => (
+                  <td key={c[0]} className="px-4 py-2.5">
+                    {cell({ ...totals, [c[0]]: totals[c[0]] }, c)}
+                  </td>
+                ))}
+              </tr>
+            )}
+          </ShopTable>
+          <p className="mt-3 text-xs text-slate-400">
+            Covers orders placed in the selected dates. “≈” marks a profit
+            estimate: some sold items have no cost saved. Sales count completed
+            orders only; refunded and canceled orders are never sales.
+            {itemLevel
+              ? " Product / category rows are item amounts (delivery fees are not included)."
+              : ""}
+          </p>
+        </div>
+      </div>
+    </ShopGate>
+  );
+}
+
 function AdminApp() {
   return (
     <AuthProvider>
@@ -61127,6 +67626,17 @@ function AdminApp() {
               />
               <Route path="/wallet-top-up" element={<WalletTopUpPage />} />
               <Route path="/loyalty" element={<LoyaltyPage />} />
+              <Route path="/shop/dashboard" element={<ShopDashboardPage />} />
+              <Route path="/shop/reports" element={<ShopReportsPage />} />
+              <Route path="/shop/orders" element={<ShopOrdersPage />} />
+              <Route
+                path="/shop/orders/:id"
+                element={<ShopOrderDetailPage />}
+              />
+              <Route path="/shop/products" element={<ShopProductsPage />} />
+              <Route path="/shop/categories" element={<ShopCategoriesPage />} />
+              <Route path="/shop/inventory" element={<ShopInventoryPage />} />
+              <Route path="/shop/settings" element={<ShopSettingsPage />} />
               <Route path="/reports/:key" element={<ReportsPage />} />
               <Route
                 path="/notifications"
@@ -61152,6 +67662,13 @@ function AdminApp() {
                     "/settings",
                     "/wallet-top-up",
                     "/loyalty", // custom page above
+                    "/shop/dashboard", // custom pages above
+                    "/shop/reports",
+                    "/shop/orders",
+                    "/shop/products",
+                    "/shop/categories",
+                    "/shop/inventory",
+                    "/shop/settings",
                     "/delivery",
                     "/shipments", // module removed — Container is the only grouping
                     "/air-shipments", // AIR / Indonesia is not part of this deployment
