@@ -36160,8 +36160,10 @@ const CustomerApp = (() => {
                       </span>
                     )}
                     {p.has_discount && p.in_stock && (
-                      <span className="absolute left-2 top-2 bg-red-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow">
-                        {tr("SALE", "បញ្ចុះតម្លៃ")}
+                      <span className="absolute left-2 top-2 bg-red-500 text-white text-[11px] font-bold px-2 py-0.5 rounded-full shadow">
+                        {shopSalePct(p.list_price, p.price_from)
+                          ? `−${shopSalePct(p.list_price, p.price_from)}%`
+                          : tr("SALE", "បញ្ចុះតម្លៃ")}
                       </span>
                     )}
                   </div>
@@ -65226,6 +65228,29 @@ function shopErr(e) {
 }
 const shopDt = (x) => (x ? new Date(x).toLocaleString() : "—");
 const shopNum = (v) => (v === "" || v == null ? null : Number(v));
+// Discount is typed as a percentage in the admin form; the database keeps
+// storing the final discounted price (discount_price) so customer pages,
+// carts and orders keep working unchanged.
+const shopPctFromPrices = (selling, disc) => {
+  const sp = shopNum(selling);
+  const dp = shopNum(disc);
+  if (sp == null || dp == null || !(sp > 0) || dp >= sp) return "";
+  return String(Math.round(((sp - dp) / sp) * 10000) / 100);
+};
+// Whole-number % off for the customer SALE badge ("" when it cannot be worked out).
+const shopSalePct = (list, final) => {
+  const l = Number(list);
+  const f = Number(final);
+  if (!(l > 0) || !(f >= 0) || f >= l) return "";
+  const pct = Math.round(((l - f) / l) * 100);
+  return pct >= 1 ? String(Math.min(pct, 99)) : "";
+};
+const shopPriceFromPct = (selling, pct) => {
+  const sp = shopNum(selling);
+  const pc = shopNum(pct);
+  if (sp == null || pc == null || !(pc > 0)) return null;
+  return Math.round(sp * (1 - pc / 100) * 100) / 100;
+};
 const shopSlug = (s) =>
   String(s || "")
     .toLowerCase()
@@ -66362,6 +66387,13 @@ function ShopProductsPage() {
                       <s className="text-xs text-slate-400">
                         {money(r.selling_price)}
                       </s>
+                      {shopPctFromPrices(r.selling_price, r.discount_price) && (
+                        <span className="ml-1.5 rounded-full bg-red-50 px-1.5 py-0.5 text-[11px] font-bold text-red-600">
+                          −
+                          {shopPctFromPrices(r.selling_price, r.discount_price)}
+                          %
+                        </span>
+                      )}
                     </>
                   ) : (
                     money(r.selling_price)
@@ -66499,7 +66531,10 @@ function ShopProductModal({
     brand: product.brand || "",
     cost_price: product.cost_price ?? "",
     selling_price: product.selling_price ?? "",
-    discount_price: product.discount_price ?? "",
+    discount_pct: shopPctFromPrices(
+      product.selling_price,
+      product.discount_price,
+    ),
     status: product.status || "Draft",
     is_featured: !!product.is_featured,
     weight_kg: product.weight_kg ?? "",
@@ -66654,9 +66689,9 @@ function ShopProductModal({
     if (!v.category_id) return "Choose a category.";
     const sp = shopNum(v.selling_price);
     if (sp == null || sp < 0) return "Selling price must be 0 or more.";
-    const dp = shopNum(v.discount_price);
-    if (dp != null && (dp < 0 || dp > sp))
-      return "Discounted price must be between 0 and the selling price.";
+    const pc = shopNum(v.discount_pct);
+    if (pc != null && (Number.isNaN(pc) || pc < 0 || pc > 100))
+      return "Discount % must be between 0 and 100.";
     const cp = shopNum(v.cost_price);
     if (cp != null && cp < 0) return "Cost price must be 0 or more.";
     if (hasVariants) {
@@ -66674,6 +66709,18 @@ function ShopProductModal({
     return "";
   }
 
+  // Untouched discount keeps the exact stored price (no 1-cent rounding drift);
+  // otherwise the price is recalculated from the % and the selling price.
+  function discountPriceToSave() {
+    const untouched =
+      product.discount_price != null &&
+      v.discount_pct ===
+        shopPctFromPrices(product.selling_price, product.discount_price) &&
+      shopNum(v.selling_price) === shopNum(product.selling_price);
+    if (untouched) return shopNum(product.discount_price);
+    return shopPriceFromPct(v.selling_price, v.discount_pct);
+  }
+
   async function save() {
     if (busy || !canEdit) return;
     const bad = validate();
@@ -66689,7 +66736,7 @@ function ShopProductModal({
         brand: v.brand.trim() || null,
         cost_price: shopNum(v.cost_price),
         selling_price: shopNum(v.selling_price),
-        discount_price: shopNum(v.discount_price),
+        discount_price: discountPriceToSave(),
         is_featured: !!v.is_featured,
         weight_kg: shopNum(v.weight_kg),
         dimensions: v.dimensions.trim() || null,
@@ -66908,16 +66955,32 @@ function ShopProductModal({
             onChange={(e) => setV({ ...v, selling_price: e.target.value })}
           />
         </ShopField>
-        <ShopField label="Discounted price" hint="Leave empty for no discount.">
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            className={SHOP_INP}
-            disabled={ro}
-            value={v.discount_price}
-            onChange={(e) => setV({ ...v, discount_price: e.target.value })}
-          />
+        <ShopField
+          label="Discount (%)"
+          hint={(() => {
+            const dp = shopPriceFromPct(v.selling_price, v.discount_pct);
+            const sp = shopNum(v.selling_price);
+            return dp != null && Number(v.discount_pct) <= 100
+              ? `Customer pays ${money(dp)} (save ${money(sp - dp)}).`
+              : "Leave empty for no discount.";
+          })()}
+        >
+          <div className="relative">
+            <input
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              placeholder="e.g. 10"
+              className={`${SHOP_INP} pr-9`}
+              disabled={ro}
+              value={v.discount_pct}
+              onChange={(e) => setV({ ...v, discount_pct: e.target.value })}
+            />
+            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
+              %
+            </span>
+          </div>
         </ShopField>
         <ShopField
           label="Cost price"
