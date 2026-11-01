@@ -1207,18 +1207,22 @@ function useSystemSettings() {
 const NAV_SECTIONS = [
   {
     label: null,
-    items: [{ label: "Dashboard", icon: "LayoutDashboard", path: "/" }],
+    items: [{ label: "Dashboard", icon: "Home", path: "/" }],
   },
   {
     label: "Operations",
     items: [
       { label: "Packages / TK", icon: "Package", path: "/packages" },
-      { label: "Scan Center", icon: "ScanLine", path: "/scan-center" },
+      { label: "Scan Center", icon: "ScanBarcode", path: "/scan-center" },
       { label: "Process Tracking", icon: "Route", path: "/process-tracking" },
       { label: "Exception Center", icon: "TriangleAlert", path: "/exceptions" },
-      { label: "Inbound Origin", icon: "LogIn", path: "/inbound-origin" },
-      { label: "Outbound Origin", icon: "LogOut", path: "/outbound-origin" },
-      { label: "Shipment Lookup", icon: "Waypoints", path: "/shipment-lookup" },
+      { label: "Inbound Origin", icon: "Building2", path: "/inbound-origin" },
+      { label: "Outbound Origin", icon: "Truck", path: "/outbound-origin" },
+      {
+        label: "Shipment Lookup",
+        icon: "PackageSearch",
+        path: "/shipment-lookup",
+      },
       {
         label: "CN Purchase Orders",
         icon: "ShoppingCart",
@@ -1231,12 +1235,12 @@ const NAV_SECTIONS = [
     items: [
       {
         label: "W.H Arrived (Destination)",
-        icon: "PackageCheck",
+        icon: "ClipboardCheck",
         path: "/wh-arrived",
       },
       { label: "Cambodia Warehouse", icon: "Warehouse", path: "/kh-warehouse" },
-      { label: "Sorting", icon: "ListTree", path: "/sorting" },
-      { label: "Delivery", icon: "Bike", path: "/delivery" },
+      { label: "Sorting", icon: "ListOrdered", path: "/sorting" },
+      { label: "Delivery", icon: "Truck", path: "/delivery" },
     ],
   },
   {
@@ -1278,7 +1282,7 @@ const NAV_SECTIONS = [
   {
     label: "Warehouse",
     items: [
-      { label: "Warehouse Management", icon: "Building2", path: "/warehouses" },
+      { label: "Warehouse Management", icon: "Container", path: "/warehouses" },
       { label: "Locations", icon: "MapPinned", path: "/locations" },
       {
         label: "Warehouse Operations",
@@ -1299,7 +1303,7 @@ const NAV_SECTIONS = [
     items: [
       {
         label: "Shop Dashboard",
-        icon: "LayoutDashboard",
+        icon: "Store",
         path: "/shop/dashboard",
       },
       { label: "Shop Orders", icon: "ShoppingBag", path: "/shop/orders" },
@@ -2129,6 +2133,162 @@ const createdCol = (label = "Created") =>
     csv: (row) => formatIso(row.created_at),
   });
 
+// ===== Package type — the ONE rule used everywhere =====
+//  Parse Link = we bought it for the customer (has cn_order_id)
+//  Shipment   = customer bought it themselves and sent it to us
+const PKG_TYPE = { SHIPMENT: "Shipment", PARSE_LINK: "Parse Link" };
+const pkgType = (p) =>
+  p?.cn_order_id ? PKG_TYPE.PARSE_LINK : PKG_TYPE.SHIPMENT;
+const isParseLinkPkg = (p) => pkgType(p) === PKG_TYPE.PARSE_LINK;
+// Where a Packages / TK row opens:
+//  Parse Link -> CN Order detail (JZE...) ; Shipment -> Package (TK) detail
+// ---- Shared two-line table cells (Phase 3 list layout) ----
+const hasVal = (v) => v !== undefined && v !== null && v !== "";
+const weightCbmText = (row) => {
+  const bits = [
+    hasVal(row.weight) ? `${row.weight} kg` : null,
+    hasVal(row.cbm) ? `${row.cbm} CBM` : null,
+  ].filter(Boolean);
+  return bits.length ? bits.join(" · ") : "—";
+};
+const customerCellCol = () =>
+  col("customer", "Customer", {
+    render: (row) => {
+      const [code, ...rest] = String(row.customer || "").split(" · ");
+      const name = rest.join(" · ");
+      return name ? (
+        <div className="leading-tight">
+          <div className="font-semibold text-ink-900">{name}</div>
+          <div className="text-xs text-ink-600/60 mt-1">{code}</div>
+        </div>
+      ) : (
+        <span>{row.customer || "—"}</span>
+      );
+    },
+  });
+const tkLinkCol = () =>
+  col("tk", "TK Number", {
+    render: (row) => (
+      <Link
+        to={`/packages/${encodeURIComponent(row.tk)}`}
+        className="font-semibold text-signal-blue hover:underline"
+      >
+        {row.tk}
+      </Link>
+    ),
+  });
+
+// Small copy-to-clipboard icon button (same look as the CN order tracking copy).
+function CopyTkButton({ value }) {
+  const [done, setDone] = useState(false);
+  if (!value) return null;
+  return (
+    <button
+      type="button"
+      title="Copy tracking number"
+      aria-label={`Copy ${value}`}
+      onClick={async (e) => {
+        e.stopPropagation();
+        const ok = await cnCopyText(String(value));
+        if (!ok) {
+          emitCBToast(
+            "error",
+            "Copy failed",
+            "Please copy the number manually.",
+          );
+          return;
+        }
+        setDone(true);
+        setTimeout(() => setDone(false), 1400);
+        emitCBToast("success", "Copied", String(value));
+      }}
+      className={`shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md border transition-colors ${
+        done
+          ? "border-emerald-200 bg-emerald-50 text-emerald-600"
+          : "border-transparent text-signal-blue hover:bg-signal-blue/10 hover:border-signal-blue/20"
+      }`}
+    >
+      {done ? <Check size={14} /> : <Copy size={14} />}
+    </button>
+  );
+}
+
+// TK cell for Inbound / Outbound: link + copy button, with the
+// Shipment / Parse Link type underneath (same as Packages / TK).
+function tkTypeCol() {
+  return col("tk", "TK Number", {
+    render: (row) => (
+      <div className="leading-tight">
+        <div className="flex items-center gap-1">
+          <Link
+            to={pkgRowHref(row)}
+            className="font-semibold text-signal-blue hover:underline"
+          >
+            {row.tk}
+          </Link>
+          <CopyTkButton value={row.tk} />
+        </div>
+        <div className="mt-1">
+          <PkgTypeTag row={row} />
+        </div>
+      </div>
+    ),
+  });
+}
+
+// Order cell: Order ID, then Shipping Method (Land / Sea / Air) and the
+// Direct / CN order chip — same as Packages / TK. `extra` adds a third line.
+function orderMethodCol(extra) {
+  return col("order_no", "Order", {
+    render: (row) => (
+      <div className="leading-tight">
+        <div className="font-semibold text-ink-900">{row.order_no || "—"}</div>
+        <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+          <span className="inline-flex items-center gap-1 text-xs font-semibold text-ink-700">
+            <ShipMethodIcon
+              m={row.ship_method}
+              size={13}
+              className="text-blue-600"
+            />
+            {row.ship_method || "—"}
+          </span>
+          {row.cn_order_id && row.cn_order_no ? (
+            <Link
+              to={`/cn-orders/${encodeURIComponent(row.cn_order_no)}`}
+              className="inline-flex items-center rounded-full bg-violet-50 text-violet-700 px-2 py-0.5 text-[11px] font-bold hover:underline"
+            >
+              {row.cn_order_no}
+            </Link>
+          ) : (
+            <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-600 px-2 py-0.5 text-[11px] font-semibold">
+              Direct
+            </span>
+          )}
+        </div>
+        {extra && extra(row)}
+      </div>
+    ),
+  });
+}
+
+function PkgTypeTag({ row }) {
+  const pl = isParseLinkPkg(row);
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 text-xs font-semibold ${pl ? "text-violet-700" : "text-sky-700"}`}
+    >
+      <span
+        className={`w-1.5 h-1.5 rounded-full ${pl ? "bg-violet-500" : "bg-sky-500"}`}
+      />
+      {pkgType(row)}
+    </span>
+  );
+}
+const pkgRowHref = (row) =>
+  isParseLinkPkg(row) && row.cn_order_no
+    ? `/cn-orders/${encodeURIComponent(row.cn_order_no)}`
+    : `/packages/${encodeURIComponent(row.tk)}`;
+
 const MODULES = {
   "/packages": {
     title: "Packages / TK",
@@ -2158,9 +2318,22 @@ const MODULES = {
     columns: [
       col("tk", "TK Number", {
         strong: true,
-        linkTo: (row) => `/packages/${row.tk}`,
+        linkTo: (row) => pkgRowHref(row),
       }),
-      col("customer", "Customer"),
+      col("customer", "Customer", {
+        render: (row) => {
+          const [code, ...rest] = String(row.customer || "").split(" · ");
+          const name = rest.join(" · ");
+          return name ? (
+            <div className="leading-tight">
+              <div className="font-semibold text-ink-900">{name}</div>
+              <div className="text-xs text-ink-600/60 mt-0.5">{code}</div>
+            </div>
+          ) : (
+            <span>{row.customer || "—"}</span>
+          );
+        },
+      }),
       col("order_no", "Order ID"),
       col("source", "Source", {
         render: (row) =>
@@ -2179,15 +2352,29 @@ const MODULES = {
       }),
       col("type", "Type", {
         render: (row) =>
-          row.cn_order_id ? (
-            <span className="inline-flex items-center rounded-full bg-violet-50 text-violet-700 px-2.5 py-1 text-[11px] font-semibold">
+          isParseLinkPkg(row) ? (
+            <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-violet-700">
+              <span className="w-1.5 h-1.5 rounded-full bg-violet-500" />
               Parse Link
             </span>
           ) : (
-            <span className="inline-flex items-center rounded-full bg-sky-50 text-sky-700 px-2.5 py-1 text-[11px] font-semibold">
+            <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-sky-700">
+              <span className="w-1.5 h-1.5 rounded-full bg-sky-500" />
               Shipment
             </span>
           ),
+      }),
+      col("ship_method", "Shipping Method", {
+        render: (row) => (
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-ink-700">
+            <ShipMethodIcon
+              m={row.ship_method}
+              size={14}
+              className="text-blue-600"
+            />
+            {row.ship_method || "—"}
+          </span>
+        ),
       }),
       col("cargo", "Cargo"),
       col("weight", "Weight"),
@@ -2198,6 +2385,115 @@ const MODULES = {
       col("inbound_status", "Inbound", { status: true }),
       col("status", "Status", {
         render: (row) => <StatusBadge label={pkgDisplayStatus(row) || "—"} />,
+      }),
+      col("shipping_fee", "Shipping Fee", {
+        render: (row) => <ShippingFeeCell row={row} />,
+      }),
+      scanInCol(),
+    ],
+    // Compact on-screen layout (two-line cells). `columns` above still drives
+    // search, filters, CSV export and edit forms, so nothing is lost.
+    tableColumns: [
+      col("tk", "TK Number", {
+        render: (row) => (
+          <div className="leading-tight">
+            <Link
+              to={pkgRowHref(row)}
+              className="font-semibold text-signal-blue hover:underline"
+            >
+              {row.tk}
+            </Link>
+            <div className="mt-1.5">
+              <PkgTypeTag row={row} />
+            </div>
+          </div>
+        ),
+      }),
+      col("customer", "Customer", {
+        render: (row) => {
+          const [code, ...rest] = String(row.customer || "").split(" · ");
+          const name = rest.join(" · ");
+          return name ? (
+            <div className="leading-tight">
+              <div className="font-semibold text-ink-900">{name}</div>
+              <div className="text-xs text-ink-600/60 mt-1">{code}</div>
+            </div>
+          ) : (
+            <span>{row.customer || "—"}</span>
+          );
+        },
+      }),
+      col("order_no", "Order", {
+        render: (row) => (
+          <div className="leading-tight">
+            <div className="font-semibold text-ink-900">
+              {row.order_no || "—"}
+            </div>
+            <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+              <span className="inline-flex items-center gap-1 text-xs font-semibold text-ink-700">
+                <ShipMethodIcon
+                  m={row.ship_method}
+                  size={13}
+                  className="text-blue-600"
+                />
+                {row.ship_method || "—"}
+              </span>
+              {row.cn_order_id && row.cn_order_no ? (
+                <Link
+                  to={`/cn-orders/${encodeURIComponent(row.cn_order_no)}`}
+                  className="inline-flex items-center rounded-full bg-violet-50 text-violet-700 px-2 py-0.5 text-[11px] font-bold hover:underline"
+                >
+                  {row.cn_order_no}
+                </Link>
+              ) : (
+                <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-600 px-2 py-0.5 text-[11px] font-semibold">
+                  Direct
+                </span>
+              )}
+            </div>
+          </div>
+        ),
+      }),
+      col("cargo", "Cargo", {
+        render: (row) => {
+          const has = (v) => v !== undefined && v !== null && v !== "";
+          const bits = [
+            has(row.weight) ? `${row.weight} kg` : null,
+            has(row.cbm) ? `${row.cbm} CBM` : null,
+          ].filter(Boolean);
+          return (
+            <div className="leading-tight">
+              <div className="font-medium text-ink-900">{row.cargo || "—"}</div>
+              <div className="text-xs text-ink-600/60 mt-1">
+                {bits.length ? bits.join(" · ") : "—"}
+              </div>
+            </div>
+          );
+        },
+      }),
+      col("freight", "Freight"),
+      col("route", "Route", {
+        render: (row) => {
+          return (
+            <span className="inline-flex items-center gap-1.5 font-medium text-ink-800">
+              {row.warehouse || "—"}
+              <ArrowRight size={14} className="text-ink-600/40" />
+              {row.dest_branch || "—"}
+            </span>
+          );
+        },
+      }),
+      col("status", "Status", {
+        render: (row) => (
+          <div className="flex flex-col items-start gap-1">
+            <StatusBadge label={pkgDisplayStatus(row) || "—"} />
+            {row.inbound_status && (
+              <span className="text-xs text-ink-600/60">
+                {row.inbound_status}
+              </span>
+            )}
+          </div>
+        ),
       }),
       col("shipping_fee", "Shipping Fee", {
         render: (row) => <ShippingFeeCell row={row} />,
@@ -2250,6 +2546,28 @@ const MODULES = {
         render: (row) => <ShippingFeeCell row={row} />,
       }),
     ],
+    tableColumns: [
+      tkTypeCol(),
+      customerCellCol(),
+      orderMethodCol(),
+      col("cargo", "Cargo", {
+        render: (row) => (
+          <div className="leading-tight">
+            <div className="font-medium text-ink-900">{row.cargo || "—"}</div>
+            <div className="text-xs text-ink-600/60 mt-1">
+              {weightCbmText(row)}
+            </div>
+          </div>
+        ),
+      }),
+      col("freight", "Freight"),
+      col("created_by", "Received By"),
+      col("inbound_status", "Status", { status: true }),
+      col("shipping_fee", "Shipping Fee", {
+        render: (row) => <ShippingFeeCell row={row} />,
+      }),
+      scanInCol(),
+    ],
     rows: [], // live data only — loaded from the server
   },
 
@@ -2295,6 +2613,31 @@ const MODULES = {
         render: (row) => <ShippingFeeCell row={row} />,
       }),
       col("status", "Status", { status: true }),
+    ],
+    tableColumns: [
+      tkTypeCol(),
+      customerCellCol(),
+      orderMethodCol(),
+      col("method", "Shipment", {
+        render: (row) => (
+          <div className="leading-tight">
+            <div className="text-sm font-semibold text-ink-800">
+              {row.container_no && row.container_no !== "—"
+                ? `Container ${row.container_no}`
+                : "Container —"}
+            </div>
+            <div className="text-xs text-ink-600/60 mt-1">
+              {weightCbmText(row)}
+            </div>
+          </div>
+        ),
+      }),
+      col("dest_branch", "Receiving Branch"),
+      col("status", "Status", { status: true }),
+      col("shipping_fee", "Shipping Fee", {
+        render: (row) => <ShippingFeeCell row={row} />,
+      }),
+      scanOutCol(),
     ],
     // Rows aren't listed here — this list is derived live from whichever
     // TKs in the shared registry have reached "Outbound Origin" status.
@@ -2451,6 +2794,46 @@ const MODULES = {
       col("name", "Name", { avatar: true }),
       col("email", "Email"),
       col("phone", "Phone"),
+      col("warehouse", "Default Warehouse"),
+      col("status", "Status", { status: true }),
+      createdCol("Registered"),
+    ],
+    tableColumns: [
+      col("name", "Customer", {
+        render: (row) => (
+          <span className="flex items-center gap-3">
+            <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm font-bold text-white overflow-hidden">
+              <UserAvatar
+                url={row.avatar_url}
+                initials={String(row.name || "?")
+                  .slice(0, 1)
+                  .toUpperCase()}
+              />
+            </span>
+            <span className="leading-tight min-w-0">
+              <Link
+                to={`/customers/${encodeURIComponent(row.id)}`}
+                className="block font-semibold text-signal-blue hover:underline truncate"
+              >
+                {row.name || "—"}
+              </Link>
+              <span className="block text-xs text-ink-600/60 mt-1">
+                {row.id}
+              </span>
+            </span>
+          </span>
+        ),
+      }),
+      col("phone", "Contact", {
+        render: (row) => (
+          <div className="leading-tight">
+            <div className="font-medium text-ink-900">{row.phone || "—"}</div>
+            <div className="text-xs text-ink-600/60 mt-1">
+              {row.email || "—"}
+            </div>
+          </div>
+        ),
+      }),
       col("warehouse", "Default Warehouse"),
       col("status", "Status", { status: true }),
       createdCol("Registered"),
@@ -2760,7 +3143,7 @@ function normalizeLegacyStamp(v, refIso) {
 }
 
 // ------------------------------------------------------------
-// lib/cargo.js — freight pricing, CBM, Order ID (THN######), photos
+// lib/cargo.js — freight pricing, CBM, Order ID (JZEYYMMDD###), photos
 // ------------------------------------------------------------
 // Shared by the New TK / Inbound Origin form, TK Detail, the list filters
 // and Outbound Origin so every module reads the same rules.
@@ -3210,13 +3593,9 @@ function DateRangeFilter({ label = "Created At", value, onChange }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`flex items-center gap-1.5 text-sm border px-3 py-2 rounded-md hover:bg-mist-50 ${
-          active
-            ? "border-signal-blue text-signal-blue bg-signal-blue/5"
-            : "border-mist-200 text-ink-700"
-        }`}
+        className={`cbx-chip${active ? " is-active" : ""}`}
       >
-        <Icons.CalendarDays size={14} />
+        <Icons.CalendarDays size={16} />
         {active ? `${label}: ${active}` : label}
         {active ? (
           <span
@@ -3435,9 +3814,9 @@ function CNDateRangeFilter({ value, onChange }) {
           setHoverDate("");
           setDraftRange({ from: value?.from || "", to: value?.to || "" });
         }}
-        className={`inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm transition-all hover:border-signal-blue/50 hover:shadow-sm ${active ? "border-signal-blue/40 bg-signal-blue/5 text-signal-blue" : "border-mist-200 bg-white text-ink-700"}`}
+        className={`cbx-chip${active ? " is-active" : ""}`}
       >
-        <Icons.CalendarDays size={15} />
+        <Icons.CalendarDays size={16} />
         <span>{active ? active : "Created At"}</span>
         <Icons.ChevronDown size={14} />
       </button>
@@ -4090,11 +4469,13 @@ function decoratePackageRow(p) {
       : "Direct",
     // Type: "Parse Link" = we bought it for the customer (CN Purchase Order),
     // "Shipment" = customer bought it and sent it to us. Display-only.
-    type: p.cn_order_id ? "Parse Link" : "Shipment",
+    type: pkgType(p),
+    // Land / Sea / Air — from the CN Order (Parse Link) or the TK itself (Shipment).
+    ship_method: pkgShippingMethod(p),
   };
 }
 
-// ---- Order ID (THN000001, THN000002, ...) -----------------------------
+// ---- Order ID (JZE261031001, JZE261031002, ...) -----------------------
 // Live database: orders.order_no gets its value from a sequence default
 // (see migration above), so two staff creating orders at the same moment
 // can never receive the same number. UI-only mode keeps a local registry.
@@ -4116,15 +4497,25 @@ function writeLocalOrders(rows) {
   }
 }
 
-function formatOrderNo(n) {
-  return `THN${String(n).padStart(6, "0")}`;
+// Shipment Order ID = JZE + YYMMDD + 3-digit daily sequence (JZE261031001),
+// the same format as CN Orders. Old THN###### orders stay as they are.
+function jzeDayPrefix(d = new Date()) {
+  const z = (n) => String(n).padStart(2, "0");
+  return `JZE${z(d.getFullYear() % 100)}${z(d.getMonth() + 1)}${z(d.getDate())}`;
+}
+
+function formatOrderNo(n, prefix = jzeDayPrefix()) {
+  return `${prefix}${String(n).padStart(3, "0")}`;
 }
 
 function nextLocalOrderNo(existing) {
+  const prefix = jzeDayPrefix();
   const nums = existing
-    .map((o) => parseInt(String(o.order_no || "").slice(3), 10))
+    .map((o) => String(o.order_no || ""))
+    .filter((no) => no.startsWith(prefix))
+    .map((no) => parseInt(no.slice(prefix.length), 10))
     .filter(Number.isFinite);
-  return formatOrderNo((nums.length ? Math.max(...nums) : 0) + 1);
+  return formatOrderNo((nums.length ? Math.max(...nums) : 0) + 1, prefix);
 }
 
 function createLocalOrder(customer, platform, route = {}) {
@@ -4185,15 +4576,21 @@ async function peekNextOrderNo() {
   const local = nextLocalOrderNo(readLocalOrders());
   if (!supabase) return local;
   try {
-    const { data } = await supabase
-      .from("orders")
-      .select("order_no")
-      .like("order_no", "THN%")
-      .order("order_no", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    const n = parseInt(String(data?.order_no || "").slice(3), 10);
-    return Number.isFinite(n) ? formatOrderNo(n + 1) : local;
+    const prefix = jzeDayPrefix();
+    const [a, b] = await Promise.all([
+      supabase.from("orders").select("order_no").like("order_no", `${prefix}%`),
+      supabase
+        .from("cn_orders")
+        .select("order_id")
+        .like("order_id", `${prefix}%`),
+    ]);
+    const nums = [
+      ...(a.data || []).map((r) => r.order_no),
+      ...(b.data || []).map((r) => r.order_id),
+    ]
+      .map((no) => parseInt(String(no || "").slice(prefix.length), 10))
+      .filter(Number.isFinite);
+    return formatOrderNo((nums.length ? Math.max(...nums) : 0) + 1, prefix);
   } catch {
     return local;
   }
@@ -4202,7 +4599,7 @@ async function peekNextOrderNo() {
 // If the TK could not be saved after its new Order was created, remove that
 // Order again so no empty / orphan Order is left behind.
 async function rollbackNewOrder(order) {
-  if (!order) return;
+  if (!order || !order.id) return; // reused CN order id: nothing was created
   try {
     if (String(order.id).startsWith("local-"))
       writeLocalOrders(readLocalOrders().filter((o) => o.id !== order.id));
@@ -5318,6 +5715,95 @@ async function loadPhotos(tk) {
   return (await loadPhotosDetailed(tk)).photos;
 }
 
+// Edit Package → apply photo changes (add / delete / re-categorise) for a TK.
+// `original` = photos loaded when the modal opened, `current` = after edits.
+// Returns a warning string (empty when everything worked).
+const _isUuid = (v) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    String(v || ""),
+  );
+const _photoPath = (tk, p) => {
+  const n = String(p?.name || "");
+  return n.startsWith(`${tk}/`) ? n : `${tk}/${p.id}.jpg`;
+};
+async function syncPackagePhotos(meta, original, current) {
+  const tk = meta.tk;
+  const curIds = new Set(current.map((p) => p.id));
+  const origById = new Map(original.map((p) => [p.id, p]));
+  const removed = original.filter((p) => !curIds.has(p.id));
+  const added = current.filter((p) => !origById.has(p.id));
+  const recat = current.filter(
+    (p) => origById.has(p.id) && origById.get(p.id).category !== p.category,
+  );
+  if (!removed.length && !added.length && !recat.length) return "";
+  const problems = [];
+  const byKey = (q, p) =>
+    _isUuid(p.id) ? q.eq("id", p.id) : q.eq("storage_path", _photoPath(tk, p));
+  if (supabase) {
+    for (const p of removed) {
+      try {
+        const { data, error } = await byKey(
+          supabase.from("cargo_photos").delete(),
+          p,
+        ).select("id");
+        if (error) throw error;
+        if (!data?.length && _isUuid(p.id))
+          throw new Error(
+            "មិនមានសិទ្ធិលុប (ពិនិត្យ RLS delete policy លើ cargo_photos)",
+          );
+        await supabase.storage
+          .from("cargo-photos")
+          .remove([_photoPath(tk, p)])
+          .catch(() => {});
+      } catch (err) {
+        problems.push(`លុបរូបមិនបាន: ${err.message}`);
+      }
+    }
+    for (const p of recat) {
+      try {
+        const { error } = await byKey(
+          supabase.from("cargo_photos").update({ category: p.category }),
+          p,
+        );
+        if (error) throw error;
+      } catch (err) {
+        problems.push(`ប្តូរប្រភេទរូបមិនបាន: ${err.message}`);
+      }
+    }
+    if (added.length) {
+      try {
+        await uploadPhotosRemote(meta, added);
+      } catch (err) {
+        problems.push(`Upload រូបមិនបាន: ${err.message}`);
+      }
+    }
+  }
+  // Keep this browser's local copy in step so a deleted photo is not
+  // resurrected (loadPhotosDetailed falls back to / backfills from local).
+  try {
+    const local = await loadPhotosLocal(tk).catch(() => []);
+    const gone = new Set(
+      removed.flatMap((p) => [
+        p.id,
+        String(_photoPath(tk, p))
+          .split("/")
+          .pop()
+          .replace(/\.jpg$/, ""),
+      ]),
+    );
+    const keep = local
+      .filter((l) => !gone.has(l.id))
+      .map((l) => {
+        const r = recat.find((x) => x.id === l.id);
+        return r ? { ...l, category: r.category } : l;
+      });
+    await savePhotosLocal(meta, [...keep, ...added]);
+  } catch {
+    // local copy is best-effort
+  }
+  return problems.join(" · ");
+}
+
 const PACKAGE_DETAILS = {}; // live data only — nothing hard-coded
 
 // ------------------------------------------------------------
@@ -5416,6 +5902,7 @@ const PACKAGE_TABLE_COLUMNS = [
   "inbound_at",
   "container_no",
   "package_count",
+  "shipping_method", // Land | Sea | Air (needs packages.shipping_method)
   "created_by",
   "updated_by",
   "updated_at",
@@ -6378,7 +6865,7 @@ function orderLabel(o) {
 }
 
 // Lets the Package creation form pick an existing Order for the selected
-// Customer, or create a new one inline. The Order ID (THN######) is
+// Customer, or create a new one inline. The Order ID (JZEYYMMDD###) is
 // generated automatically and can't be typed or edited — an Order always
 // belongs to exactly one Customer and one Customer can have many Orders.
 function OrderPicker({ customer, value, onChange }) {
@@ -6489,7 +6976,7 @@ function OrderPicker({ customer, value, onChange }) {
         <div className="border border-mist-200 rounded-md p-3 space-y-2">
           {error && <p className="text-xs text-signal-red">{error}</p>}
           <p className="text-xs text-ink-600/50">
-            Order ID (THN######) នឹងត្រូវបានបង្កើតស្វ័យប្រវត្តិ
+            Order ID (JZEYYMMDD###) នឹងត្រូវបានបង្កើតស្វ័យប្រវត្តិ
           </p>
           <input
             value={platform}
@@ -6831,6 +7318,18 @@ function CargoCalculator({
   const policyCurrency = policy.currency || "USD";
   const displayMoney = (n) => `${policyCurrency} ${Number(n || 0).toFixed(2)}`;
   const dimensionMode = form.packageType === "dimension_based";
+  const isAir = normShipMethod(form.shippingMethod) === "Air";
+  const airItems = [
+    { label: "Shipping Method", value: "Air" },
+    {
+      label: "Rate",
+      value: calc.ok ? `${displayMoney(calc.rate)} / KG` : "—",
+    },
+    {
+      label: "Freight Fee",
+      value: finalFee != null ? displayMoney(finalFee) : "—",
+    },
+  ];
 
   const selectCargoType = (t) => setForm((f) => ({ ...f, cargoType: t }));
   const selectPackageType = (t) =>
@@ -6851,116 +7350,132 @@ function CargoCalculator({
   return (
     <div className="space-y-5">
       <div>
-        <label className={LABEL_CLS}>
-          Package Type <span className="text-signal-red">*</span>
-        </label>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          <button
-            type="button"
-            onClick={() => selectPackageType("small_package")}
-            className={`${segBtn(form.packageType === "small_package")} text-left px-4`}
-          >
-            <span className="block font-semibold">📦 Small Package</span>
-            <span className="block text-[11px] font-normal opacity-75 mt-0.5">
-              Select Size S / M / L — fixed price
-            </span>
-          </button>
-          <button
-            type="button"
-            onClick={() => selectPackageType("dimension_based")}
-            className={`${segBtn(form.packageType === "dimension_based")} text-left px-4`}
-          >
-            <span className="block font-semibold">📐 Dimension Based</span>
-            <span className="block text-[11px] font-normal opacity-75 mt-0.5">
-              Measure actual size and calculate by CBM
-            </span>
-          </button>
+        <label className={LABEL_CLS}>Shipping Method</label>
+        <div className="grid grid-cols-3 gap-2.5">
+          {CN_SHIP_METHODS.map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setForm((f) => ({ ...f, shippingMethod: m }))}
+              className={`${segBtn(normShipMethod(form.shippingMethod) === m)} inline-flex items-center justify-center gap-2`}
+            >
+              <ShipMethodIcon m={m} size={16} />
+              {m}
+            </button>
+          ))}
         </div>
+        <p className="text-xs text-ink-600/50 mt-1.5">
+          Land / Sea: freight by Size S/M/L or CBM. Air: freight by KG.
+        </p>
       </div>
 
-      {dimensionMode && (
-        <div>
-          <label className={LABEL_CLS}>
-            Cargo Type <span className="text-signal-red">*</span>
-          </label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            {CARGO_TYPES.map((t) => (
+      {!isAir && (
+        <>
+          <div>
+            <label className={LABEL_CLS}>Package Type</label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <button
-                key={t}
                 type="button"
-                onClick={() => selectCargoType(t)}
-                className={`${segBtn(form.cargoType === t)} text-left px-4`}
+                onClick={() => selectPackageType("small_package")}
+                className={`${segBtn(form.packageType === "small_package")} text-left px-4`}
               >
-                <span className="block font-semibold">{t} Cargo</span>
+                <span className="block font-semibold">📦 Small Package</span>
                 <span className="block text-[11px] font-normal opacity-75 mt-0.5">
-                  {displayMoney(cargoPolicyFor(t, policy).cbmRate)} / CBM
+                  Select Size S / M / L — fixed price
                 </span>
               </button>
-            ))}
+              <button
+                type="button"
+                onClick={() => selectPackageType("dimension_based")}
+                className={`${segBtn(form.packageType === "dimension_based")} text-left px-4`}
+              >
+                <span className="block font-semibold">📐 Dimension Based</span>
+                <span className="block text-[11px] font-normal opacity-75 mt-0.5">
+                  Measure actual size and calculate by CBM
+                </span>
+              </button>
+            </div>
           </div>
-        </div>
-      )}
 
-      {!dimensionMode ? (
-        <div>
-          <label className={LABEL_CLS}>
-            Package Size <span className="text-signal-red">*</span>
-          </label>
-          <div className="grid grid-cols-3 gap-2.5">
-            {["S", "M", "L"].map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setForm((f) => ({ ...f, sizeClass: s }))}
-                className={`${segBtn(form.sizeClass === s)} min-h-[62px]`}
-              >
-                <span className="block text-base font-bold">Size {s}</span>
-                <span className="block text-[11px] font-normal opacity-75 mt-0.5">
-                  {displayMoney(cargoPolicy.sizeRates?.[s])}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-4">
-          <div className="flex items-start gap-3">
-            <div className="w-9 h-9 rounded-lg bg-blue-600 text-white grid place-items-center shrink-0">
-              <Icons.Ruler size={18} />
-            </div>
+          {dimensionMode && (
             <div>
-              <div className="font-bold text-sm text-slate-900">
-                Actual dimensions
-              </div>
-              <div className="text-xs text-slate-500 mt-0.5">
-                CBM is calculated from the real package size and uses the {type}{" "}
-                CBM rate.
+              <label className={LABEL_CLS}>Cargo Type</label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {CARGO_TYPES.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => selectCargoType(t)}
+                    className={`${segBtn(form.cargoType === t)} text-left px-4`}
+                  >
+                    <span className="block font-semibold">{t} Cargo</span>
+                    <span className="block text-[11px] font-normal opacity-75 mt-0.5">
+                      {displayMoney(cargoPolicyFor(t, policy).cbmRate)} / CBM
+                    </span>
+                  </button>
+                ))}
               </div>
             </div>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mt-4">
-            {[
-              ["length", "Length (cm)"],
-              ["width", "Width (cm)"],
-              ["height", "Height (cm)"],
-            ].map(([key, label]) => (
-              <div key={key}>
-                <label className={LABEL_CLS}>
-                  {label} <span className="text-signal-red">*</span>
-                </label>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="any"
-                  value={form[key]}
-                  onChange={set(key)}
-                  className={INPUT_CLS}
-                />
+          )}
+
+          {!dimensionMode ? (
+            <div>
+              <label className={LABEL_CLS}>Package Size</label>
+              <div className="grid grid-cols-3 gap-2.5">
+                {["S", "M", "L"].map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, sizeClass: s }))}
+                    className={`${segBtn(form.sizeClass === s)} min-h-[62px]`}
+                  >
+                    <span className="block text-base font-bold">Size {s}</span>
+                    <span className="block text-[11px] font-normal opacity-75 mt-0.5">
+                      {displayMoney(cargoPolicy.sizeRates?.[s])}
+                    </span>
+                  </button>
+                ))}
               </div>
-            ))}
-          </div>
-        </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-blue-100 bg-blue-50/60 p-4">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-lg bg-blue-600 text-white grid place-items-center shrink-0">
+                  <Icons.Ruler size={18} />
+                </div>
+                <div>
+                  <div className="font-bold text-sm text-slate-900">
+                    Actual dimensions
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    CBM is calculated from the real package size and uses the{" "}
+                    {type} CBM rate.
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mt-4">
+                {[
+                  ["length", "Length (cm)"],
+                  ["width", "Width (cm)"],
+                  ["height", "Height (cm)"],
+                ].map(([key, label]) => (
+                  <div key={key}>
+                    <label className={LABEL_CLS}>{label}</label>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="any"
+                      value={form[key]}
+                      onChange={set(key)}
+                      className={INPUT_CLS}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       <div>
@@ -6987,52 +7502,59 @@ function CargoCalculator({
           </span>
         </div>
         <InfoGrid
-          items={[
-            ...(dimensionMode
-              ? [{ label: "Cargo Type", value: form.cargoType || "—" }]
-              : []),
-            {
-              label: "Package Type",
-              value: dimensionMode ? "Dimension Based" : "Small Package",
-            },
-            {
-              label: "Size",
-              value: dimensionMode
-                ? "Actual Dimensions"
-                : form.sizeClass || "—",
-            },
-            ...(dimensionMode
-              ? [
+          items={
+            isAir
+              ? airItems
+              : [
+                  ...(dimensionMode
+                    ? [{ label: "Cargo Type", value: form.cargoType || "—" }]
+                    : []),
                   {
-                    label: "CBM",
-                    value: calc.cbm != null ? `${calc.cbm.toFixed(3)} m³` : "—",
+                    label: "Package Type",
+                    value: dimensionMode ? "Dimension Based" : "Small Package",
+                  },
+                  {
+                    label: "Size",
+                    value: dimensionMode
+                      ? "Actual Dimensions"
+                      : form.sizeClass || "—",
+                  },
+                  ...(dimensionMode
+                    ? [
+                        {
+                          label: "CBM",
+                          value:
+                            calc.cbm != null
+                              ? `${calc.cbm.toFixed(3)} m³`
+                              : "—",
+                        },
+                      ]
+                    : []),
+                  {
+                    label: "Rate",
+                    value: calc.ok
+                      ? calc.method === "CBM"
+                        ? `${displayMoney(calc.rate)} / CBM`
+                        : displayMoney(calc.rate)
+                      : "—",
+                  },
+                  ...(dimensionMode
+                    ? [
+                        {
+                          label: "Minimum Freight",
+                          value:
+                            cargoPolicy.applyMinimumFreight === true
+                              ? `${displayMoney(cargoPolicy.minimumFreight)} · Applied`
+                              : "Not Applied",
+                        },
+                      ]
+                    : []),
+                  {
+                    label: "Freight Fee",
+                    value: finalFee != null ? displayMoney(finalFee) : "—",
                   },
                 ]
-              : []),
-            {
-              label: "Rate",
-              value: calc.ok
-                ? calc.method === "CBM"
-                  ? `${displayMoney(calc.rate)} / CBM`
-                  : displayMoney(calc.rate)
-                : "—",
-            },
-            ...(dimensionMode
-              ? [
-                  {
-                    label: "Minimum Freight",
-                    value:
-                      cargoPolicy.applyMinimumFreight === true
-                        ? `${displayMoney(cargoPolicy.minimumFreight)} · Applied`
-                        : "Not Applied",
-                  },
-                ]
-              : []),
-            {
-              label: "Freight Fee",
-              value: finalFee != null ? displayMoney(finalFee) : "—",
-            },
-          ]}
+          }
         />
       </div>
 
@@ -7079,7 +7601,7 @@ function cargoPolicyFor(type, shipping) {
 // ------------------------------------------------------------
 // New TK / Inbound Origin — used by both "Packages / TK" (New TK) and
 // "Inbound Origin" (Scan TK). Flow: scan/enter TK → verify Customer ID
-// (must already exist) → pick/create Order (THN######) → product +
+// (must already exist) → pick/create Order (JZEYYMMDD###) → product +
 // photos → cargo type & size or CBM → automatic freight → Save Inbound.
 // Saves through the same upsertPackage used everywhere else, so the TK
 // shows up in Packages / TK, Inbound Origin, TK Detail and (once "Ready
@@ -7097,6 +7619,8 @@ function blankInboundForm(user) {
     // លំនាំដើម = Ready for Shipment ដើម្បីកុំចាំបាច់ប្តូរច្រើនដង (ប្តូរបាននៅពេលចាំបាច់)
     inboundStatus: "Ready for Shipment",
     cargoType: "",
+    // Land | Sea | Air — same choice as a CN Order. Air is priced by KG.
+    shippingMethod: "Sea",
     packageType: "small_package",
     sizeClass: "",
     length: "",
@@ -7296,22 +7820,39 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
       return setError(
         `TK នេះជារបស់ ${cnCustomer.customer_code} (Assisted Purchase) — មិនអាចប្តូរទៅ Customer ផ្សេងបានទេ`,
       );
-    const dimsEntered = !cnMode && f.packageType === "dimension_based";
+    // Photos and Size/Freight are OPTIONAL at Inbound — staff can enter them
+    // later when the TK is scanned at Arrive (Cambodia). "cargoBlank" = the
+    // person chose no size / entered no dimensions, so nothing is priced yet.
+    const blank = (v) => String(v ?? "").trim() === "";
+    const isAirMethod = !cnMode && normShipMethod(f.shippingMethod) === "Air";
+    const cargoBlank =
+      !cnMode &&
+      (isAirMethod
+        ? !(Number(f.weight) > 0) // Air is priced by KG → needs a weight
+        : !f.packageType ||
+          (f.packageType === "dimension_based"
+            ? !f.cargoType &&
+              blank(f.length) &&
+              blank(f.width) &&
+              blank(f.height)
+            : !f.sizeClass));
+    const skipCargo = cnMode || cargoBlank;
+    const dimsEntered =
+      !skipCargo && !isAirMethod && f.packageType === "dimension_based";
     if (!cnMode) {
-      if (photos.length === 0)
-        return setError("ត្រូវការរូបភាពទំនិញ យ៉ាងតិច ១ សន្លឹក");
-      if (!f.packageType) return setError("Please select Package Type");
-      // Cargo Type (Normal/Sensitive) only applies to Dimension Based; the
-      // Small Package form has no such selector, so never require it there.
-      if (f.packageType === "dimension_based" && !f.cargoType)
-        return setError("Please select Cargo Type");
-      if (
-        f.packageType === "small_package" &&
-        !["S", "M", "L"].includes(f.sizeClass)
-      )
-        return setError("Please select Size S, M or L");
-      if (f.packageType === "dimension_based" && calc.cbm == null)
-        return setError("Length, Width and Height must be positive numbers");
+      if (!cargoBlank && !isAirMethod) {
+        // Cargo Type (Normal/Sensitive) only applies to Dimension Based; the
+        // Small Package form has no such selector, so never require it there.
+        if (f.packageType === "dimension_based" && !f.cargoType)
+          return setError("Please select Cargo Type");
+        if (
+          f.packageType === "small_package" &&
+          !["S", "M", "L"].includes(f.sizeClass)
+        )
+          return setError("Please select Size S, M or L");
+        if (f.packageType === "dimension_based" && calc.cbm == null)
+          return setError("Length, Width and Height must be positive numbers");
+      }
       if (f.weight !== "" && !(Number(f.weight) > 0))
         return setError("Weight ត្រូវតែជាលេខវិជ្ជមាន");
       if (
@@ -7322,8 +7863,12 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
         )
       )
         return setError("ចំនួនPackageត្រូវតែជាចំនួនគត់ ចាប់ពី 1 ឡើង");
-      if (!calc.ok) return setError(calc.message);
-      if (override.on && !(override.value !== "" && overrideNum >= 0))
+      if (!cargoBlank && !calc.ok) return setError(calc.message);
+      if (
+        !cargoBlank &&
+        override.on &&
+        !(override.value !== "" && overrideNum >= 0)
+      )
         return setError("តម្លៃ Override មិនត្រឹមត្រូវ");
     }
 
@@ -7354,16 +7899,26 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
     let newOrder = null;
     let saved = null;
     try {
-      // EVERY new inbound creates its own brand-new Order (THN######) here,
+      // EVERY new inbound creates its own brand-new Order (JZEYYMMDD###) here,
       // through the existing sequence / local registry — never reused.
       const route = {
         china: f.warehouse,
         kh: resolvedKhBranch,
         addressId: resolvedLocation?.id || null,
       };
-      newOrder = supabase
-        ? await createOrderRemote(f.customer, "", route)
-        : createLocalOrder(f.customer, "", route);
+      // A TK that belongs to a CN (Parse Link) order keeps THAT order's ID —
+      // no new Order row is created. Only direct Shipment customers get one.
+      newOrder =
+        cnMode && cnMatch?.order_id
+          ? {
+              id: null,
+              order_no: cnMatch.order_id,
+              china_wh_code: route.china,
+              kh_branch_code: route.kh,
+            }
+          : supabase
+            ? await createOrderRemote(f.customer, "", route)
+            : createLocalOrder(f.customer, "", route);
       saved = await upsertPackage({
         tk: tkTrim,
         customer_id: f.customer.id,
@@ -7374,10 +7929,16 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
         customer: `${f.customer.customer_code} · ${f.customer.name}`,
         product_name:
           f.product.trim() || (cnMode ? cnMatch?.product_name || "" : ""),
+        // CN Order TKs inherit the method from their CN Order.
+        shipping_method: cnMode
+          ? null
+          : normShipMethod(f.shippingMethod) || null,
         cargo_type:
-          !cnMode && f.packageType === "dimension_based" ? f.cargoType : null,
-        package_type: cnMode ? null : f.packageType,
-        size_class: cnMode ? null : f.sizeClass,
+          !skipCargo && !isAirMethod && f.packageType === "dimension_based"
+            ? f.cargoType
+            : null,
+        package_type: skipCargo || isAirMethod ? null : f.packageType,
+        size_class: skipCargo || isAirMethod ? null : f.sizeClass,
         length_cm: dimsEntered ? Number(f.length) : null,
         width_cm: dimsEntered ? Number(f.width) : null,
         height_cm: dimsEntered ? Number(f.height) : null,
@@ -7388,11 +7949,14 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
           ? { package_count: Math.floor(Number(f.packageCount)) }
           : {}),
         // CN Order inbound: no freight yet — charged on Arrive in Cambodia.
-        cbm: !cnMode && calc.cbm != null ? calc.cbm.toFixed(3) : null,
-        pricing_method: cnMode ? null : calc.method,
-        rate: cnMode ? null : calc.rate,
-        freight_fee: cnMode ? null : finalFee,
-        freight_overridden: cnMode
+        cbm:
+          !skipCargo && !isAirMethod && calc.cbm != null
+            ? calc.cbm.toFixed(3)
+            : null,
+        pricing_method: skipCargo ? null : calc.method,
+        rate: skipCargo ? null : calc.rate,
+        freight_fee: skipCargo ? null : finalFee,
+        freight_overridden: skipCargo
           ? false
           : override.on && finalFee !== calc.fee,
         warehouse: newOrder.china_wh_code || f.warehouse,
@@ -7407,15 +7971,18 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
         ...(supabase ? {} : { created_at: nowIso }),
       });
 
-      const photoWarning = await savePhotos(
-        {
-          tk: tkTrim,
-          package_id: saved?.id,
-          customer_id: f.customer.id,
-          order_no: newOrder.order_no,
-        },
-        photos,
-      );
+      const photoWarning =
+        photos.length > 0
+          ? await savePhotos(
+              {
+                tk: tkTrim,
+                package_id: saved?.id,
+                customer_id: f.customer.id,
+                order_no: newOrder.order_no,
+              },
+              photos,
+            )
+          : "";
 
       syncTimelineToStatus(tkTrim, "Inbound Origin", userName, "Inbound saved");
       logStatus(tkTrim, f.inboundStatus, userName, "Inbound saved");
@@ -7703,14 +8270,24 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
           <>
             <section className="space-y-3.5">
               <h4 className="font-display font-bold text-sm text-ink-900">
-                Product Photos <span className="text-signal-red">*</span>
+                Product Photos{" "}
+                <span className="text-ink-600/45 font-normal text-xs">
+                  (មិនចាំបាច់ — អាចបន្ថែមពេល Scan Arrive)
+                </span>
               </h4>
-              <PhotoUploader photos={photos} setPhotos={setPhotos} />
+              <PhotoUploader
+                photos={photos}
+                setPhotos={setPhotos}
+                emptyHint="No images yet — មិនចាំបាច់ (optional)"
+              />
             </section>
 
             <section className="space-y-3.5">
               <h4 className="font-display font-bold text-sm text-ink-900">
-                Cargo និង Freight
+                Cargo និង Freight{" "}
+                <span className="text-ink-600/45 font-normal text-xs">
+                  (មិនចាំបាច់ — អាចបញ្ចូលពេល Scan Arrive)
+                </span>
               </h4>
               <CargoCalculator
                 form={f}
@@ -8040,6 +8617,23 @@ function VerifyScanModal({
   const [checked, setChecked] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  // Photos are optional at Inbound — if the TK has none yet, staff can add
+  // them here at Arrive. Assume "has photos" until the check finishes (and if
+  // it fails) so we never offer an uploader that could overwrite old photos.
+  const [newPhotos, setNewPhotos] = useState([]);
+  const [hasPhotos, setHasPhotos] = useState(true);
+  useEffect(() => {
+    if (!open || !tk) return;
+    let alive = true;
+    setNewPhotos([]);
+    setHasPhotos(true);
+    loadPhotos(tk)
+      .then((r) => alive && setHasPhotos(r.length > 0))
+      .catch(() => alive && setHasPhotos(true));
+    return () => {
+      alive = false;
+    };
+  }, [open, tk]);
   // Drives the entrance animation: mounts closed (scaled-down/transparent),
   // then flips to open a frame later so the browser actually transitions
   // instead of snapping straight to the final state.
@@ -8127,6 +8721,14 @@ function VerifyScanModal({
 
   const shipMethod = pkgShippingMethod(pkg);
   const isAir = shipMethod === "Air";
+  // Size was left blank at Inbound → anyone confirming the Arrive scan may
+  // enter it now (no "tk.remeasure" permission and no reason needed).
+  const missingSize =
+    targetStatus === "Arrived Destination" &&
+    (isAir
+      ? pkg.freight_fee == null || pkg.freight_fee === ""
+      : !pkg.size_class);
+  const canEnterSize = canRemeasure || missingSize;
   const calc = edit
     ? calcFreight({
         shippingMethod: shipMethod,
@@ -8155,7 +8757,7 @@ function VerifyScanModal({
       if (!isAir && dims.packageType === "dimension_based" && calc.cbm == null)
         return setError("Length, Width and Height must be positive numbers");
       if (!calc.ok) return setError(calc.message);
-      if (!String(dims.reason).trim())
+      if (!missingSize && !String(dims.reason).trim())
         return setError("សូមបញ្ចូលReason for adjustment (Reason)");
     }
     setSaving(true);
@@ -8197,15 +8799,27 @@ function VerifyScanModal({
             pkg.size_class || "—"
           } → ${dims.sizeClass} · Fee ${money(pkg.freight_fee)} → ${money(
             newFee,
-          )}${keepFee ? " (manual override kept)" : ""} · Reason: ${String(
-            dims.reason,
-          ).trim()}`,
+          )}${keepFee ? " (manual override kept)" : ""} · Reason: ${
+            String(dims.reason).trim() || "Entered at Arrive"
+          }`,
         );
       }
       if (REQUIRE_BRANCH_ON_ARRIVAL && !route.kh)
         throw new Error(
           "រកមិនឃើញ Receiving Branch — សូមឱ្យ Admin/Customer Service កំណត់នៅ Order សិន",
         );
+      if (!hasPhotos && newPhotos.length > 0) {
+        const photoWarning = await savePhotos(
+          {
+            tk: pkg.tk,
+            package_id: pkg.id || null,
+            customer_id: pkg.customer_id ?? null,
+            order_no: pkg.order_no ?? null,
+          },
+          newPhotos,
+        );
+        if (photoWarning) emitCBToast("err", "Photo upload", photoWarning);
+      }
       // Write the inherited warehouses onto the TK so lists/detail match.
       if (
         (route.kh && !pkg.dest_branch_code) ||
@@ -8368,18 +8982,24 @@ function VerifyScanModal({
             </div>
           </div>
 
-          {canRemeasure && (
+          {canEnterSize && (
             <div className="border border-mist-200 rounded-md overflow-hidden">
               <div className="flex items-center justify-between bg-mist-50 px-4 py-2.5">
                 <span className="text-sm font-semibold text-ink-900">
-                  ផ្ទៀងផ្ទាត់ Size / Weight ឡើងវិញ
+                  {missingSize
+                    ? "បញ្ចូល Size / Weight (មិនទាន់មានពីឃ្លាំងចិន)"
+                    : "ផ្ទៀងផ្ទាត់ Size / Weight ឡើងវិញ"}
                 </span>
                 <button
                   type="button"
                   onClick={() => setEdit((v) => !v)}
                   className="text-xs font-medium text-signal-blue border border-mist-200 bg-white px-2.5 py-1 rounded-md hover:bg-mist-50"
                 >
-                  {edit ? "Cancel changes" : "Adjust Size / Weight"}
+                  {edit
+                    ? "Cancel changes"
+                    : missingSize
+                      ? "Enter Size / Weight"
+                      : "Adjust Size / Weight"}
                 </button>
               </div>
               {edit && (
@@ -8527,7 +9147,11 @@ function VerifyScanModal({
                     </div>
                   </div>
                   <div>
-                    <label className={LABEL_CLS}>Reason for adjustment *</label>
+                    <label className={LABEL_CLS}>
+                      {missingSize
+                        ? "Reason (មិនចាំបាច់)"
+                        : "Reason for adjustment *"}
+                    </label>
                     <input
                       value={dims.reason}
                       onChange={(e) =>
@@ -8608,6 +9232,23 @@ function VerifyScanModal({
             </div>
           </div>
           <PhotoGallery tk={pkg.tk} />
+          {!hasPhotos && targetStatus === "Arrived Destination" && (
+            <div className="border border-mist-200 rounded-md overflow-hidden">
+              <div className="bg-mist-50 px-4 py-2.5 text-sm font-semibold text-ink-900">
+                បន្ថែមរូបភាពទំនិញ{" "}
+                <span className="text-ink-600/45 font-normal text-xs">
+                  (មិនចាំបាច់ — Inbound មិនទាន់មានរូប)
+                </span>
+              </div>
+              <div className="p-4">
+                <PhotoUploader
+                  photos={newPhotos}
+                  setPhotos={setNewPhotos}
+                  emptyHint="No images yet — មិនចាំបាច់ (optional)"
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
@@ -11561,6 +12202,66 @@ const TONES = {
   violet: "bg-violet-50 text-violet-700",
 };
 
+// One connected KPI strip (cells separated by thin dividers). Used by list pages.
+function StatStrip({ items }) {
+  return (
+    <div className="cbx-kpi-strip">
+      {items.map((s) => {
+        const Icon = Icons[s.icon] || Icons.Circle;
+        const inner = (
+          <>
+            <div className="flex items-center gap-2.5">
+              <span
+                className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${TONES[s.tone || "ink"] || TONES.ink}`}
+              >
+                <Icon size={17} />
+              </span>
+              <span className="text-[14px] font-medium text-ink-600/70 leading-tight">
+                {s.label}
+              </span>
+            </div>
+            <div className="mt-3 flex items-baseline gap-1.5">
+              <span className="font-display text-[30px] leading-none font-bold text-ink-900 tabular-nums">
+                {s.value}
+              </span>
+              {s.unit && (
+                <span className="text-xs text-ink-600/50 font-medium">
+                  {s.unit}
+                </span>
+              )}
+              {s.delta && (
+                <span
+                  className={`ml-auto text-[12px] font-semibold ${
+                    String(s.delta).startsWith("-")
+                      ? "text-signal-red"
+                      : "text-signal-teal"
+                  }`}
+                >
+                  {s.delta}
+                </span>
+              )}
+            </div>
+          </>
+        );
+        return s.to ? (
+          <Link
+            key={s.label}
+            to={s.to}
+            className="cbx-kpi-cell cbx-kpi-link"
+            aria-label={`${s.label}: ${s.value}`}
+          >
+            {inner}
+          </Link>
+        ) : (
+          <div key={s.label} className="cbx-kpi-cell">
+            {inner}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function StatCard({ icon, label, value, unit, tone = "ink", delta, to }) {
   const Icon = Icons[icon] || Icons.Circle;
   const Arrow = Icons.ArrowUpRight || Icons.ChevronRight || Icons.Circle;
@@ -12388,7 +13089,7 @@ function Sidebar({ open, onClose, collapsed = false, onToggleCollapse }) {
                         <Icon
                           name={item.icon}
                           size={20}
-                          strokeWidth={1.8}
+                          strokeWidth={2}
                           className="shrink-0"
                         />
                         <span className="cbx-label truncate">{label}</span>
@@ -12439,7 +13140,7 @@ function Topbar({ title, onMenuClick }) {
   const { user, logout, updateAvatar } = useAuth();
   const fileRef = useRef(null);
   const [avatarBusy, setAvatarBusy] = useState(false);
-  const { t, lang, theme } = useAdminPrefs();
+  const { t, lang, setLang, theme } = useAdminPrefs();
   const [prefsModal, setPrefsModal] = useState(null); // null | "lang" | "theme"
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -12689,6 +13390,23 @@ function Topbar({ title, onMenuClick }) {
           aria-label="Search pages or jump to a menu"
         >
           <Search size={19} />
+        </button>
+
+        {import.meta.env?.VITE_APP_VERSION && (
+          <span className="cbx-version hidden lg:inline-flex">
+            Version {import.meta.env.VITE_APP_VERSION}
+          </span>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setLang(lang === "km" ? "en" : "km")}
+          className="cbx-lang-btn hidden sm:inline-flex"
+          aria-label={t("Language")}
+          title={t("Language")}
+        >
+          <span aria-hidden="true">{lang === "km" ? "🇰🇭" : "🇬🇧"}</span>
+          <span>{lang === "km" ? "ខ្មែរ" : "English"}</span>
         </button>
 
         <button
@@ -14616,9 +15334,14 @@ function QuickInboundScan({ focusKey = 0, onNeedForm }) {
         kh: loc.branchCode,
         addressId: loc?.id || null,
       };
-      newOrder = supabase
-        ? await createOrderRemote(customer, "", route)
-        : createLocalOrder(customer, "", route);
+      // Parse Link TK: reuse the CN order's existing Order ID (JZE…) instead
+      // of creating a new Order. New Orders are only for direct Shipment.
+      newOrder = {
+        id: null,
+        order_no: cn.order_id,
+        china_wh_code: route.china,
+        kh_branch_code: route.kh,
+      };
       saved = await upsertPackage({
         tk,
         customer_id: customer.id,
@@ -15854,6 +16577,7 @@ function StatusHistoryCard({ pkg, timeline }) {
 // components/AdvancedTkFilters.jsx
 // ------------------------------------------------------------
 const EMPTY_ADV = {
+  type: "",
   inbound: "",
   outbound: "",
   cargo: "",
@@ -15870,6 +16594,18 @@ function AdvancedTkFilters({ adv, setAdv, rows, hideDates = false }) {
   return (
     <div className="px-4 lg:px-5 py-3.5 border-b border-mist-200 bg-mist-50/50">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+        <div>
+          <label className={LABEL_CLS}>Type</label>
+          <select
+            value={adv.type || ""}
+            onChange={set("type")}
+            className={INPUT_CLS}
+          >
+            <option value="">All</option>
+            <option value="Shipment">Shipment</option>
+            <option value="Parse Link">Parse Link</option>
+          </select>
+        </div>
         <div>
           <label className={LABEL_CLS}>Inbound Status</label>
           <select
@@ -15974,6 +16710,7 @@ function ListPage({
   subtitle,
   stats,
   columns,
+  tableColumns,
   rows: mockRows,
   primaryAction,
   path,
@@ -16281,6 +17018,7 @@ function ListPage({
     // made 12am-7am in Cambodia on the previous day).
     const day = localDayKey(row.inbound_at || row.created_at);
     const matchesAdv =
+      (!adv.type || row.type === adv.type) &&
       (!adv.inbound || row.inbound_status === adv.inbound) &&
       (!adv.outbound || outboundStatusOf(row) === adv.outbound) &&
       (!adv.cargo || row.cargo_type === adv.cargo) &&
@@ -16376,11 +17114,7 @@ function ListPage({
             className="grid grid-cols-2 lg:grid-cols-4 gap-3"
           />
         ) : (
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            {liveStats.map(({ metric, ...s }) => (
-              <StatCard key={s.label} {...s} />
-            ))}
-          </div>
+          <StatStrip items={liveStats.map(({ metric, ...s }) => s)} />
         ))}
 
       {!isLinkedTk && !isExceptionsModule && tableTruncated && (
@@ -16456,8 +17190,8 @@ function ListPage({
             />
           </div>
         )}
-        <div className="flex items-center gap-2 px-4 lg:px-5 py-3.5 border-b border-mist-200 flex-wrap">
-          <div className="flex items-center gap-2 bg-mist-100 rounded-md px-3 py-2 flex-1 min-w-[180px] max-w-xs">
+        <div className="flex items-center gap-3 px-4 lg:px-5 py-4 border-b border-mist-200 flex-wrap">
+          <div className="cbx-searchbox">
             <Search size={15} className="text-ink-600/40" aria-hidden="true" />
             <input
               type="search"
@@ -16476,10 +17210,11 @@ function ListPage({
               aria-expanded={showFilterMenu}
               onClick={() => setShowFilterMenu((v) => !v)}
               disabled={!statusColumn}
-              className="flex items-center gap-1.5 text-sm text-ink-700 border border-mist-200 px-3 py-2 rounded-md hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed"
+              className={`cbx-chip${statusFilter ? " is-active" : ""}`}
             >
-              <Filter size={14} />
+              <Filter size={16} />
               {statusFilter || "ត្រង"}
+              <Icons.ChevronDown size={15} />
             </button>
             {showFilterMenu && statusColumn && (
               <div
@@ -16522,9 +17257,9 @@ function ListPage({
           {isLinkedTk && (
             <button
               onClick={() => setShowAdv((v) => !v)}
-              className="flex items-center gap-1.5 text-sm text-ink-700 border border-mist-200 px-3 py-2 rounded-md hover:bg-mist-50"
+              className={`cbx-chip is-dashed${advCount > 0 ? " is-active" : ""}`}
             >
-              <Icons.SlidersHorizontal size={14} />
+              <Icons.SlidersHorizontal size={16} />
               តម្រងលម្អិត
               {advCount > 0 && (
                 <span className="bg-signal-blue text-white text-[11px] px-1.5 rounded-sm">
@@ -16538,9 +17273,9 @@ function ListPage({
             onClick={() =>
               exportRowsToCSV(`${title}.csv`, columns, filteredRows)
             }
-            className="flex items-center gap-1.5 text-sm text-ink-700 border border-mist-200 px-3 py-2 rounded-md hover:bg-mist-50"
+            className="cbx-chip"
           >
-            <Download size={14} />
+            <Download size={16} />
             នាំចេញ
           </button>
         </div>
@@ -16556,7 +17291,7 @@ function ListPage({
           />
         )}
         <DataTable
-          columns={columns}
+          columns={tableColumns || columns}
           rows={pagedRows}
           loading={listLoading}
           skeletonRows={8}
@@ -16564,7 +17299,15 @@ function ListPage({
           onRowClick={
             isUsersModule
               ? (row) => navigateTo(`/users/${encodeURIComponent(row.id)}`)
-              : undefined
+              : path === "/packages"
+                ? (row) => navigateTo(pkgRowHref(row))
+                : path === "/inbound-origin" || path === "/outbound-origin"
+                  ? (row) =>
+                      navigateTo(`/packages/${encodeURIComponent(row.tk)}`)
+                  : path === "/customers"
+                    ? (row) =>
+                        navigateTo(`/customers/${encodeURIComponent(row.id)}`)
+                    : undefined
           }
           error={displayRows.length === 0 ? errorInfo : null}
           onRetry={() => refetch()}
@@ -18045,6 +18788,44 @@ function finPurchaseCost(row) {
   return cny !== null && rate !== null && rate > 0 ? cny / rate : null;
 }
 
+// One titled group of figures (Top Up, Payment By Wallet, ...). The item
+// flagged `grand` is the total of the group and is highlighted.
+function FinancialGroup({ icon, title, items, note }) {
+  return (
+    <section className="cb-surface overflow-hidden rounded-2xl border border-mist-100">
+      <div className="flex items-center gap-3 border-b border-mist-100 px-4 py-3.5 sm:px-5">
+        <Icon name={icon} size={18} className="text-ink-800" />
+        <h2 className="font-semibold text-ink-900">{title}</h2>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4">
+        {items.map((it) => (
+          <div
+            key={it.label}
+            className={`min-w-0 border-b border-r border-mist-100 px-4 py-4 sm:px-5 ${it.grand ? "bg-emerald-50/50" : ""}`}
+          >
+            <p className="truncate text-sm text-ink-600/70">{it.label}</p>
+            <p
+              className={`mt-2 text-2xl font-bold tabular-nums ${it.grand ? (it.tone === "red" ? "text-red-700" : "text-emerald-700") : "text-ink-900"}`}
+            >
+              {it.value}
+            </p>
+            {it.hint && (
+              <p className="mt-1 text-[11px] leading-4 text-ink-600/50">
+                {it.hint}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+      {note && (
+        <p className="px-4 py-2.5 text-[11px] leading-4 text-ink-600/55 sm:px-5">
+          {note}
+        </p>
+      )}
+    </section>
+  );
+}
+
 function FinancialStat({ label, value, detail, tone = "blue", icon }) {
   const tones = {
     blue: "bg-blue-50 text-blue-600 ring-blue-100",
@@ -18764,6 +19545,48 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
       0,
     );
 
+  // ---- Grouped figures (Top Up / Payment By Wallet / Purchase / Order) ----
+  // Wallet figures come from wallet_transactions.type for the selected period.
+  // Debits are stored as negative amounts, so every sum uses the absolute value.
+  const walletSum = (types) =>
+    wallet
+      .filter((r) => types.includes(String(r.type || "").toLowerCase()))
+      .reduce(
+        (s, r) => s + Math.abs(finNum(r.amount, r.amount_usd, r.value) ?? 0),
+        0,
+      );
+  const adminTopUp = walletSum(["top_up"]);
+  const topUpReversed = walletSum(["top_up_reversal"]);
+  const topUpGrand = adminTopUp - topUpReversed;
+  const productOrderWallet =
+    walletSum(["shop_order_payment_wallet"]) -
+    walletSum(["shop_order_refund_wallet"]);
+  // "cn_order_payment" is the older name of the same wallet payment.
+  const cnOrderWallet =
+    walletSum(["cn_order_payment_wallet", "cn_order_payment"]) -
+    walletSum(["cn_order_refund"]);
+  const shippingFeeWallet = walletSum([
+    "shipping_payment_wallet",
+    "shipping_payment",
+  ]);
+  const walletPayGrand = productOrderWallet + cnOrderWallet + shippingFeeWallet;
+  // Purchase: money actually paid on CN orders. Orders that reached
+  // "Complete Order" are completed; every other paid order is in progress.
+  const cnDone = (r) =>
+    cnNormalizeStatus(String(r.status || "").trim()) === "Complete Order";
+  const inProgressPurchase = activeCn
+    .filter((r) => !cnDone(r))
+    .reduce((s, r) => s + finPaid(r), 0);
+  const completedPurchase = activeCn
+    .filter(cnDone)
+    .reduce((s, r) => s + finPaid(r), 0);
+  // Order: packages that carry a shipping fee, paid vs still unpaid.
+  const feePackages = packages.filter((r) => (finNum(r.freight_fee) ?? 0) > 0);
+  const pendingShippingN = feePackages.filter(
+    (r) => (finNum(r.paid_amount) ?? 0) + 0.005 < Number(r.freight_fee),
+  ).length;
+  const paidShippingN = feePackages.length - pendingShippingN;
+
   const chartPoints = useMemo(() => {
     const all = [
       ...cn
@@ -18869,7 +19692,7 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
         purchaseProfit === null ? "Cost pending" : finMoney(purchaseProfit),
       detail:
         purchaseProfit === null
-          ? "No actual cost recorded yet"
+          ? "Record cost in CN Purchase Orders → Actual Cost"
           : costComplete
             ? purchaseProfit >= 0
               ? "Billed amount less actual cost"
@@ -18988,19 +19811,85 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
         </div>
       )}
 
-      {!costComplete && !loading && (
-        <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 px-4 py-3 text-sm text-amber-900">
-          <Icon name="Info" size={18} className="mt-0.5 shrink-0" />
-          <div>
-            <p className="font-semibold">
-              Purchase Profit counts only orders with a recorded cost.
-            </p>
-            <p className="mt-0.5 text-xs leading-5">
-              Orders without an actual cost are left out, not treated as zero.
-              Record it later from CN Purchase Orders, Actual Cost. Shipping
-              profit is not included until a shipping cost is tracked.
-            </p>
-          </div>
+      {!loading && (
+        <div className="space-y-4">
+          <FinancialGroup
+            icon="Wallet"
+            title="Top Up"
+            items={[
+              {
+                label: "Total Admin Top Up (Cash)",
+                value: finMoney(adminTopUp),
+              },
+              {
+                label: "Top Up Reversed",
+                value: finMoney(topUpReversed),
+              },
+              {
+                label: "Grand Total",
+                value: finMoney(topUpGrand),
+                hint: "Top up minus reversals",
+                grand: true,
+              },
+            ]}
+          />
+          <FinancialGroup
+            icon="CreditCard"
+            title="Payment By Wallet"
+            items={[
+              {
+                label: "Product Order",
+                value: finMoney(productOrderWallet),
+                hint: "Shop orders, net of refunds",
+              },
+              {
+                label: "CN Order",
+                value: finMoney(cnOrderWallet),
+                hint: "CN purchase orders, net of refunds",
+              },
+              { label: "Shipping Fee", value: finMoney(shippingFeeWallet) },
+              {
+                label: "Grand Total",
+                value: finMoney(walletPayGrand),
+                grand: true,
+                tone: "red",
+              },
+            ]}
+          />
+          <FinancialGroup
+            icon="ShoppingCart"
+            title="Purchase And Refunded"
+            items={[
+              {
+                label: "Total In-Progress Purchase",
+                value: finMoney(inProgressPurchase),
+                hint: "Paid CN orders not yet completed",
+              },
+              {
+                label: "Total Completed Purchase",
+                value: finMoney(completedPurchase),
+                hint: "Paid CN orders with status Complete Order",
+              },
+              { label: "Total Refunded", value: finMoney(refunds) },
+            ]}
+          />
+          <FinancialGroup
+            icon="Package"
+            title="Order"
+            items={[
+              {
+                label: "Pending Shipping Payment",
+                value: pendingShippingN.toLocaleString("en-US"),
+                hint: "Packages with an unpaid shipping fee",
+              },
+              {
+                label: "Shipping Paid",
+                value: paidShippingN.toLocaleString("en-US"),
+                hint: "Packages with the shipping fee paid",
+              },
+            ]}
+            note="Counts use the packages created in the selected reporting period."
+          />
         </div>
       )}
 
@@ -19385,7 +20274,7 @@ function ShipmentLookup() {
         source: "CHINA",
         // Parse Link = we bought it for the customer (CN Purchase Order);
         // Shipment = customer sent the goods to us.
-        type_display: pkg.cn_order_id ? "Parse Link" : "Shipment",
+        type_display: pkgType(pkg),
         cn_order_display: pkg.cn_order_id
           ? CN_ORDER_NO_BY_ID[pkg.cn_order_id] || ""
           : "",
@@ -20250,6 +21139,29 @@ function EditPackageModal({ open, pkg, onClose }) {
   const [f, setF] = useState({});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [photos, setPhotos] = useState([]);
+  const [origPhotos, setOrigPhotos] = useState(null); // null = loading
+
+  useEffect(() => {
+    if (!open || !pkg?.tk) return undefined;
+    let alive = true;
+    setOrigPhotos(null);
+    setPhotos([]);
+    loadPhotos(pkg.tk)
+      .then((r) => {
+        if (!alive) return;
+        setOrigPhotos(r);
+        setPhotos(r);
+      })
+      .catch(() => {
+        if (!alive) return;
+        setOrigPhotos([]);
+        setPhotos([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open, pkg?.tk]);
 
   useEffect(() => {
     if (!open) return;
@@ -20353,6 +21265,19 @@ function EditPackageModal({ open, pkg, onClose }) {
     setSaving(true);
     try {
       await upsertPackage(patch);
+      if (origPhotos) {
+        const photoWarning = await syncPackagePhotos(
+          {
+            tk: pkg.tk,
+            package_id: pkg.id || null,
+            customer_id: pkg.customer_id ?? null,
+            order_no: f.order_no || pkg.order_no || null,
+          },
+          origPhotos,
+          photos,
+        );
+        if (photoWarning) emitCBToast("err", "Photo update", photoWarning);
+      }
       logStatus(
         pkg.tk,
         pkg.status || "Edited",
@@ -20518,6 +21443,18 @@ function EditPackageModal({ open, pkg, onClose }) {
                   />
                 </div>
               ))}
+          </div>
+          <div>
+            <label className={LABEL_CLS}>Product Photos</label>
+            {origPhotos === null ? (
+              <p className="text-xs text-ink-600/50">Loading photos…</p>
+            ) : (
+              <PhotoUploader
+                photos={photos}
+                setPhotos={setPhotos}
+                emptyHint="No images yet — Take photo / Upload Photo"
+              />
+            )}
           </div>
           <div>
             <label className={LABEL_CLS}>Reason *</label>
@@ -21870,6 +22807,7 @@ function PackageDetail() {
     advance,
     findPackage,
     upsertPackage,
+    logStatus,
     ready: pkgReady,
   } = usePackageTracking();
   // A TK scanned through Inbound/Outbound Origin lives in the shared
@@ -21990,6 +22928,9 @@ function PackageDetail() {
   const [showInternalWarehouse, setShowInternalWarehouse] = useState(false);
   const [showChangeTk, setShowChangeTk] = useState(false);
   const isCustomerRole = user?.role === "Customer";
+  const [showShipMethod, setShowShipMethod] = useState(false);
+  const canChangeShipMethodBase =
+    !isCustomerRole && (hasPermission(user, "tk.edit") || canManageInbound);
   const isInboundStage = currentStage === "Inbound Origin";
   // Available from Inbound Origin onward (the TK exists once it is scanned).
   const canChangeTk =
@@ -22245,7 +23186,7 @@ function PackageDetail() {
                     <span
                       className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${data.cn_order_id ? "bg-violet-50 text-violet-700" : "bg-sky-50 text-sky-700"}`}
                     >
-                      {data.cn_order_id ? "Parse Link" : "Shipment"}
+                      {pkgType(data)}
                     </span>
                   </div>
                   <div className="text-[11px] text-ink-600/45 mt-1.5">
@@ -22372,7 +23313,9 @@ function PackageDetail() {
               </div>
             </div>
 
-            <div className="grid sm:grid-cols-4 gap-4 mt-5 pt-4 border-t border-mist-100">
+            <div
+              className={`grid ${isParseLinkPkg(data) ? "sm:grid-cols-4" : "sm:grid-cols-3"} gap-4 mt-5 pt-4 border-t border-mist-100`}
+            >
               {[
                 [Icons.User, "Customer", custName || "—", custId],
                 [
@@ -22381,16 +23324,18 @@ function PackageDetail() {
                   data.order_no || data.order || "—",
                   null,
                 ],
-                [
-                  Icons.ShoppingCart,
-                  "Purchase Order",
-                  data.cn_order_id
-                    ? CN_ORDER_NO_BY_ID[data.cn_order_id] || "CN Order"
-                    : "Direct",
-                  data.cn_order_id
-                    ? "Assisted Purchase"
-                    : "Customer bought it themselves",
-                ],
+                // Purchase Order only belongs to Parse Link; a Shipment (direct)
+                // has no CN order, so the card is hidden instead of "Direct".
+                ...(isParseLinkPkg(data)
+                  ? [
+                      [
+                        Icons.ShoppingCart,
+                        "Purchase Order",
+                        CN_ORDER_NO_BY_ID[data.cn_order_id] || "CN Order",
+                        "Assisted Purchase",
+                      ],
+                    ]
+                  : []),
                 [Icons.Truck, "Shipment", data.shipment || "—", null],
               ].map(([I, label, value, sub]) => (
                 <div key={label} className="flex items-start gap-2.5 min-w-0">
@@ -22478,6 +23423,22 @@ function PackageDetail() {
               );
             })}
           </div>
+
+          {/* Parse Link TK opened directly: point to its CN Order detail */}
+          {isParseLinkPkg(data) && CN_ORDER_NO_BY_ID[data.cn_order_id] && (
+            <div className="flex items-center justify-between gap-3 rounded-md border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-800">
+              <span>
+                This TK is a <b>Parse Link</b> of order{" "}
+                {CN_ORDER_NO_BY_ID[data.cn_order_id]}
+              </span>
+              <Link
+                to={`/cn-orders/${encodeURIComponent(CN_ORDER_NO_BY_ID[data.cn_order_id])}`}
+                className="font-semibold text-violet-700 hover:underline whitespace-nowrap"
+              >
+                Open CN Order detail →
+              </Link>
+            </div>
+          )}
 
           {/* Package Detail tabs — UI only; all existing data/functions stay intact. */}
           <div className="sticky top-0 z-20 bg-mist-50/95 backdrop-blur-sm border-b border-mist-200 -mx-1 px-1 py-2">
@@ -22793,6 +23754,37 @@ function PackageDetail() {
                   ),
                   span: true,
                 },
+                {
+                  label: "Shipping Method",
+                  value: (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="inline-flex items-center gap-1.5 font-semibold">
+                        <ShipMethodIcon
+                          m={pkgShippingMethod(data)}
+                          size={15}
+                          className="text-blue-600"
+                        />
+                        {pkgShippingMethod(data)}
+                      </span>
+                      {data.cn_order_id ? (
+                        <span className="text-[11px] text-ink-600/50">
+                          from CN Order
+                        </span>
+                      ) : (
+                        canChangeShipMethodBase && (
+                          <button
+                            type="button"
+                            onClick={() => setShowShipMethod(true)}
+                            className="text-[11px] text-signal-blue hover:underline"
+                          >
+                            Change
+                          </button>
+                        )
+                      )}
+                    </div>
+                  ),
+                  span: true,
+                },
                 { label: "Inbound Date", value: createdAt, span: true },
                 { label: "Created By", value: data.created_by || "—" },
                 { label: "Updated By", value: data.updated_by || "—" },
@@ -22899,6 +23891,19 @@ function PackageDetail() {
           warehouses={packageWarehouses}
           user={user}
           savePackage={upsertPackage}
+          onSaved={(saved) => {
+            setLivePackage((prev) => ({ ...(prev || data), ...saved }));
+          }}
+        />
+      )}
+      {canChangeShipMethodBase && !data.cn_order_id && (
+        <PackageShipMethodModal
+          open={showShipMethod}
+          pkg={data}
+          user={user}
+          savePackage={upsertPackage}
+          logStatus={logStatus}
+          onClose={() => setShowShipMethod(false)}
           onSaved={(saved) => {
             setLivePackage((prev) => ({ ...(prev || data), ...saved }));
           }}
@@ -28615,6 +29620,20 @@ const CustomerApp = (() => {
           minute: "2-digit",
         })
       : "";
+  // Full stamp for status timelines: time + date + year, e.g. "9:49 PM, 31 Oct 2026".
+  const fmtStamp = (iso) => {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "—";
+    const time = d
+      .toLocaleTimeString(dateLoc(), {
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      })
+      .replace(/\b(am|pm)\b/i, (m) => m.toUpperCase());
+    return `${time}, ${fmtDate(iso)}`;
+  };
 
   function Provider({ children }) {
     const [lang, setLangState] = useState(readLang);
@@ -28792,11 +29811,29 @@ const CustomerApp = (() => {
           .filter((p) => !p.is_cn_order)
           .map((p) => ({
             tk: p.tk,
+            orderNo: p.order_no || "",
+            // Land / Sea / Air (shown like a CN Order). Needs the column in
+            // the customer_packages view; empty → the card is simply hidden.
+            shipMethod: normShipMethod(p.shipping_method),
+            weight: Number(p.weight_kg ?? p.weight) || 0,
             shop: shopOf[p.order_no] || p.cargo_type || "—",
             desc: p.product_name || "—",
             step: stepOf(p.status),
             createdAt: p.created_at,
-            fee: feeOf[p.tk] || { state: "none", total: null, paid: 0, due: 0 },
+            // Still "Shipping To Branch" (not yet at the receiving branch
+            // warehouse) → show plain "Delivery" and don't ask for payment.
+            // The fee is requested only once the goods reach the warehouse.
+            fee:
+              String(p.status || "")
+                .trim()
+                .toLowerCase() === "shipping to branch"
+                ? { state: "none", total: null, paid: 0, due: 0 }
+                : feeOf[p.tk] || {
+                    state: "none",
+                    total: null,
+                    paid: 0,
+                    due: 0,
+                  },
           })),
       );
     };
@@ -30376,7 +31413,7 @@ const CustomerApp = (() => {
     );
   }
 
-  function Row({ s }) {
+  function Row({ s, cover }) {
     const nav = useNavigate();
     const { tr } = useApp();
     return (
@@ -30384,12 +31421,34 @@ const CustomerApp = (() => {
         onClick={() => nav(P("/shipments/" + s.tk))}
         className="p-3.5 flex items-center gap-3 cursor-pointer active:bg-slate-50"
       >
-        <Icon i={Package} />
+        {cover?.url ? (
+          <div className="relative shrink-0">
+            <AirImg
+              src={cover.url}
+              alt={s.tk}
+              className="w-11 h-11 rounded-xl"
+              fallbackSize={20}
+              FallbackIcon={Package}
+            />
+            {cover.count > 1 && (
+              <span className="absolute -bottom-1.5 -right-1.5 h-4 min-w-4 px-1 rounded-full bg-blue-600 text-white text-[9px] font-bold grid place-items-center">
+                {cover.count}
+              </span>
+            )}
+          </div>
+        ) : (
+          <Icon i={Package} />
+        )}
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
             <b className="text-[15px] truncate">{s.tk}</b>
             <Badge n={s.step} fee={s.fee} />
           </div>
+          {s.orderNo && (
+            <p className="text-xs font-semibold text-blue-600 truncate">
+              {tr("Order ID", "លេខ Order")}: {s.orderNo}
+            </p>
+          )}
           <p className="text-[13px] text-slate-500 truncate">
             {s.shop} · {s.desc}
           </p>
@@ -30514,9 +31573,11 @@ const CustomerApp = (() => {
       needle &&
       feed.filter(({ kind, s }) =>
         kind === "sea"
-          ? String(s.tk || "")
-              .toLowerCase()
-              .includes(needle)
+          ? [s.tk, s.orderNo].some((v) =>
+              String(v || "")
+                .toLowerCase()
+                .includes(needle),
+            )
           : [s.order_id, s.tk, s.shop_name, s.product_name].some((v) =>
               String(v || "")
                 .toLowerCase()
@@ -30744,6 +31805,20 @@ const CustomerApp = (() => {
       Completed: (n) => n === 4,
     };
     const list = ships.filter((s) => tabs[t](s.step, s));
+    const [covers, setCovers] = useState(() =>
+      peekCustomerTkCovers(list.map((x) => x.tk)),
+    );
+    const coverKey = list.map((x) => x.tk).join(",");
+    useEffect(() => {
+      let alive = true;
+      loadCustomerTkCovers(list.map((x) => x.tk)).then(
+        (c) => alive && setCovers(c),
+      );
+      return () => {
+        alive = false;
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [coverKey]);
     return (
       <>
         <Top title={tr("My Shipments", "ការដឹកជញ្ជូនរបស់ខ្ញុំ")} />
@@ -30760,7 +31835,7 @@ const CustomerApp = (() => {
             ))}
           </div>
           {list.map((s) => (
-            <Row key={s.tk} s={s} />
+            <Row key={s.tk} s={s} cover={covers[s.tk]} />
           ))}
           {!list.length && (
             <p className="text-center text-sm text-slate-400 py-10">
@@ -31157,13 +32232,107 @@ const CustomerApp = (() => {
             <Icon i={Package} />
             <div className="flex-1 min-w-0">
               <b>{s.tk}</b>
+              {s.orderNo && (
+                <p className="text-xs font-semibold text-blue-600">
+                  {tr("Order ID", "លេខ Order")}: {s.orderNo}
+                </p>
+              )}
               <p className="text-[13px] text-slate-500">
                 {tr("Shop", "ហាង")}: {s.shop} · {s.desc}
               </p>
             </div>
             <Badge n={s.step} fee={s.fee} />
           </Card>
+          <ShipmentPhotosCard tk={s.tk} tr={tr} Card={Card} />
+          {s.shipMethod && (
+            <Card className="p-5 relative overflow-hidden">
+              <span className="absolute top-0 right-0 w-14 h-12 rounded-bl-3xl bg-rose-400 text-white grid place-items-center">
+                <Icons.MapPin size={20} />
+              </span>
+              <h2 className="font-bold text-slate-900">
+                {tr("Shipping Information", "ព័ត៌មានការដឹកជញ្ជូន")}
+              </h2>
+              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-3 text-sm">
+                <span className="text-slate-700">
+                  {tr("Shipping Method", "វិធីសាស្ត្រដឹកជញ្ជូន")}
+                </span>
+                <span className="flex items-center gap-2 font-bold text-slate-900">
+                  <ShipMethodIcon
+                    m={s.shipMethod}
+                    size={24}
+                    className="text-indigo-700"
+                  />
+                  {
+                    {
+                      Land: tr("By Land", "ផ្លូវគោក"),
+                      Sea: tr("By Sea", "ផ្លូវទឹក"),
+                      Air: tr("By Air", "ផ្លូវអាកាស"),
+                    }[s.shipMethod]
+                  }
+                </span>
+              </div>
+            </Card>
+          )}
           <Card className="p-5">
+            <h2 className="font-bold mb-3">
+              {tr("Order Information", "ព័ត៌មាន Order")}
+            </h2>
+            <div className="space-y-2 text-sm">
+              {s.orderNo && (
+                <CnPriceRow
+                  label={tr("Order ID", "លេខ Order")}
+                  value={s.orderNo}
+                />
+              )}
+              <CnPriceRow
+                label={tr("Tracking Number", "លេខតាមដាន")}
+                value={s.tk}
+              />
+              {s.desc && s.desc !== "—" && (
+                <CnPriceRow label={tr("Product", "ទំនិញ")} value={s.desc} />
+              )}
+              {s.weight > 0 && (
+                <CnPriceRow
+                  label={tr("Weight", "ទម្ងន់")}
+                  value={`${s.weight} kg`}
+                />
+              )}
+              <CnPriceRow
+                label={tr("Shipped", "ថ្ងៃផ្ញើ")}
+                value={fmtDate(s.createdAt)}
+              />
+            </div>
+            <div className="mt-3 pt-3 border-t border-slate-100 text-sm">
+              {s.fee?.total > 0 ? (
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-slate-700 font-semibold">
+                    {tr("Shipping Fee (Cambodia)", "ថ្លៃដឹកជញ្ជូន (កម្ពុជា)")}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <b>{money(s.fee.total)}</b>
+                    <CnPaymentBadge
+                      status={s.fee.state === "paid" ? "Paid" : "Unpaid"}
+                    />
+                  </span>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500">
+                  {tr(
+                    "Shipping fee is shown once your goods arrive at the branch warehouse.",
+                    "ថ្លៃដឹកជញ្ជូននឹងបង្ហាញ នៅពេលទំនិញដល់ឃ្លាំងសាខា។",
+                  )}
+                </p>
+              )}
+            </div>
+          </Card>
+          <Card className="p-5">
+            <style>{`
+              @keyframes cbStepIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+              @keyframes cbLineGrow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+              @keyframes cbPop{0%{transform:scale(.4);opacity:0}65%{transform:scale(1.15);opacity:1}100%{transform:scale(1);opacity:1}}
+              @keyframes cbPulse{0%{box-shadow:0 0 0 0 rgba(37,99,235,.35)}70%{box-shadow:0 0 0 10px rgba(37,99,235,0)}100%{box-shadow:0 0 0 0 rgba(37,99,235,0)}}
+              @media (prefers-reduced-motion: reduce){.cb-anim{animation:none!important;opacity:1!important;transform:none!important}}
+            `}</style>
             <h2 className="font-bold mb-4">
               {tr("Tracking Status", "ស្ថានភាពតាមដាន")}
             </h2>
@@ -31173,16 +32342,31 @@ const CustomerApp = (() => {
                 cur =
                   i === s.step && s.step < CUSTOMER_TRACKING_STEPS.length - 1;
               return (
-                <div key={en} className="flex gap-3.5">
+                <div
+                  key={en}
+                  className="cb-anim flex gap-3.5"
+                  style={{
+                    animation: `cbStepIn .5s cubic-bezier(.22,1,.36,1) ${i * 110}ms both`,
+                  }}
+                >
                   <div className="flex flex-col items-center">
                     <span
-                      className={`w-7 h-7 rounded-full grid place-items-center shrink-0 ${done ? "bg-green-500 text-white" : cur ? "bg-white border-[6px] border-blue-600" : "bg-slate-200"}`}
+                      className={`cb-anim w-7 h-7 rounded-full grid place-items-center shrink-0 ${done ? "bg-green-500 text-white" : cur ? "bg-white border-[6px] border-blue-600" : "bg-slate-200"}`}
+                      style={{
+                        animation: cur
+                          ? `cbPop .45s ease-out ${i * 110 + 120}ms both, cbPulse 2.2s ease-out ${i * 110 + 700}ms infinite`
+                          : `cbPop .45s ease-out ${i * 110 + 120}ms both`,
+                      }}
                     >
                       {done && <Check size={16} strokeWidth={3} />}
                     </span>
                     {i < CUSTOMER_TRACKING_STEPS.length - 1 && (
                       <span
-                        className={`w-0.5 flex-1 min-h-[28px] ${done ? "bg-green-400" : "bg-slate-200"}`}
+                        className={`cb-anim w-0.5 flex-1 min-h-[28px] ${done ? "bg-green-400" : "bg-slate-200"}`}
+                        style={{
+                          transformOrigin: "top",
+                          animation: `cbLineGrow .5s ease-out ${i * 110 + 200}ms both`,
+                        }}
                       />
                     )}
                   </div>
@@ -31194,9 +32378,9 @@ const CustomerApp = (() => {
                     </p>
                     <p className="text-xs text-slate-500">
                       {reached
-                        ? fmtDate(reached[en]) === "—"
+                        ? fmtStamp(reached[en]) === "—"
                           ? tr("Pending", "កំពុងរង់ចាំ")
-                          : fmtDate(reached[en])
+                          : fmtStamp(reached[en])
                         : "..."}
                     </p>
                   </div>
@@ -33795,33 +34979,6 @@ const CustomerApp = (() => {
             </div>
           </div>
 
-          {/* Keep payment waiting state in the CN Orders list only. The order
-              workflow timeline becomes visible after the customer has paid. */}
-          {!waitingPayment && (
-            <Card className="p-5">
-              <h2 className="font-bold mb-4">
-                {tr("Order status", "ស្ថានភាពការបញ្ជាទិញ")}
-              </h2>
-              <div className="mb-4">
-                {/* Same customer-facing name as the timeline below. */}
-                <CnStatusBadge
-                  status={
-                    cnOrderTableStatus(row) === "Approve Purchase"
-                      ? "Order Processing"
-                      : cnOrderTableStatus(row)
-                  }
-                  cancelled={cnIsCancelledUnpaid(row)}
-                />
-              </div>
-              <CnStatusTimeline
-                row={row}
-                orderType={row.order_type}
-                history={history}
-                customerView
-              />
-            </Card>
-          )}
-
           <CnProductInfoCard
             row={row}
             images={cnImages}
@@ -34065,6 +35222,35 @@ const CustomerApp = (() => {
               )}
             </Card>
           )}
+          {/* Keep payment waiting state in the CN Orders list only. The order
+              workflow timeline becomes visible after the customer has paid. */}
+          {!waitingPayment && (
+            <Card className="p-5">
+              <h2 className="font-bold mb-4">
+                {tr("Order status", "ស្ថានភាពការបញ្ជាទិញ")}
+              </h2>
+              <div className="mb-4">
+                {/* Same customer-facing name as the timeline below. */}
+                <CnStatusBadge
+                  status={
+                    cnOrderTableStatus(row) === "Approve Purchase"
+                      ? "Order Processing"
+                      : cnOrderTableStatus(row)
+                  }
+                  cancelled={cnIsCancelledUnpaid(row)}
+                />
+              </div>
+              <CnStatusTimeline
+                row={row}
+                orderType={row.order_type}
+                history={history}
+                customerView
+                pendingLabel={tr("Pending", "កំពុងរង់ចាំ")}
+                formatStamp={fmtStamp}
+              />
+            </Card>
+          )}
+
           {row.order_type !== "direct" && (
             <Card className="p-5">
               <h2 className="font-bold mb-3 flex items-center gap-2">
@@ -34323,6 +35509,11 @@ const CustomerApp = (() => {
   // Friendly, translated messages. Raw database text is never shown.
   function shopCErr(e, tr) {
     const m = String(e?.message || e || "");
+    if (/ALREADY_IN_CART/.test(m))
+      return tr(
+        "This item is already in your cart.",
+        "ទំនិញនេះមានក្នុងកន្ត្រករបស់អ្នករួចហើយ។",
+      );
     if (/SHOP_UNAVAILABLE/.test(m))
       return tr("The shop is not available right now.", "ហាងមិនទាន់បើកទេ។");
     const st = m.match(/only (\d+) available/);
@@ -34585,7 +35776,7 @@ const CustomerApp = (() => {
                 alt={i === 0 ? alt : ""}
                 className="w-full aspect-square max-h-[46vh]"
                 fallbackSize={56}
-                FallbackIcon={Icons.Package}
+                FallbackIcon={Package}
               />
             </div>
           ))}
@@ -34816,7 +36007,7 @@ const CustomerApp = (() => {
                       alt={p.name}
                       className="w-full aspect-square"
                       fallbackSize={34}
-                      FallbackIcon={Icons.Package}
+                      FallbackIcon={Package}
                     />
                     {!p.in_stock && (
                       <span className="absolute inset-x-0 bottom-0 bg-slate-900/70 text-white text-[11px] font-semibold text-center py-1">
@@ -34871,9 +36062,15 @@ const CustomerApp = (() => {
   async function shopCAddToCart(variantId, qty) {
     const { data: cart, error: e1 } = await supabase.rpc("shop_cart_get");
     if (e1) throw e1;
-    const have =
-      (cart?.items || []).find((i) => i.variant_id === variantId)?.quantity ||
-      0;
+    const line = (cart?.items || []).find((i) => i.variant_id === variantId);
+    const have = line?.quantity || 0;
+    // Already in this customer's own cart and adding more would exceed the
+    // stock: say so, instead of the confusing "Only N left in stock".
+    if (line && have + qty > (line.available ?? 0)) {
+      const err = new Error("ALREADY_IN_CART");
+      err.code = "ALREADY_IN_CART";
+      throw err;
+    }
     const { error } = await supabase.rpc("shop_cart_set", {
       p_variant_id: variantId,
       p_quantity: have + qty,
@@ -34984,6 +36181,12 @@ const CustomerApp = (() => {
           addedTimer.current = setTimeout(() => setAdded(false), 1600);
         }
       } catch (e) {
+        // "Buy now" on an item that is already in the cart: just open the cart.
+        if (buyNow && e?.code === "ALREADY_IN_CART") {
+          setBusy(false);
+          nav(P("/shop/cart"));
+          return;
+        }
         setMsg(shopCErr(e, tr));
       }
       setBusy(false);
@@ -35394,7 +36597,7 @@ const CustomerApp = (() => {
                       alt={i.name}
                       className="w-20 h-20 rounded-xl"
                       fallbackSize={24}
-                      FallbackIcon={Icons.Package}
+                      FallbackIcon={Package}
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-[14px] font-semibold leading-snug line-clamp-2">
@@ -35723,6 +36926,10 @@ const CustomerApp = (() => {
                 {cfg.pickup.instructions && (
                   <p className="mt-1">{cfg.pickup.instructions}</p>
                 )}
+                <ShopMapLink
+                  pk={cfg.pickup}
+                  label={tr("Get directions", "មើលផ្លូវទៅហាង")}
+                />
               </div>
             )}
             {method === "Delivery" && (
@@ -36263,7 +37470,7 @@ const CustomerApp = (() => {
                   alt={i.name}
                   className="w-14 h-14 rounded-xl"
                   fallbackSize={20}
-                  FallbackIcon={Icons.Package}
+                  FallbackIcon={Package}
                 />
                 <div className="flex-1 min-w-0">
                   <p className="text-[14px] font-semibold leading-snug line-clamp-2">
@@ -36321,6 +37528,10 @@ const CustomerApp = (() => {
                   <p>{pk.address}</p>
                   {pk.hours && <p className="text-slate-400">{pk.hours}</p>}
                   {pk.instructions && <p>{pk.instructions}</p>}
+                  <ShopMapLink
+                    pk={pk}
+                    label={tr("Get directions", "មើលផ្លូវទៅហាង")}
+                  />
                 </>
               ) : null
             ) : (
@@ -43202,6 +44413,194 @@ async function loadCnImages(cnOrderId) {
   }
 }
 
+// ---- Customer: product photos of a Shipment (direct) TK ---------------
+// Staff upload these in New TK / Scan Arrive / Edit Package (table
+// cargo_photos, bucket "cargo-photos"). Customers get read-only access via
+// RLS (cargo_photos_customer_rls.sql). Never throws.
+// Signed URLs are cached per TK and re-used while the photo set is unchanged,
+// so opening a shipment never reloads (flickers) images that were already shown.
+const TK_PHOTO_CACHE = new Map(); // tk -> { at, rows }
+const TK_COVER_CACHE = new Map(); // tk -> { at, path, count, url }
+const TK_PHOTO_TTL = 45 * 60 * 1000; // signed URLs live 60 min
+
+async function signCargoPhotoPaths(paths) {
+  const out = {};
+  if (!supabase || !paths?.length) return out;
+  try {
+    const { data } = await supabase.storage
+      .from("cargo-photos")
+      .createSignedUrls(paths, 3600);
+    (data || []).forEach((r) => {
+      if (r?.signedUrl && r.path) out[r.path] = r.signedUrl;
+    });
+  } catch {
+    // fall through to public URLs below (public bucket)
+  }
+  paths.forEach((p) => {
+    if (!out[p])
+      out[p] = supabase.storage
+        .from("cargo-photos")
+        .getPublicUrl(p).data.publicUrl;
+  });
+  return out;
+}
+
+const tkCacheFresh = (e) => e && Date.now() - e.at < TK_PHOTO_TTL;
+
+// Instant (synchronous) value for first paint: cached photos or null.
+function peekCustomerTkPhotos(tk) {
+  const e = TK_PHOTO_CACHE.get(tk);
+  return tkCacheFresh(e) ? e.rows : null;
+}
+
+async function loadCustomerTkPhotos(tk) {
+  if (!supabase || !tk) return [];
+  try {
+    const { data, error } = await supabase
+      .from("cargo_photos")
+      .select("id,tk,category,storage_path,created_at")
+      .eq("tk", tk)
+      .order("created_at", { ascending: true });
+    if (error) return peekCustomerTkPhotos(tk) || [];
+    if (!data?.length) {
+      TK_PHOTO_CACHE.delete(tk);
+      return [];
+    }
+    const hit = TK_PHOTO_CACHE.get(tk);
+    const same =
+      tkCacheFresh(hit) &&
+      hit.rows.length === data.length &&
+      hit.rows.every(
+        (r, i) =>
+          r.storage_path === data[i].storage_path &&
+          r.category === data[i].category,
+      );
+    if (same) return hit.rows; // identical set → keep the same URLs
+    const urls = await signCargoPhotoPaths(data.map((r) => r.storage_path));
+    const rows = data.map((r) => ({ ...r, url: urls[r.storage_path] || "" }));
+    TK_PHOTO_CACHE.set(tk, { at: Date.now(), rows });
+    return rows;
+  } catch {
+    return peekCustomerTkPhotos(tk) || [];
+  }
+}
+
+function peekCustomerTkCovers(tks) {
+  const out = {};
+  (tks || []).forEach((tk) => {
+    const e = TK_COVER_CACHE.get(tk);
+    if (tkCacheFresh(e)) out[tk] = { url: e.url, count: e.count };
+  });
+  return out;
+}
+
+// One cover photo + count per TK for the shipment list (1 query + 1 sign).
+async function loadCustomerTkCovers(tks) {
+  const list = [...new Set((tks || []).filter(Boolean))].slice(0, 100);
+  if (!supabase || !list.length) return {};
+  try {
+    const { data, error } = await supabase
+      .from("cargo_photos")
+      .select("tk,storage_path,created_at")
+      .in("tk", list)
+      .order("created_at", { ascending: true });
+    if (error) return peekCustomerTkCovers(list);
+    const first = {};
+    const count = {};
+    (data || []).forEach((r) => {
+      count[r.tk] = (count[r.tk] || 0) + 1;
+      if (!first[r.tk]) first[r.tk] = r.storage_path;
+    });
+    // Re-use cached URLs for TKs whose cover/count did not change.
+    const need = Object.keys(first).filter((k) => {
+      const e = TK_COVER_CACHE.get(k);
+      return !(tkCacheFresh(e) && e.path === first[k] && e.count === count[k]);
+    });
+    const urls = await signCargoPhotoPaths(need.map((k) => first[k]));
+    need.forEach((k) =>
+      TK_COVER_CACHE.set(k, {
+        at: Date.now(),
+        path: first[k],
+        count: count[k],
+        url: urls[first[k]] || "",
+      }),
+    );
+    list.forEach((k) => {
+      if (!first[k]) TK_COVER_CACHE.delete(k);
+    });
+    return peekCustomerTkCovers(list);
+  } catch {
+    return peekCustomerTkCovers(list);
+  }
+}
+
+// Customer card on Shipment Detail: product photos uploaded by staff. View only.
+function ShipmentPhotosCard({ tk, tr, Card }) {
+  const [images, setImages] = useState(() => peekCustomerTkPhotos(tk)); // null = unknown
+  const [viewer, setViewer] = useState(false);
+  const [start, setStart] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    setImages(peekCustomerTkPhotos(tk));
+    loadCustomerTkPhotos(tk).then((r) => alive && setImages(r));
+    return () => {
+      alive = false;
+    };
+  }, [tk]);
+  if (images && images.length === 0) return null; // nothing uploaded yet
+  // Still loading and we don't know whether there are photos: render nothing
+  // (no skeleton → no pop-in/flash). Use the list's cached count as a hint.
+  const hint = TK_COVER_CACHE.get(tk)?.count || 0;
+  if (images === null && !hint) return null;
+  const open = (i) => {
+    setStart(i);
+    setViewer(true);
+  };
+  return (
+    <Card className="p-5">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="font-bold">{tr("Product Photos", "រូបភាពទំនិញ")}</h2>
+        <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-bold text-blue-700">
+          {images ? images.length : hint}
+        </span>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2.5">
+        {images === null
+          ? Array.from({ length: Math.min(hint, 3) }).map((_, i) => (
+              <div
+                key={i}
+                className="aspect-square rounded-xl bg-slate-200/70 animate-pulse"
+              />
+            ))
+          : images.map((im, i) => (
+              <div key={im.id} className="min-w-0">
+                <AirImg
+                  src={im.url}
+                  alt={im.category || "Product"}
+                  onClick={() => open(i)}
+                  className="w-full aspect-square rounded-xl"
+                  fallbackSize={22}
+                  FallbackIcon={Package}
+                />
+                {im.category && (
+                  <p className="mt-1 text-[10px] text-slate-500 truncate">
+                    {im.category}
+                  </p>
+                )}
+              </div>
+            ))}
+      </div>
+      {viewer && images && (
+        <AirImageViewerFull
+          images={images}
+          start={start}
+          onClose={() => setViewer(false)}
+        />
+      )}
+    </Card>
+  );
+}
+
 // Splits an order's images by item: byItem[0] = Item 1 photos, ...
 // `loose` = photos with no item (older orders) or pointing to a removed item.
 function groupCnImages(images, itemCount) {
@@ -45833,6 +47232,96 @@ function CnShipMethodModal({ open, row, onClose, onSaved }) {
   );
 }
 
+// Change the Shipping Method of a direct Shipment TK (a Parse Link TK always
+// follows its CN Order, so it is changed on the CN Order instead).
+function PackageShipMethodModal({
+  open,
+  pkg,
+  onClose,
+  onSaved,
+  savePackage,
+  logStatus,
+  user,
+}) {
+  const [m, setM] = useState("Sea");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (open) {
+      setM(normShipMethod(pkg?.shipping_method) || "Sea");
+      setBusy(false);
+      setError("");
+    }
+  }, [open, pkg?.tk]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!open || !pkg) return null;
+  const old = pkgShippingMethod(pkg);
+  const hasFee =
+    pkg.freight_fee !== undefined &&
+    pkg.freight_fee !== null &&
+    pkg.freight_fee !== "";
+
+  async function submit(e) {
+    e.preventDefault();
+    if (m === normShipMethod(pkg.shipping_method)) return onClose();
+    setBusy(true);
+    setError("");
+    try {
+      const by = user?.name || "Admin";
+      const saved = await savePackage({
+        tk: pkg.tk,
+        shipping_method: m,
+        updated_by: by,
+        updated_at: new Date().toISOString(),
+      });
+      logStatus?.(
+        pkg.tk,
+        pkg.status,
+        by,
+        `Shipping Method changed ${old} → ${m}`,
+      );
+      emitCBToast("ok", "Shipping Method updated", `${old} → ${m}`);
+      onSaved?.(saved);
+      onClose();
+    } catch (er) {
+      setError(er.message || "Unable to update Shipping Method.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <CnModalShell
+      title="Change Shipping Method"
+      subtitle={`${pkg.tk} · currently ${old}`}
+      onClose={onClose}
+      onSubmit={submit}
+      error={error}
+      busy={busy}
+      submitLabel="Save"
+      busyLabel="Saving…"
+    >
+      <div className="grid grid-cols-3 gap-2">
+        {CN_SHIP_METHODS.map((x) => (
+          <button
+            key={x}
+            type="button"
+            onClick={() => setM(x)}
+            className={`inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-bold transition ${m === x ? "border-blue-600 bg-blue-600 text-white shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-blue-300"}`}
+          >
+            <ShipMethodIcon m={x} size={18} />
+            {x}
+          </button>
+        ))}
+      </div>
+      <p className="text-xs text-slate-500">
+        Land / Sea: freight by Size S/M/L or CBM. Air: freight by KG.
+        {hasFee &&
+          " This TK already has a freight fee — it is not changed automatically. Use Adjust Size / Weight at Arrive to recalculate it."}
+      </p>
+    </CnModalShell>
+  );
+}
+
 function CnCancelModal({ open, row, onClose, onSaved }) {
   const { user } = useAuth();
   const [reason, setReason] = useState("");
@@ -46069,6 +47558,8 @@ function CnStatusTimeline({
   history = [],
   orderType,
   customerView = false,
+  pendingLabel = "Pending",
+  formatStamp,
 }) {
   // Customer detail uses the simplified Order Table statuses after purchase;
   // Admin/Staff keeps the original operational CN/TK workflow unchanged.
@@ -46195,8 +47686,18 @@ function CnStatusTimeline({
       return true;
     });
 
+  const cv = customerView;
   return (
     <div>
+      {cv && (
+        <style>{`
+          @keyframes cbStepIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+          @keyframes cbLineGrow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+          @keyframes cbPop{0%{transform:scale(.4);opacity:0}65%{transform:scale(1.15);opacity:1}100%{transform:scale(1);opacity:1}}
+          @keyframes cbPulse{0%{box-shadow:0 0 0 0 rgba(37,99,235,.35)}70%{box-shadow:0 0 0 10px rgba(37,99,235,0)}100%{box-shadow:0 0 0 0 rgba(37,99,235,0)}}
+          @media (prefers-reduced-motion: reduce){.cb-anim{animation:none!important;opacity:1!important;transform:none!important}}
+        `}</style>
+      )}
       {timelineSteps.map(({ status: s, flowIndex: i }, displayIndex) => {
         const t =
           timeOf(s) || (s === "Order Processing" ? row.created_at : null);
@@ -46204,40 +47705,96 @@ function CnStatusTimeline({
         const active = !refunded && !isComplete && i === flowIndex;
         const isLastVisible =
           displayIndex === timelineSteps.length - 1 && !refunded;
+        const delay = displayIndex * 110;
         return (
-          <div key={s} className="flex gap-3">
+          <div
+            key={s}
+            className={cv ? "cb-anim flex gap-3.5" : "flex gap-3"}
+            style={
+              cv
+                ? {
+                    animation: `cbStepIn .5s cubic-bezier(.22,1,.36,1) ${delay}ms both`,
+                  }
+                : undefined
+            }
+          >
             <div className="flex flex-col items-center">
               <span
-                className={`w-6 h-6 rounded-full grid place-items-center shrink-0 ${
-                  done
-                    ? "bg-emerald-500 text-white"
-                    : active
-                      ? "bg-blue-600 text-white animate-pulse"
-                      : "bg-white border-2 border-slate-200 text-transparent"
-                }`}
+                className={
+                  cv
+                    ? `cb-anim w-7 h-7 rounded-full grid place-items-center shrink-0 ${
+                        done
+                          ? "bg-green-500 text-white"
+                          : active
+                            ? "bg-white border-[6px] border-blue-600"
+                            : "bg-slate-200"
+                      }`
+                    : `w-6 h-6 rounded-full grid place-items-center shrink-0 ${
+                        done
+                          ? "bg-emerald-500 text-white"
+                          : active
+                            ? "bg-blue-600 text-white animate-pulse"
+                            : "bg-white border-2 border-slate-200 text-transparent"
+                      }`
+                }
+                style={
+                  cv
+                    ? {
+                        animation: active
+                          ? `cbPop .45s ease-out ${delay + 120}ms both, cbPulse 2.2s ease-out ${delay + 700}ms infinite`
+                          : `cbPop .45s ease-out ${delay + 120}ms both`,
+                      }
+                    : undefined
+                }
               >
                 {done ? (
-                  <Icons.Check size={13} />
-                ) : active ? (
+                  cv ? (
+                    <Icons.Check size={16} strokeWidth={3} />
+                  ) : (
+                    <Icons.Check size={13} />
+                  )
+                ) : active && !cv ? (
                   <span className="w-1.5 h-1.5 rounded-full bg-white" />
                 ) : null}
               </span>
               {(!isLastVisible || refunded) && (
                 <span
-                  className={`w-0.5 flex-1 min-h-6 ${done ? "bg-emerald-300" : "bg-slate-200"}`}
+                  className={
+                    cv
+                      ? `cb-anim w-0.5 flex-1 min-h-[28px] ${done ? "bg-green-400" : "bg-slate-200"}`
+                      : `w-0.5 flex-1 min-h-6 ${done ? "bg-emerald-300" : "bg-slate-200"}`
+                  }
+                  style={
+                    cv
+                      ? {
+                          transformOrigin: "top",
+                          animation: `cbLineGrow .5s ease-out ${delay + 200}ms both`,
+                        }
+                      : undefined
+                  }
                 />
               )}
             </div>
             <div className="pb-5">
               <p
-                className={`text-sm font-semibold ${done || active ? "text-slate-900" : "text-slate-400"}`}
+                className={
+                  cv
+                    ? `font-semibold text-[15px] ${active ? "text-blue-700" : done ? "text-slate-900" : "text-slate-400"}`
+                    : `text-sm font-semibold ${done || active ? "text-slate-900" : "text-slate-400"}`
+                }
               >
                 {s}
               </p>
-              {t && (
+              {t ? (
                 <p className="text-xs text-slate-500 mt-0.5">
-                  {formatDbTimestamp(t)}
+                  {cv && formatStamp ? formatStamp(t) : formatDbTimestamp(t)}
                 </p>
+              ) : (
+                cv && (
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {pendingLabel}
+                  </p>
+                )
               )}
               {!customerView && (done || active) && processorOf(s) && (
                 <p className="text-xs text-slate-400 mt-0.5">
@@ -47446,11 +49003,10 @@ function CnOrdersPage() {
     <div className="space-y-5">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="cb-page-title font-display font-bold text-2xl text-ink-900 flex items-center gap-2">
-            <Icons.ShoppingCart className="text-signal-blue" size={24} /> CN
-            Purchase Orders
+          <h1 className="font-display font-bold text-xl text-ink-900">
+            CN Purchase Orders
           </h1>
-          <p className="text-sm text-ink-600/55 mt-1">
+          <p className="text-sm text-ink-600/55 mt-0.5">
             Orders, linked TK tracking and purchase costs in one workspace.
           </p>
         </div>
@@ -47458,7 +49014,7 @@ function CnOrdersPage() {
           <button
             type="button"
             onClick={() => setCreateOpen(true)}
-            className="inline-flex items-center gap-2 h-10 px-4 rounded-xl bg-signal-blue text-white text-sm font-bold"
+            className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 transition-colors"
           >
             <Plus size={15} /> New CN Order
           </button>
@@ -47489,7 +49045,7 @@ function CnOrdersPage() {
           អាចមិនពេញលេញ។
         </div>
       )}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      <div className="cbx-kpi-strip">
         {stats.map(([label, value, color, quickKey]) => {
           const StatIcon = Icons[CN_STAT_ICONS[label]];
           const body = (
@@ -47497,15 +49053,17 @@ function CnOrdersPage() {
               <div className="flex items-center gap-2.5">
                 {StatIcon && (
                   <span
-                    className={`w-9 h-9 shrink-0 rounded-full bg-mist-100 grid place-items-center ${color}`}
+                    className={`w-8 h-8 shrink-0 rounded-full bg-mist-100 grid place-items-center ${color}`}
                   >
-                    <StatIcon size={16} />
+                    <StatIcon size={17} />
                   </span>
                 )}
-                <p className="text-xs text-ink-600/60 leading-tight">{label}</p>
+                <p className="text-[14px] font-medium text-ink-600/70 leading-tight">
+                  {label}
+                </p>
               </div>
               <p
-                className={`text-xl lg:text-2xl font-extrabold mt-2.5 break-words ${color}`}
+                className={`font-display text-[30px] leading-none font-bold mt-3 break-words tabular-nums ${color}`}
               >
                 {value}
               </p>
@@ -47513,7 +49071,7 @@ function CnOrdersPage() {
           );
           if (activeTab !== "orders" || quickKey === undefined)
             return (
-              <div key={label} className="cb-surface p-4 min-w-0">
+              <div key={label} className="cbx-kpi-cell min-w-0">
                 {body}
               </div>
             );
@@ -47524,11 +49082,7 @@ function CnOrdersPage() {
               type="button"
               onClick={() => setQuick(isOn ? "" : quickKey)}
               title={quickKey ? "Click to filter the table" : "Show all orders"}
-              className={`cb-surface p-4 min-w-0 text-left transition-shadow ${
-                isOn
-                  ? "ring-2 ring-signal-blue"
-                  : "hover:ring-1 hover:ring-mist-200"
-              }`}
+              className={`cbx-kpi-cell cbx-kpi-link min-w-0 text-left${isOn ? " is-on" : ""}`}
             >
               {body}
             </button>
@@ -47586,16 +49140,17 @@ function CnOrdersPage() {
             ))}
           </div>
         )}
-        <div className="p-4 border-b border-mist-200 flex flex-wrap gap-2">
-          <div className="relative flex-1 min-w-[220px]">
+        <div className="flex items-center gap-3 px-4 lg:px-5 py-4 border-b border-mist-200 flex-wrap">
+          <div className="cbx-searchbox" style={{ maxWidth: 420 }}>
             <Icons.Search
-              size={15}
-              className="absolute left-3 top-3 text-ink-600/40"
+              size={16}
+              className="text-ink-600/40 shrink-0"
+              aria-hidden="true"
             />
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              className={`${INPUT_CLS} pl-9`}
+              className="bg-transparent outline-none text-sm w-full placeholder:text-ink-600/40"
               placeholder={
                 activeTab === "tks"
                   ? "Search TK, CN Order ID, customer or product…"
@@ -47607,7 +49162,7 @@ function CnOrdersPage() {
             <select
               value={tkStatus}
               onChange={(e) => setTkStatus(e.target.value)}
-              className={`${INPUT_CLS} w-auto min-w-[180px]`}
+              className="cbx-select"
             >
               <option value="">All TK Statuses</option>
               {Array.from(new Set(tkRows.map((p) => p.status).filter(Boolean)))
@@ -47623,7 +49178,7 @@ function CnOrdersPage() {
               <select
                 value={status}
                 onChange={(e) => setStatus(e.target.value)}
-                className={`${INPUT_CLS} w-auto min-w-[180px]`}
+                className="cbx-select"
               >
                 <option value="">All Status</option>
                 {[...CN_ORDER_TABLE_STATUS_FLOW, CN_ORDER_TERMINAL].map((x) => (
@@ -47635,7 +49190,7 @@ function CnOrdersPage() {
               <select
                 value={pay}
                 onChange={(e) => setPay(e.target.value)}
-                className={`${INPUT_CLS} w-auto min-w-[150px]`}
+                className="cbx-select"
               >
                 <option value="">All Payment</option>
                 {CN_PAYMENT_STATUSES.map((x) => (
@@ -47646,12 +49201,8 @@ function CnOrdersPage() {
           )}
           <CNDateRangeFilter value={dateRange} onChange={setDateRange} />
           {hasFilters && (
-            <button
-              type="button"
-              onClick={clearFilters}
-              className="inline-flex items-center gap-1.5 text-sm text-ink-700 border border-mist-200 px-3 py-2 rounded-md hover:bg-mist-50"
-            >
-              <X size={14} /> Clear filters
+            <button type="button" onClick={clearFilters} className="cbx-chip">
+              <X size={16} /> Clear filters
             </button>
           )}
           <div className="flex items-center gap-2 ml-auto">
@@ -47662,9 +49213,9 @@ function CnOrdersPage() {
                 disabled={
                   !(activeTab === "tks" ? filteredTks : filtered).length
                 }
-                className="inline-flex items-center gap-1.5 text-sm text-ink-700 border border-mist-200 px-3 py-2 rounded-md hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="cbx-chip"
               >
-                <Download size={14} /> Download
+                <Download size={16} /> Download
               </button>
             }
             <button
@@ -47673,10 +49224,11 @@ function CnOrdersPage() {
               disabled={loading || tkLoading}
               title="Refresh"
               aria-label="Refresh"
-              className="inline-flex items-center justify-center h-[38px] w-[38px] border border-mist-200 rounded-md text-ink-700 hover:bg-mist-50 disabled:opacity-60"
+              className="cbx-chip justify-center"
+              style={{ width: 44, padding: 0 }}
             >
               <Icons.RefreshCw
-                size={15}
+                size={16}
                 className={loading || tkLoading ? "animate-spin" : ""}
               />
             </button>
@@ -54401,6 +55953,128 @@ function printInvoiceHtml(html) {
   f.srcdoc = html;
 }
 
+// Shipment (TK) invoice in the same layout as the CN order invoice:
+// Order ID · Tracking · Qty · Shipping Fee · Total.
+function shipmentInvoiceHtml({ company, customer, rows, issuedBy, when }) {
+  const e = htmlEsc;
+  const logo = company?.logoUrl || company?.logoDataUrl || "";
+  const usd = (n) => `$${(Number(n) || 0).toFixed(2)}`;
+  const grand = rows.reduce((t, r) => t + (Number(r.total) || 0), 0);
+  const body = rows
+    .map(
+      (r, i) =>
+        `<tr><td>${i + 1}</td><td>${e(r.orderId)}</td><td>${e(r.tk)}</td><td>${e(r.qty)}</td><td>${usd(r.fee)}</td><td>${usd(r.total)}</td></tr>`,
+    )
+    .join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Shipment Invoice ${e(customer.code)}</title>
+<style>
+@page{size:A4;margin:16mm 14mm}*{box-sizing:border-box}body{font-family:'Inter','Noto Sans Khmer',Arial,sans-serif;font-size:14px;color:#111;margin:0}
+.top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;margin-bottom:22px}.logo img{max-height:60px;max-width:200px;object-fit:contain}.logo b{font-size:20px}.top h1{font-size:22px;font-weight:600;margin:0;text-align:center}.meta{text-align:right;line-height:1.55}.cust{line-height:1.8;margin-bottom:16px;font-size:15px}
+table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:12px}th,td{border:1px solid #9aa3b5;padding:8px 5px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f1f3f6;font-weight:700}.total{text-align:right;font-weight:700;padding-right:14px}.sum{font-weight:700}.sign{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;margin-top:34px;font-size:14px;font-weight:600}.sign div{padding-bottom:48px}.line{border-top:1px solid #d5d9e0;margin-top:18px}
+</style></head><body><div class="top"><div class="logo">${logo ? `<img src="${e(logo)}" alt="">` : `<b>${e(company?.name || "")}</b>`}</div><h1>Shipment Invoice</h1><div class="meta"><div><b>Date:</b> ${e(when)}</div><div><b>Issued By:</b> ${e(issuedBy)}</div></div></div>
+<div class="cust"><div><b>Customer ID:</b> ${e(customer.code)}</div><div><b>Customer Name:</b> ${e(customer.name)}</div><div><b>Phone Number:</b> ${e(customer.phone)}</div><div><b>Total Order:</b> ${rows.length}</div></div>
+<table><colgroup><col style="width:6%"><col style="width:20%"><col style="width:26%"><col style="width:10%"><col style="width:19%"><col style="width:19%"></colgroup><tr><th>#</th><th>Order ID</th><th>Tracking</th><th>Qty</th><th>Shipping Fee (USD)</th><th>Total (USD)</th></tr>
+${body}<tr><td colspan="5" class="total">Total Amount</td><td class="sum">${usd(grand)}</td></tr></table><div class="sign"><div>Customer Signature</div><div>Employee Signature</div><div>Authorized Signature</div></div><div class="line"></div></body></html>`;
+}
+
+// Same preview popup as the CN invoice (Print / Save PDF + Back).
+function InvoicePreviewModal({ title = "Invoice Preview", html, onClose }) {
+  const framed = html.replace(
+    "</style>",
+    "@media screen{body{padding:28px 32px;background:#fff}}</style>",
+  );
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[80] bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(ev) => ev.stopPropagation()}
+        className="w-full max-w-5xl rounded-2xl bg-white shadow-2xl overflow-hidden"
+      >
+        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <h3 className="font-bold text-lg">{title}</h3>
+          <button type="button" onClick={onClose}>
+            <Icons.X size={18} />
+          </button>
+        </div>
+        <div className="p-5 bg-slate-50 max-h-[75vh] overflow-y-auto">
+          <iframe
+            title={title}
+            srcDoc={framed}
+            onLoad={(ev) => {
+              const el = ev.currentTarget;
+              const h = el.contentDocument?.documentElement?.scrollHeight;
+              if (h) el.style.height = h + "px";
+            }}
+            className="w-full h-[60vh] rounded-lg border border-slate-200 bg-white"
+          />
+        </div>
+        <div className="px-5 py-4 border-t border-slate-200 flex items-center justify-end gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                printInvoiceHtml(html);
+                onClose();
+              } catch (err) {
+                emitCBToast(
+                  "err",
+                  "Print failed",
+                  err.message || "Unable to print invoice.",
+                );
+              }
+            }}
+            className="h-10 px-5 rounded-xl bg-blue-600 text-white text-sm font-bold inline-flex items-center gap-2"
+          >
+            <Icons.Printer size={15} /> Print / Save PDF
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-10 px-5 rounded-xl border border-slate-300 bg-white text-sm font-semibold inline-flex items-center gap-2"
+          >
+            <Icons.X size={15} /> Back
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+async function buildShipmentInvoiceHtml({ pkg, fee, user, company }) {
+  let cust = null;
+  if (supabase && pkg.customer_id) {
+    const { data } = await supabase
+      .from("customers")
+      .select("name, customer_code, phone")
+      .eq("id", pkg.customer_id)
+      .maybeSingle();
+    cust = data;
+  }
+  const customer = {
+    code: cust?.customer_code || pkg.customer_code || "—",
+    name: cust?.name || pkg.customer_name || "—",
+    phone: cust?.phone || "—",
+  };
+  return shipmentInvoiceHtml({
+    company,
+    customer,
+    rows: [
+      {
+        orderId: pkg.order_no || pkg.order || "—",
+        tk: pkg.tk,
+        qty: Math.max(1, Math.floor(Number(pkg.package_count)) || 1),
+        fee: fee.total,
+        total: fee.total,
+      },
+    ],
+    issuedBy: user?.name || user?.email || "—",
+    when: invoiceStamp(),
+  });
+}
+
 async function printShippingInvoice({ pkg, fee, user, company }) {
   let cust = null;
   if (supabase && pkg.customer_id) {
@@ -55196,15 +56870,18 @@ function PayShippingCard({ pkg, stage }) {
   const [tick, setTick] = useState(0);
   const company = useSystemSettings()?.company;
   const [printing, setPrinting] = useState(false);
+  const [invoicePreview, setInvoicePreview] = useState(null);
   async function printInvoice() {
     setPrinting(true);
     try {
-      await printShippingInvoice({ pkg, fee, user, company });
+      setInvoicePreview(
+        await buildShipmentInvoiceHtml({ pkg, fee, user, company }),
+      );
     } catch (err) {
       emitCBToast(
         "err",
-        "Print failed",
-        err.message || "Unable to print invoice.",
+        "Preview failed",
+        err.message || "Unable to prepare invoice.",
       );
     } finally {
       setPrinting(false);
@@ -55341,6 +57018,13 @@ function PayShippingCard({ pkg, stage }) {
         onConfirm={() => pay(confirm)}
         onClose={() => setConfirm(null)}
       />
+      {invoicePreview && (
+        <InvoicePreviewModal
+          title="Shipment Invoice Preview"
+          html={invoicePreview}
+          onClose={() => setInvoicePreview(null)}
+        />
+      )}
     </div>
   );
 }
@@ -65837,6 +67521,7 @@ function ShopMovementsModal({ row, onClose }) {
 // Orders — list
 // ------------------------------------------------------------
 function ShopOrdersPage() {
+  const navigate = useNavigate();
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
@@ -66050,10 +67735,20 @@ function ShopOrdersPage() {
             minW={1000}
           >
             {rows.map((o) => (
-              <tr key={o.id} className="hover:bg-slate-50">
+              <tr
+                key={o.id}
+                role="link"
+                tabIndex={0}
+                onClick={() => navigate(`/shop/orders/${o.id}`)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") navigate(`/shop/orders/${o.id}`);
+                }}
+                className="cursor-pointer hover:bg-slate-50 focus:bg-slate-50 focus:outline-none"
+              >
                 <td className="px-4 py-3">
                   <Link
                     to={`/shop/orders/${o.id}`}
+                    onClick={(e) => e.stopPropagation()}
                     className="font-bold text-blue-700 hover:underline"
                   >
                     {o.order_no}
@@ -66102,6 +67797,183 @@ function ShopOrdersPage() {
 // ------------------------------------------------------------
 // Orders — detail + actions
 // ------------------------------------------------------------
+// Small product picture for an order line (the image saved on the order at
+// purchase time). Falls back to a box icon if there is none or it fails.
+// Google Maps link for a pickup location: the saved map link when it is a real
+// http(s) URL, otherwise a Maps search for the address (so it always works).
+function shopMapUrl(pk) {
+  const link = String(pk?.map_url || "").trim();
+  if (/^https?:\/\//i.test(link)) return link;
+  const q = [pk?.name, pk?.address].filter(Boolean).join(", ");
+  return q
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`
+    : "";
+}
+
+function ShopMapLink({ pk, label = "Open in Google Maps", className = "" }) {
+  const href = shopMapUrl(pk);
+  if (!href) return null;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      className={`mt-2 inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100 ${className}`}
+    >
+      <Icons.MapPin size={14} /> {label}
+    </a>
+  );
+}
+
+function ShopItemThumb({ src, size = 56, onOpen }) {
+  const [bad, setBad] = useState(false);
+  const box = { width: size, height: size };
+  if (!src || bad)
+    return (
+      <div
+        style={box}
+        className="flex shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-300"
+      >
+        <Icons.Package size={Math.round(size * 0.45)} />
+      </div>
+    );
+  return (
+    <a
+      href={src}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(e) => {
+        e.stopPropagation();
+        // Open the same popup viewer as CN orders instead of a new tab.
+        if (onOpen) {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      title="Open image"
+      className="shrink-0"
+    >
+      <img
+        src={src}
+        alt=""
+        style={box}
+        loading="lazy"
+        onError={() => setBad(true)}
+        className="rounded-xl border border-slate-200 bg-slate-50 object-cover"
+      />
+    </a>
+  );
+}
+
+// Customer-facing Invoice / Quotation for ONE shop order (same look as the CN
+// order invoice: logo, customer block, product table, signatures, A4 print).
+function shopOrderInvoiceHtml({ company, order, items, issuedBy, when }) {
+  const e = htmlEsc;
+  const logo = company?.logoUrl || company?.logoDataUrl || "";
+  const usd = (n) => `$${(Number(n) || 0).toFixed(2)}`;
+  const cust = order.customers || {};
+  const rows = items
+    .map((i, k) => {
+      const unit = (Number(i.unit_price) || 0) - (Number(i.unit_discount) || 0);
+      const variant = Object.values(i.variant_snapshot || {})
+        .filter(Boolean)
+        .join(" / ");
+      const product = [i.product_name_snapshot, variant]
+        .filter(Boolean)
+        .join(" · ");
+      return `<tr><td>${k + 1}</td><td>${e(order.order_no)}</td><td class="left">${e(product)}</td><td>${e(i.quantity)}</td><td>${usd(unit)}</td><td>${usd(i.line_total)}</td><td>${usd(i.line_total)}</td></tr>`;
+    })
+    .join("");
+  const extra = (label, val, neg) =>
+    `<tr><td colspan="6" class="total">${label}</td><td class="sum">${neg ? "−" : ""}${usd(val)}</td></tr>`;
+  const hasDisc = Number(order.discount_total) > 0;
+  const hasFee = Number(order.delivery_fee) > 0;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Invoice ${e(order.order_no)}</title>
+<style>
+@page{size:A4;margin:16mm 14mm}*{box-sizing:border-box}body{font-family:'Inter','Noto Sans Khmer',Arial,sans-serif;font-size:14px;color:#111;margin:0}
+.top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;margin-bottom:22px}.logo img{max-height:60px;max-width:200px;object-fit:contain}.logo b{font-size:20px}.top h1{font-size:22px;font-weight:600;margin:0;text-align:center}.meta{text-align:right;line-height:1.55}.cust{line-height:1.8;margin-bottom:16px;font-size:15px}
+table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:12px}th,td{border:1px solid #9aa3b5;padding:8px 5px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f1f3f6;font-weight:700}.left{text-align:left}.total{text-align:right;font-weight:700;padding-right:14px}.sum{font-weight:700}.sign{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;margin-top:34px;font-size:14px;font-weight:600}.sign div{padding-bottom:48px}.line{border-top:1px solid #d5d9e0;margin-top:18px}
+</style></head><body><div class="top"><div class="logo">${logo ? `<img src="${e(logo)}" alt="">` : `<b>${e(company?.name || "")}</b>`}</div><h1>Shop Order Invoice</h1><div class="meta"><div><b>Date:</b> ${e(when)}</div><div><b>Issued By:</b> ${e(issuedBy)}</div></div></div>
+<div class="cust"><div><b>Customer ID:</b> ${e(cust.customer_code || "—")}</div><div><b>Customer Name:</b> ${e(cust.name || "—")}</div><div><b>Phone Number:</b> ${e(cust.phone || "—")}</div><div><b>Total Order:</b> ${items.reduce((t, i) => t + (Number(i.quantity) || 0), 0)}</div></div>
+<table><colgroup><col style="width:6%"><col style="width:16%"><col style="width:30%"><col style="width:8%"><col style="width:14%"><col style="width:13%"><col style="width:13%"></colgroup><tr><th>#</th><th>Order ID</th><th>Product / Variant</th><th>Qty</th><th>Unit Price (USD)</th><th>Amount (USD)</th><th>Total (USD)</th></tr>
+${rows}${hasDisc || hasFee ? extra("Subtotal", order.subtotal) : ""}${hasDisc ? extra("Discount", order.discount_total, true) : ""}${hasFee ? extra("Delivery Fee", order.delivery_fee) : ""}<tr><td colspan="6" class="total">Total Amount</td><td class="sum">${usd(order.total_amount)}</td></tr></table><div class="sign"><div>Customer Signature</div><div>Employee Signature</div><div>Authorized Signature</div></div><div class="line"></div></body></html>`;
+}
+
+function ShopInvoiceModal({ order, items, onClose }) {
+  const { user } = useAuth();
+  const company = useSystemSettings()?.company;
+  const html = shopOrderInvoiceHtml({
+    company,
+    order,
+    items,
+    issuedBy: user?.name || user?.email || "—",
+    when: invoiceStamp(),
+  });
+  const framed = html.replace(
+    "</style>",
+    "@media screen{body{padding:28px 32px;background:#fff}}</style>",
+  );
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[80] bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(ev) => ev.stopPropagation()}
+        className="w-full max-w-5xl rounded-2xl bg-white shadow-2xl overflow-hidden"
+      >
+        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <h3 className="font-bold text-lg">Invoice Preview</h3>
+          <button type="button" onClick={onClose}>
+            <Icons.X size={18} />
+          </button>
+        </div>
+        <div className="p-5 bg-slate-50 max-h-[75vh] overflow-y-auto">
+          <iframe
+            title="Shop invoice preview"
+            srcDoc={framed}
+            onLoad={(ev) => {
+              const el = ev.currentTarget;
+              const h = el.contentDocument?.documentElement?.scrollHeight;
+              if (h) el.style.height = h + "px";
+            }}
+            className="w-full h-[60vh] rounded-lg border border-slate-200 bg-white"
+          />
+        </div>
+        <div className="px-5 py-4 border-t border-slate-200 flex items-center justify-end gap-3">
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                printInvoiceHtml(html);
+                onClose();
+              } catch (err) {
+                emitCBToast(
+                  "err",
+                  "Print failed",
+                  err.message || "Unable to print invoice.",
+                );
+              }
+            }}
+            className="h-10 px-5 rounded-xl bg-blue-600 text-white text-sm font-bold inline-flex items-center gap-2"
+          >
+            <Icons.Printer size={15} /> Print / Save PDF
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-10 px-5 rounded-xl border border-slate-300 bg-white text-sm font-semibold inline-flex items-center gap-2"
+          >
+            <Icons.X size={15} /> Back
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function ShopOrderDetailPage() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -66115,6 +67987,8 @@ function ShopOrderDetailPage() {
   const [busy, setBusy] = useState(false);
   const [dlg, setDlg] = useState(null);
   const [reload, setReload] = useState(0);
+  const [itemViewer, setItemViewer] = useState(-1);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -66321,6 +68195,10 @@ function ShopOrderDetailPage() {
   const d = dlg ? dialogs[dlg] : null;
   const addr = o.delivery_address;
   const pk = o.pickup_location;
+  // Gallery of every item picture on this order (same viewer as CN orders).
+  const itemImages = items
+    .filter((i) => i.image_snapshot)
+    .map((i) => ({ url: i.image_snapshot }));
 
   return (
     <ShopGate perm="shop.order.review" title="this order">
@@ -66341,6 +68219,13 @@ function ShopOrderDetailPage() {
             {o.fulfillment_method}
           </span>
           <div className="ml-auto flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setInvoiceOpen(true)}
+              className={SHOP_BTN_GHOST}
+            >
+              <Icons.Printer size={15} /> Print Invoice
+            </button>
             {actions.map((a) => (
               <button
                 key={a.k}
@@ -66369,18 +68254,32 @@ function ShopOrderDetailPage() {
               </h2>
               <ShopTable
                 heads={["Product", "SKU", "Qty", "Unit", "Line total", "Stock"]}
-                minW={640}
+                minW={720}
               >
                 {items.map((i) => (
                   <tr key={i.id}>
                     <td className="px-4 py-3">
-                      <div className="font-semibold text-slate-800">
-                        {i.product_name_snapshot}
-                      </div>
-                      <div className="text-xs text-slate-400">
-                        {Object.values(i.variant_snapshot || {})
-                          .filter(Boolean)
-                          .join(" / ")}
+                      <div className="flex items-center gap-3">
+                        <ShopItemThumb
+                          src={i.image_snapshot}
+                          onOpen={() =>
+                            setItemViewer(
+                              itemImages.findIndex(
+                                (g) => g.url === i.image_snapshot,
+                              ),
+                            )
+                          }
+                        />
+                        <div className="min-w-0">
+                          <div className="font-semibold text-slate-800">
+                            {i.product_name_snapshot}
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            {Object.values(i.variant_snapshot || {})
+                              .filter(Boolean)
+                              .join(" / ")}
+                          </div>
+                        </div>
                       </div>
                     </td>
                     <td className="px-4 py-3 text-slate-600">
@@ -66503,6 +68402,7 @@ function ShopOrderDetailPage() {
                     {pk.hours && (
                       <div className="text-xs text-slate-400">{pk.hours}</div>
                     )}
+                    <ShopMapLink pk={pk} />
                   </div>
                 ) : (
                   <span className="text-sm text-slate-400">—</span>
@@ -66601,6 +68501,20 @@ function ShopOrderDetailPage() {
             onSubmit={d.submit}
           />
         )}
+        {invoiceOpen && (
+          <ShopInvoiceModal
+            order={o}
+            items={items}
+            onClose={() => setInvoiceOpen(false)}
+          />
+        )}
+        {itemViewer >= 0 && itemImages.length > 0 && (
+          <AirImageViewer
+            images={itemImages}
+            start={itemViewer}
+            onClose={() => setItemViewer(-1)}
+          />
+        )}
       </div>
     </ShopGate>
   );
@@ -66620,6 +68534,7 @@ function ShopSettingsPage() {
     pk_address: "",
     pk_hours: "",
     pk_instructions: "",
+    pk_map_url: "",
   });
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -66641,6 +68556,7 @@ function ShopSettingsPage() {
           pk_address: pk.address || "",
           pk_hours: pk.hours || "",
           pk_instructions: pk.instructions || "",
+          pk_map_url: pk.map_url || "",
         });
         setLoading(false);
       });
@@ -66673,6 +68589,12 @@ function ShopSettingsPage() {
           ok: false,
           text: "Pickup needs both a location name and an address.",
         });
+      const mapUrl = v.pk_map_url.trim();
+      if (mapUrl && !/^https?:\/\//i.test(mapUrl))
+        return setMsg({
+          ok: false,
+          text: "Google Maps link must start with http:// or https://",
+        });
       rows.push({
         key: "pickup",
         value: {
@@ -66680,6 +68602,7 @@ function ShopSettingsPage() {
           address: v.pk_address.trim(),
           hours: v.pk_hours.trim(),
           instructions: v.pk_instructions.trim(),
+          map_url: mapUrl,
         },
       });
     }
@@ -66788,6 +68711,28 @@ function ShopSettingsPage() {
                   disabled={!canEdit}
                   value={v.pk_address}
                   onChange={(e) => setV({ ...v, pk_address: e.target.value })}
+                />
+              </ShopField>
+              <ShopField
+                label="Google Maps link"
+                className="sm:col-span-2"
+                hint="In Google Maps: open your shop → Share → Copy link, then paste it here. Customers get a button that opens directions. If left empty, the address is searched on Google Maps instead."
+              >
+                <input
+                  type="url"
+                  className={SHOP_INP}
+                  disabled={!canEdit}
+                  placeholder="https://maps.app.goo.gl/…"
+                  value={v.pk_map_url}
+                  onChange={(e) => setV({ ...v, pk_map_url: e.target.value })}
+                />
+                <ShopMapLink
+                  pk={{
+                    name: v.pk_name,
+                    address: v.pk_address,
+                    map_url: v.pk_map_url,
+                  }}
+                  label="Test link"
                 />
               </ShopField>
               <ShopField label="Pickup instructions" className="sm:col-span-2">
@@ -68043,6 +69988,78 @@ html:not(.cb-admin-dark) :is(.cb-app,.cb-modal-backdrop) [class~="text-slate-500
   .cb-app *{transition-duration:.01ms!important;}
   .cb-app main{scroll-behavior:auto;}
 }
+
+
+/* ================= Clean Enterprise look — Phase 1 =================
+   Presentation only (fonts / icons / sidebar / cards / tables).
+   Inspired by a standard logistics-admin layout: larger thin-stroke icons,
+   roomy sidebar, soft bordered cards, grey table header band, tall rows. */
+:root{--cbx-side-w:288px;}
+
+/* Icons: lighter stroke so larger icons do not look heavy */
+.cb-app svg.lucide{stroke-width:1.7;}
+.cb-app .cbx-nav-link svg{width:22px;height:22px;stroke-width:1.55;flex:none;}
+.cb-app .cbx-nav-link{gap:14px;padding:11px 14px;font-size:15px;font-weight:500;line-height:1.3;border-radius:10px;}
+.cb-app .cbx-nav-link.is-active{font-weight:600;}
+.cb-app .cbx-side-group{font-size:13px;font-weight:500;letter-spacing:0;text-transform:none;padding-top:18px;padding-bottom:6px;}
+
+/* Typography: slightly larger, darker body text; stronger page title */
+.cb-app{font-size:15px;}
+.cb-app :is(h1,.cb-page-title,.cbx-page-title){font-size:32px;font-weight:700;letter-spacing:-.03em;}
+.cb-app :is(td,[role="cell"]){font-size:15px;font-weight:450;}
+html:not(.cb-admin-dark) .cb-app main table td{color:#1f2937;}
+
+/* Cards: flat, thin border, generous radius */
+html:not(.cb-admin-dark) .cb-app :is(.cb-surface,.cb-card,.cbx-card){border:1px solid #e8edf4;border-radius:16px;box-shadow:0 1px 2px rgba(16,24,40,.04)!important;}
+.cb-app .cb-stat:hover{transform:none;box-shadow:0 4px 14px rgba(16,24,40,.06)!important;}
+
+/* Tables: grey header band with rounded ends, taller rows, soft dividers */
+html:not(.cb-admin-dark) .cb-app main table thead tr{background:#f6f8fb;border-bottom-color:transparent!important;}
+html:not(.cb-admin-dark) .cb-app main table thead th{background:#f6f8fb;color:#6b7280;font-size:12px;font-weight:600;letter-spacing:.05em;white-space:nowrap;}
+.cb-app main table thead th:first-child{border-top-left-radius:12px;border-bottom-left-radius:12px;}
+.cb-app main table thead th:last-child{border-top-right-radius:12px;border-bottom-right-radius:12px;}
+.cb-app main table td{padding-top:18px;padding-bottom:18px;}
+html:not(.cb-admin-dark) .cb-app main table tbody tr{border-color:#eef1f6;}
+html:not(.cb-admin-dark) .cb-app main table tbody tr:hover{background:#f8fafd;}
+
+/* Filter / search controls: roomy rounded "chips" */
+.cb-app :is(input,select,textarea){border-radius:10px;}
+html:not(.cb-admin-dark) .cb-app main :is(input[type="text"],input[type="search"],input:not([type]),select){border-color:#e3e8ef;background:#fff;}
+
+
+/* ================= Clean Enterprise look — Phase 2 ================= */
+/* KPI strip: one card, cells split by 1px dividers (works when wrapping) */
+.cbx-kpi-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:1px;overflow:hidden;border-radius:16px;border:1px solid var(--cbx-border,#e8edf4);background:var(--cbx-border,#e8edf4);}
+.cbx-kpi-cell{display:block;background:var(--cbx-card,#fff);padding:20px 24px;}
+.cbx-kpi-link{transition:background-color .15s ease;}
+.cbx-kpi-link:hover{background:var(--cbx-hover,#f8fafd);}
+
+/* Filter chip bar */
+.cbx-chip{display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 14px;border:1px solid var(--cbx-border,#e3e8ef);border-radius:10px;background:var(--cbx-card,#fff);color:var(--cbx-text,#1f2937);font-size:14.5px;font-weight:500;line-height:1;white-space:nowrap;cursor:pointer;}
+.cbx-chip:hover{background:var(--cbx-hover,#f6f8fb);}
+.cbx-chip:disabled{opacity:.45;cursor:not-allowed;}
+.cbx-chip svg{flex:none;color:var(--cbx-muted,#6b7280);}
+.cbx-chip.is-dashed{border-style:dashed;}
+.cbx-chip.is-active{border-color:var(--cbx-blue,#2563eb);background:var(--cbx-blue-soft,#eff6ff);color:var(--cbx-side-active-text,#1d4ed8);}
+.cbx-chip.is-active svg{color:inherit;}
+.cbx-searchbox{display:flex;align-items:center;gap:8px;height:44px;padding:0 14px;flex:1;min-width:200px;max-width:340px;border:1px solid var(--cbx-border,#e3e8ef);border-radius:10px;background:var(--cbx-card,#fff);}
+.cbx-searchbox:focus-within{border-color:var(--cbx-blue,#2563eb);}
+.cbx-searchbox input{min-height:0!important;height:auto!important;border:0!important;background:transparent!important;box-shadow:none!important;outline:none!important;font-size:14.5px;}
+
+
+/* ================= Clean Enterprise look — Phase 3 (header) ================= */
+.cbx-version{align-items:center;height:36px;padding:0 14px;border-radius:9999px;background:var(--cbx-blue-soft,#eff6ff);color:var(--cbx-side-active-text,#1d4ed8);font-size:14px;font-weight:600;white-space:nowrap;}
+.cbx-lang-btn{align-items:center;gap:8px;height:40px;padding:0 10px;border:0;border-radius:10px;background:transparent;color:var(--cbx-text,#1f2937);font-size:15px;font-weight:600;cursor:pointer;white-space:nowrap;}
+.cbx-lang-btn:hover{background:var(--cbx-hover,#f1f5f9);}
+.cbx-lang-btn span:first-child{font-size:20px;line-height:1;}
+.cb-app .cbx-topbar{height:72px;}
+
+
+/* ================= Clean Enterprise look — Phase 4 (CN orders) ================= */
+button.cbx-kpi-cell{width:100%;border:0;cursor:pointer;font:inherit;}
+.cbx-kpi-cell.is-on{box-shadow:inset 0 0 0 2px var(--cbx-blue,#2563eb);}
+.cbx-select{appearance:none;-webkit-appearance:none;height:44px;min-width:160px;width:auto;padding:0 40px 0 14px;border:1px solid var(--cbx-border,#e3e8ef);border-radius:10px;background-color:var(--cbx-card,#fff);color:var(--cbx-text,#1f2937);font-size:14.5px;font-weight:500;cursor:pointer;}
+.cb-app select.cbx-select{min-height:44px;width:auto;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")!important;background-repeat:no-repeat!important;background-position:right 12px center!important;background-size:16px!important;}
 
 `;
 
