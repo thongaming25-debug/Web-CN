@@ -31215,14 +31215,92 @@ const CustomerApp = (() => {
     if (loading)
       return (
         <div
-          className="min-h-screen bg-slate-50 max-w-md mx-auto p-4 space-y-5 animate-pulse"
+          className="min-h-screen bg-slate-50"
           aria-busy="true"
           aria-label="Loading customer portal"
           style={FONT}
         >
-          <Skeleton className="h-16 w-full rounded-b-3xl" />
-          <Skeleton className="h-11 w-40 rounded-full" />
-          <SkeletonCardList count={4} />
+          {/* Same wrapper / gutters / grid classes as the real layout, so the
+              skeleton matches the device (phone, tablet, desktop) on refresh. */}
+          <div className="jz-customer-content max-w-md mx-auto relative animate-pulse">
+            <Skeleton className="jz-skel-top h-20 w-full rounded-b-3xl" />
+            <div className="px-4 pt-4 space-y-3">
+              <div className="flex gap-2">
+                <Skeleton className="h-12 flex-1 rounded-xl" />
+                <Skeleton className="h-12 w-28 rounded-xl" />
+              </div>
+              <div className="flex gap-2 overflow-hidden">
+                {[0, 1, 2, 3, 4, 5, 6].map((i) => (
+                  <Skeleton
+                    key={i}
+                    className="h-11 w-24 shrink-0 rounded-full"
+                    delay={i * 60}
+                  />
+                ))}
+              </div>
+              {pathname.includes("/shop") ? (
+                <div className="jz-shop-grid grid grid-cols-2 gap-3">
+                  {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+                    <div
+                      key={i}
+                      className="overflow-hidden rounded-2xl border border-slate-100 bg-white"
+                    >
+                      <Skeleton
+                        className="w-full aspect-square"
+                        delay={i * 60}
+                      />
+                      <div className="space-y-2 p-3">
+                        <Skeleton
+                          className="h-3.5 w-4/5 rounded"
+                          delay={i * 60}
+                        />
+                        <Skeleton
+                          className="h-4 w-2/5 rounded"
+                          delay={i * 60}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="jz-skel-list grid gap-3">
+                  {[0, 1, 2, 3, 4, 5].map((i) => (
+                    <div
+                      key={i}
+                      className="space-y-2.5 rounded-2xl border border-slate-100 bg-white p-4"
+                    >
+                      <Skeleton className="h-4 w-2/5 rounded" delay={i * 60} />
+                      <Skeleton
+                        className="h-3.5 w-4/5 rounded"
+                        delay={i * 60}
+                      />
+                      <Skeleton
+                        className="h-3.5 w-3/5 rounded"
+                        delay={i * 60}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          <nav
+            className="jz-bottom-nav fixed bottom-0 inset-x-0 bg-white border-t border-slate-100 z-40"
+            style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+            aria-hidden="true"
+          >
+            <div className="max-w-md mx-auto grid grid-cols-5 animate-pulse">
+              {[0, 1, 2, 3, 4].map((i) => (
+                <div
+                  key={i}
+                  className="flex min-h-[52px] flex-col items-center justify-center gap-1.5 py-2"
+                >
+                  <Skeleton className="h-5 w-5 rounded-md" />
+                  <Skeleton className="h-2 w-9 rounded" />
+                </div>
+              ))}
+            </div>
+          </nav>
         </div>
       );
     if (!me) return <Navigate to={P("/login")} replace />;
@@ -35877,9 +35955,17 @@ const CustomerApp = (() => {
       return () => clearTimeout(t);
     }, [q]);
     useEffect(() => {
-      supabase
-        .rpc("shop_categories_public")
-        .then(({ data }) => setCats(data || []));
+      supabase.rpc("shop_categories_public").then(({ data }) => {
+        const list = data || [];
+        // Respect the admin's drag-and-drop order when the RPC exposes it.
+        const ordered = list.every((c) => typeof c.sort_order === "number")
+          ? list
+              .map((c, i) => [c, i])
+              .sort((a, b) => a[0].sort_order - b[0].sort_order || a[1] - b[1])
+              .map((x) => x[0])
+          : list;
+        setCats(ordered);
+      });
     }, []);
     useEffect(() => {
       const el =
@@ -36025,7 +36111,10 @@ const CustomerApp = (() => {
             </div>
           )}
           {loading && items.length === 0 && !err && (
-            <div className="grid grid-cols-2 gap-3" aria-hidden="true">
+            <div
+              className="jz-shop-grid grid grid-cols-2 gap-3"
+              aria-hidden="true"
+            >
               {[0, 1, 2, 3].map((i) => (
                 <Card key={i} className="overflow-hidden">
                   <Skeleton className="w-full aspect-square" delay={i * 80} />
@@ -36047,7 +36136,7 @@ const CustomerApp = (() => {
             </Card>
           )}
           <div
-            className={`grid grid-cols-2 gap-3 ${loading && items.length > 0 ? "cb-shop-dim" : ""}`}
+            className={`jz-shop-grid grid grid-cols-2 gap-3 ${loading && items.length > 0 ? "cb-shop-dim" : ""}`}
           >
             {items.map((p, i) => (
               <Link
@@ -65480,6 +65569,9 @@ function ShopCategoriesPage() {
   const [error, setError] = useState("");
   const [edit, setEdit] = useState(null); // null | {} (new) | row
   const [reload, setReload] = useState(0);
+  const [dragId, setDragId] = useState(null);
+  const [overId, setOverId] = useState(null);
+  const [savingOrder, setSavingOrder] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -65512,6 +65604,54 @@ function ShopCategoriesPage() {
       alive = false;
     };
   }, [reload]);
+
+  // Reorder: renumber every category 1..n in the new visual order and save
+  // only the rows whose number changed. Customers see categories by sort_order.
+  async function persistOrder(next) {
+    const prev = rows;
+    const renumbered = next.map((r, i) => ({ ...r, sort_order: i + 1 }));
+    const oldOrder = new Map(prev.map((r) => [r.id, r.sort_order]));
+    const changed = renumbered.filter(
+      (r) => oldOrder.get(r.id) !== r.sort_order,
+    );
+    if (changed.length === 0) return;
+    setRows(renumbered);
+    setSavingOrder(true);
+    const results = await Promise.all(
+      changed.map((r) =>
+        supabase
+          .from("shop_categories")
+          .update({ sort_order: r.sort_order })
+          .eq("id", r.id),
+      ),
+    );
+    setSavingOrder(false);
+    const failed = results.find((x) => x.error);
+    if (failed) {
+      setRows(prev);
+      emitCBToast("error", "Category", shopErr(failed.error));
+    } else {
+      emitCBToast("success", "Category", "Order saved");
+    }
+  }
+  function moveBefore(fromId, toId) {
+    if (!fromId || !toId || fromId === toId) return;
+    const from = rows.findIndex((r) => r.id === fromId);
+    const to = rows.findIndex((r) => r.id === toId);
+    if (from < 0 || to < 0) return;
+    const next = rows.slice();
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    persistOrder(next);
+  }
+  function step(id, dir) {
+    const i = rows.findIndex((r) => r.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= rows.length) return;
+    const next = rows.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    persistOrder(next);
+  }
 
   async function toggle(row) {
     if (row.is_active && (counts[row.id] || 0) > 0) {
@@ -65550,13 +65690,83 @@ function ShopCategoriesPage() {
         </div>
         <div className={SHOP_CARD}>
           <ShopTable
-            heads={["Name", "Slug", "Products", "Order", "Status", ""]}
+            heads={[
+              canManage ? "Move" : "",
+              "Name",
+              "Slug",
+              "Products",
+              "Order",
+              "Status",
+              "",
+            ]}
             loading={loading && rows.length === 0}
             error={error}
             empty={rows.length === 0 ? "No categories yet." : ""}
           >
-            {rows.map((r) => (
-              <tr key={r.id}>
+            {rows.map((r, idx) => (
+              <tr
+                key={r.id}
+                draggable={canManage && !savingOrder}
+                onDragStart={(e) => {
+                  setDragId(r.id);
+                  e.dataTransfer.effectAllowed = "move";
+                  e.dataTransfer.setData("text/plain", String(r.id));
+                }}
+                onDragOver={(e) => {
+                  if (!dragId) return;
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = "move";
+                  if (overId !== r.id) setOverId(r.id);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  moveBefore(dragId, r.id);
+                  setDragId(null);
+                  setOverId(null);
+                }}
+                onDragEnd={() => {
+                  setDragId(null);
+                  setOverId(null);
+                }}
+                className={`${dragId === r.id ? "opacity-40" : ""} ${
+                  overId === r.id && dragId && dragId !== r.id
+                    ? "bg-blue-50 shadow-[inset_0_2px_0_0_#2563eb]"
+                    : ""
+                }`}
+              >
+                <td className="px-2 py-3">
+                  {canManage && (
+                    <div className="flex items-center gap-1">
+                      <span
+                        className="cursor-grab text-slate-400 active:cursor-grabbing"
+                        title="Drag to reorder"
+                        aria-hidden="true"
+                      >
+                        <Icons.GripVertical size={18} />
+                      </span>
+                      <div className="flex flex-col">
+                        <button
+                          type="button"
+                          aria-label={`Move ${r.name} up`}
+                          disabled={idx === 0 || savingOrder}
+                          onClick={() => step(r.id, -1)}
+                          className="rounded p-0.5 text-slate-500 hover:bg-slate-100 hover:text-blue-600 disabled:opacity-30"
+                        >
+                          <Icons.ChevronUp size={16} />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`Move ${r.name} down`}
+                          disabled={idx === rows.length - 1 || savingOrder}
+                          onClick={() => step(r.id, 1)}
+                          className="rounded p-0.5 text-slate-500 hover:bg-slate-100 hover:text-blue-600 disabled:opacity-30"
+                        >
+                          <Icons.ChevronDown size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </td>
                 <td className="px-4 py-3 font-semibold text-slate-800">
                   {r.name}
                   {r.description && (
@@ -65594,6 +65804,13 @@ function ShopCategoriesPage() {
               </tr>
             ))}
           </ShopTable>
+          {canManage && (
+            <p className="mt-3 text-xs text-slate-500">
+              Drag a row (or use ▲ ▼) to put related categories next to each
+              other, e.g. Men Clothing → Women Clothing. Customers see the same
+              order in the shop.
+            </p>
+          )}
           <p className="mt-3 text-xs text-slate-400">
             Categories that still contain products cannot be deleted —
             deactivate them instead.
@@ -70384,6 +70601,42 @@ html.cb-admin-dark :is(.text-sky-600,.text-sky-700,.text-sky-800,.text-sky-900){
 html.cb-admin-dark :is(.border-sky-100,.border-sky-200){border-color:rgba(14,165,233,.35)!important;}
 html.cb-admin-dark .bg-slate-100.text-slate-600,html.cb-admin-dark .bg-slate-100.text-slate-700{background-color:rgba(148,163,184,.18)!important;color:#cbd5e1!important;}
 html.cb-admin-dark .cb-app main table td :is(.rounded-full,.rounded-md){border:1px solid transparent;}
+
+/* ===== Customer app: full-width responsive (tablet / desktop) =====
+   Phones are untouched (<640px). From 640px up the layout uses the whole
+   screen instead of a 448px column. Tune --jz-c-max for the widest page. */
+.jz-customer{--jz-c-max:1120px;--jz-c-gutter:28px;}
+@media(min-width:640px){
+ .jz-customer .jz-customer-content{max-width:var(--jz-c-max)!important;}
+ .jz-customer .jz-customer-content .max-w-md:not(.rounded-t-3xl){max-width:none!important;}
+ .jz-customer header.bg-blue-600{padding-inline:var(--jz-c-gutter);padding-bottom:26px;}
+ .jz-customer header.bg-blue-600 h1{font-size:22px;}
+ .jz-customer .jz-customer-content>div.px-4{padding-inline:var(--jz-c-gutter);}
+ .jz-customer .jz-customer-content>div.pt-4{padding-top:22px;}
+ .jz-customer .jz-customer-content>div.space-y-3>*+*{margin-top:16px;}
+ .jz-customer .jz-shop-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;}
+ .jz-customer .jz-bottom-nav{max-width:min(640px,calc(100% - 32px));}
+ .jz-customer .jz-bottom-nav .max-w-md{max-width:none;}
+ .jz-customer .jz-bottom-nav a{min-height:66px;font-size:12.5px;}
+ .jz-customer .jz-bottom-nav a svg{width:24px;height:24px;}
+ .jz-customer .jz-toast{bottom:calc(112px + env(safe-area-inset-bottom));}
+}
+@media(min-width:1000px){
+ .jz-customer .jz-shop-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:20px;}
+ .jz-customer{--jz-c-gutter:36px;}
+}
+@media(min-width:1000px) and (min-height:1px){
+ .jz-customer .jz-bottom-nav{max-width:720px;}
+}
+
+/* Customer loading skeleton follows the device (same breakpoints as the real pages) */
+@media(min-width:640px){
+ .jz-customer .jz-skel-top{height:92px;}
+ .jz-customer .jz-skel-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;}
+}
+@media(min-width:1000px){
+ .jz-customer .jz-skel-list{grid-template-columns:repeat(3,minmax(0,1fr));}
+}
 
 `;
 
