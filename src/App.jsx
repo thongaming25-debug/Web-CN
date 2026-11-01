@@ -35873,30 +35873,83 @@ const CustomerApp = (() => {
   function ShopCGallery({ images, index, onIndex, alt }) {
     const ref = useRef(null);
     const raf = useRef(0);
+    const fromSwipe = useRef(-1); // index the user's own swipe just produced
+    // A thumbnail tap must land exactly on the chosen photo. Sliding through
+    // every photo in between (and scroll-snap pulling it past the target) looked
+    // like the gallery "ran over" the photo, so:
+    //  - neighbour photo  -> short smooth slide
+    //  - farther photo    -> instant jump + quick fade (nothing flies past)
+    // Snap is switched off during the move and restored once it has landed, and
+    // scroll events are ignored meanwhile so they cannot overwrite the index.
+    const glide = useRef({ until: 0, target: 0 });
+    const timer = useRef(0);
+    const endGlide = () => {
+      clearTimeout(timer.current);
+      glide.current = { until: 0, target: 0 };
+      const el = ref.current;
+      if (el) el.style.scrollSnapType = "";
+    };
     useEffect(() => {
       const el = ref.current;
       if (!el || !el.clientWidth) return;
+      if (fromSwipe.current === index) {
+        fromSwipe.current = -1; // the user is already there by swiping
+        return;
+      }
       const target = index * el.clientWidth;
-      if (Math.abs(el.scrollLeft - target) > 4 && el.scrollTo)
-        el.scrollTo({
-          left: target,
-          behavior: shopCReduced() ? "auto" : "smooth",
+      if (Math.abs(el.scrollLeft - target) <= 4 || !el.scrollTo) return;
+      const from = Math.round(el.scrollLeft / el.clientWidth);
+      const near = Math.abs(index - from) <= 1 && !shopCReduced();
+      clearTimeout(timer.current);
+      el.style.scrollSnapType = "none";
+      glide.current = { until: Date.now() + (near ? 700 : 300), target };
+      el.scrollTo({ left: target, behavior: near ? "smooth" : "auto" });
+      if (!near && el.animate)
+        el.animate([{ opacity: 0.35 }, { opacity: 1 }], {
+          duration: 220,
+          easing: "ease-out",
         });
+      timer.current = setTimeout(
+        () => {
+          const e2 = ref.current;
+          if (e2) {
+            e2.scrollLeft = target; // make sure we end exactly on the photo
+            e2.style.scrollSnapType = "";
+          }
+          glide.current = { until: 0, target: 0 };
+        },
+        near ? 450 : 120,
+      );
+      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [index, images.length]);
+    useEffect(() => () => clearTimeout(timer.current), []);
     const onScroll = () => {
+      const g = glide.current;
+      if (g.until > Date.now()) {
+        const el = ref.current;
+        if (el && Math.abs(el.scrollLeft - g.target) <= 3) endGlide();
+        return;
+      }
       cancelAnimationFrame(raf.current);
       raf.current = requestAnimationFrame(() => {
         const el = ref.current;
         if (!el || !el.clientWidth) return;
         const i = Math.round(el.scrollLeft / el.clientWidth);
-        if (i !== index && i >= 0 && i < images.length) onIndex(i);
+        if (i !== index && i >= 0 && i < images.length) {
+          fromSwipe.current = i;
+          onIndex(i);
+        }
       });
     };
+    // A real finger / mouse on the photo always wins over a running glide.
+    const stopGlide = () => endGlide();
     return (
       <div className="relative">
         <div
           ref={ref}
           onScroll={onScroll}
+          onTouchStart={stopGlide}
+          onPointerDown={stopGlide}
           className="cb-shop-snap flex overflow-x-auto"
         >
           {(images.length ? images : [null]).map((u, i) => (
