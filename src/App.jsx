@@ -29694,6 +29694,9 @@ const CustomerApp = (() => {
     // false until the wallet has been fetched once — the Wallet page shows a
     // skeleton instead of a fake "$0.00" / empty list.
     const [walletReady, setWalletReady] = useState(false);
+    // false until the shipment list has been fetched once (skeleton, not a
+    // blank / "No shipments" flash).
+    const [shipsReady, setShipsReady] = useState(!supabase);
     // Feature permissions follow the signed-in customer's role.
     useEffect(() => {
       setCurrentCustomerRole(me?.customer_role);
@@ -29836,6 +29839,7 @@ const CustomerApp = (() => {
                   },
           })),
       );
+      setShipsReady(true);
     };
     const loadWallet = async () => {
       const { data, error } = await supabase.rpc("customer_wallet");
@@ -30537,6 +30541,7 @@ const CustomerApp = (() => {
       markAllRead,
       wallet,
       walletReady,
+      shipsReady,
       refreshMoney,
       payShipping,
       payCnOrder,
@@ -31235,16 +31240,16 @@ const CustomerApp = (() => {
     const tabs = [
       [P(), Home, tr("Home", "ទំព័រដើម"), true],
       [
-        P("/shipments"),
-        Package,
-        tr("Shipments", "ដឹកជញ្ជូន"),
-        feat("tab_shipments"),
-      ],
-      [
         P("/cn-orders"),
         Icons.ShoppingCart,
         tr("CN Orders", "CN Orders"),
         feat("tab_cn_orders"),
+      ],
+      [
+        P("/shipments"),
+        Package,
+        tr("Shipments", "ដឹកជញ្ជូន"),
+        feat("tab_shipments"),
       ],
       [P("/shop"), Icons.Store, tr("Shop", "ហាង"), feat("tab_shop")],
       [
@@ -31413,7 +31418,35 @@ const CustomerApp = (() => {
     );
   }
 
-  function Row({ s, cover }) {
+  // Placeholder card with the same layout as <Row> while shipments load.
+  function ShipRowSkeleton({ count = 4 }) {
+    return (
+      <SkeletonRegion className="space-y-3" label="Loading shipments...">
+        {Array.from({ length: count }).map((_, i) => (
+          <Card key={i} className="p-3.5 flex items-center gap-3">
+            <Skeleton
+              className="w-11 h-11 rounded-xl shrink-0"
+              delay={i * 90}
+            />
+            <div className="flex-1 min-w-0 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <Skeleton className="h-4 w-36" delay={i * 90} />
+                <Skeleton
+                  className="h-6 w-24 rounded-full"
+                  delay={i * 90 + 30}
+                />
+              </div>
+              <Skeleton className="h-3 w-40" delay={i * 90 + 60} />
+              <Skeleton className="h-3 w-3/5" delay={i * 90 + 90} />
+              <Skeleton className="h-2.5 w-28" delay={i * 90 + 120} />
+            </div>
+          </Card>
+        ))}
+      </SkeletonRegion>
+    );
+  }
+
+  function Row({ s, cover, coverLoading = false }) {
     const nav = useNavigate();
     const { tr } = useApp();
     return (
@@ -31436,6 +31469,8 @@ const CustomerApp = (() => {
               </span>
             )}
           </div>
+        ) : coverLoading ? (
+          <Skeleton className="w-11 h-11 rounded-xl shrink-0" />
         ) : (
           <Icon i={Package} />
         )}
@@ -31791,7 +31826,7 @@ const CustomerApp = (() => {
 
   // ---------- Shipments list ----------
   function Shipments() {
-    const { ships, airShips, tr } = useApp();
+    const { ships, airShips, tr, shipsReady } = useApp();
     const [t, setT] = useState("All");
     // Customer shipment filters use the same customer-facing status names as
     // CN Order Table / TK tracking. The underlying numeric TK step stays intact.
@@ -31809,10 +31844,21 @@ const CustomerApp = (() => {
       peekCustomerTkCovers(list.map((x) => x.tk)),
     );
     const coverKey = list.map((x) => x.tk).join(",");
+    // Thumbnails are signed after the rows arrive: show a shimmer square (not
+    // the generic box icon) until that first fetch has finished.
+    const [coversReady, setCoversReady] = useState(
+      () =>
+        !list.length || list.every((x) => peekCustomerTkCovers([x.tk])[x.tk]),
+    );
     useEffect(() => {
       let alive = true;
       loadCustomerTkCovers(list.map((x) => x.tk)).then(
-        (c) => alive && setCovers(c),
+        (c) => {
+          if (!alive) return;
+          setCovers(c);
+          setCoversReady(true);
+        },
+        () => alive && setCoversReady(true),
       );
       return () => {
         alive = false;
@@ -31834,10 +31880,14 @@ const CustomerApp = (() => {
               </button>
             ))}
           </div>
-          {list.map((s) => (
-            <Row key={s.tk} s={s} cover={covers[s.tk]} />
-          ))}
-          {!list.length && (
+          {!shipsReady && <ShipRowSkeleton />}
+          {shipsReady &&
+            list.map((s) => (
+              <div key={s.tk} className="cb-sk-in">
+                <Row s={s} cover={covers[s.tk]} coverLoading={!coversReady} />
+              </div>
+            ))}
+          {shipsReady && !list.length && (
             <p className="text-center text-sm text-slate-400 py-10">
               {tr(
                 "No shipments in this status.",
