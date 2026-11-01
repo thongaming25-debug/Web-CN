@@ -11872,7 +11872,14 @@ function DataTable({
   const showError = !loading && !!error;
   const showEmpty = !loading && !error && rows.length === 0;
   return (
-    <div className="overflow-x-auto">
+    <div
+      className="cb-table-scroll overflow-x-auto"
+      tabIndex={0}
+      role="region"
+      aria-label={
+        caption || "Data table — scroll horizontally for more columns"
+      }
+    >
       <table className="w-full text-sm">
         {caption && <caption className="sr-only">{caption}</caption>}
         <thead>
@@ -11925,7 +11932,7 @@ function DataTable({
                 {columns.map((col) => (
                   <td
                     key={col.key}
-                    className={`px-4 py-3 whitespace-nowrap text-ink-800 ${col.numeric || col.align ? colAlignClass(col) : ""}`}
+                    className={`px-4 py-3 ${col.wrap || /(?:name|address|remark|description)/i.test(col.key) ? "cb-cell-wrap" : "whitespace-nowrap"} text-ink-800 ${col.numeric || col.align ? colAlignClass(col) : ""}`}
                   >
                     {col.render ? (
                       col.render(row)
@@ -12052,12 +12059,8 @@ function InfoGrid({ items }) {
     <dl className="grid grid-cols-2 gap-x-4 gap-y-3.5">
       {items.map((item) => (
         <div key={item.label} className={item.span ? "col-span-2" : ""}>
-          <dt className="text-[11px] uppercase tracking-wide text-ink-600/40 font-semibold">
-            {item.label}
-          </dt>
-          <dd className="text-sm text-ink-900 font-medium mt-0.5">
-            {item.value ?? "—"}
-          </dd>
+          <dt className="cb-info-label">{item.label}</dt>
+          <dd className="cb-info-value mt-1">{item.value ?? "—"}</dd>
         </div>
       ))}
     </dl>
@@ -13815,7 +13818,10 @@ function Layout() {
         <SlaAirNotificationSync />
         <Topbar title={title} onMenuClick={() => setSidebarOpen(true)} />
         <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden overscroll-x-none p-4 lg:p-6 xl:p-7">
-          <div key={pathname} className="cb-page-enter">
+          <div
+            key={pathname}
+            className={`cb-page-enter${pathname === "/settings" || pathname === "/shop/settings" ? " is-settings" : ""}`}
+          >
             <Outlet />
           </div>
         </main>
@@ -18792,7 +18798,7 @@ function finPurchaseCost(row) {
 // flagged `grand` is the total of the group and is highlighted.
 function FinancialGroup({ icon, title, items, note }) {
   return (
-    <section className="cb-surface overflow-hidden rounded-2xl border border-mist-100">
+    <section className="jz-fin-group cb-surface overflow-hidden rounded-2xl border border-mist-100">
       <div className="flex items-center gap-3 border-b border-mist-100 px-4 py-3.5 sm:px-5">
         <Icon name={icon} size={18} className="text-ink-800" />
         <h2 className="font-semibold text-ink-900">{title}</h2>
@@ -18836,13 +18842,13 @@ function FinancialStat({ label, value, detail, tone = "blue", icon }) {
     slate: "bg-slate-100 text-slate-600 ring-slate-200",
   };
   return (
-    <div className="cb-surface min-w-0 rounded-2xl border border-mist-100 p-4 sm:p-5 shadow-sm">
+    <div className="jz-fin-stat cb-surface min-w-0 rounded-2xl border border-mist-100 p-4 sm:p-5 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <p className="text-xs sm:text-sm font-medium text-ink-600/70">
           {label}
         </p>
         <span
-          className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl ring-1 ${tones[tone] || tones.blue}`}
+          className={`jz-fin-icon grid h-9 w-9 shrink-0 place-items-center rounded-xl ring-1 ${tones[tone] || tones.blue}`}
         >
           <Icon name={icon || "Wallet"} size={17} />
         </span>
@@ -30556,7 +30562,7 @@ const CustomerApp = (() => {
       <Ctx.Provider value={v}>
         <div
           lang={lang}
-          className={`${lang === "km" ? "cb-km" : "cb-en"}${dark ? " cb-cust-dark" : ""}`}
+          className={`jz-customer ${lang === "km" ? "cb-km" : "cb-en"}${dark ? " cb-cust-dark" : ""}`}
           style={FONTS[lang]}
         >
           <style>{`.cb-km *{line-height:1.6 !important}.cb-km input,.cb-km select{line-height:normal !important}`}</style>
@@ -31275,7 +31281,7 @@ const CustomerApp = (() => {
           WebkitTapHighlightColor: "transparent",
         }}
       >
-        <div className="max-w-md mx-auto pb-24 relative">
+        <div className="jz-customer-content max-w-md mx-auto pb-24 relative">
           {supabase && customerFeatureStore.serverStatus === "error" && (
             <div
               role="alert"
@@ -31306,13 +31312,13 @@ const CustomerApp = (() => {
           )}
           <Outlet />
           {toast && (
-            <div className="fixed bottom-24 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-sm px-4 py-2 rounded-full shadow-lg z-50">
+            <div className="jz-toast fixed bottom-24 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-sm px-4 py-2 rounded-full shadow-lg z-50">
               {toast}
             </div>
           )}
         </div>
         <nav
-          className="fixed bottom-0 inset-x-0 bg-white border-t border-slate-100 z-40"
+          className="jz-bottom-nav fixed bottom-0 inset-x-0 bg-white border-t border-slate-100 z-40"
           style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
         >
           <div
@@ -65181,6 +65187,8 @@ function ShopField({ label, hint, children, className = "" }) {
 const shopModalStack = [];
 function ShopModal({ title, onClose, children, footer, wide }) {
   const token = useRef({});
+  const dialogRef = useRef(null);
+  const titleId = React.useId();
   useEffect(() => {
     const t = token.current;
     shopModalStack.push(t);
@@ -65205,6 +65213,50 @@ function ShopModal({ title, onClose, children, footer, wide }) {
       document.body.style.overflow = prev;
     };
   }, [onClose]);
+  useEffect(() => {
+    const previous = document.activeElement;
+    const dialog = dialogRef.current;
+    const focusable = () =>
+      Array.from(
+        dialog.querySelectorAll(
+          'button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]',
+        ),
+      ).filter((el) => el.getClientRects().length);
+    (focusable()[0] || dialog).focus();
+    const containFocus = (event) => {
+      if (
+        event.key !== "Tab" ||
+        shopModalStack[shopModalStack.length - 1] !== token.current
+      )
+        return;
+      const elements = focusable();
+      const first = elements[0],
+        last = elements[elements.length - 1];
+      if (!first) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      if (
+        event.shiftKey &&
+        (document.activeElement === first || document.activeElement === dialog)
+      ) {
+        event.preventDefault();
+        last.focus();
+      } else if (
+        !event.shiftKey &&
+        (document.activeElement === last || document.activeElement === dialog)
+      ) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    dialog.addEventListener("keydown", containFocus);
+    return () => {
+      dialog.removeEventListener("keydown", containFocus);
+      if (previous?.isConnected) previous.focus();
+    };
+  }, []);
   return createPortal(
     <div
       className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[3px]"
@@ -65212,27 +65264,32 @@ function ShopModal({ title, onClose, children, footer, wide }) {
       role="presentation"
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
+        aria-labelledby={titleId}
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
-        className={`flex max-h-[92vh] w-full flex-col rounded-2xl bg-white shadow-2xl ${
+        className={`cb-premium-dialog flex w-full flex-col ${
           wide ? "max-w-3xl" : "max-w-lg"
         }`}
       >
-        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-          <h2 className="text-base font-extrabold text-slate-900">{title}</h2>
+        <div className="cb-premium-dialog-head flex items-center justify-between gap-4 border-b px-5 py-4">
+          <h2 id={titleId}>{title}</h2>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-100"
+            className="cb-premium-dialog-close shrink-0"
           >
             <Icons.X size={18} />
           </button>
         </div>
-        <div className="overflow-y-auto px-5 py-4">{children}</div>
+        <div className="cb-premium-dialog-body overflow-y-auto px-5 py-4">
+          {children}
+        </div>
         {footer && (
-          <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
+          <div className="cb-premium-dialog-foot flex justify-end gap-3 border-t px-5 py-4">
             {footer}
           </div>
         )}
@@ -65361,27 +65418,28 @@ function ShopGate({ perm, title, children }) {
 
 function ShopTable({ heads, loading, error, empty, children, minW = 760 }) {
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200">
+    <div
+      className="cb-table-scroll overflow-x-auto rounded-xl border border-slate-200"
+      tabIndex={0}
+      role="region"
+      aria-label="Shop data table — scroll horizontally for more columns"
+    >
       <table className="w-full text-sm" style={{ minWidth: minW }}>
         <thead>
           <tr className="bg-slate-50 text-left text-[11px] font-bold uppercase tracking-wider text-slate-500">
             {heads.map((h, i) => (
-              <th key={i} className="px-4 py-3">
+              <th scope="col" key={i} className="px-4 py-3">
                 {h}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-100">
+        <tbody className="divide-y divide-slate-100" aria-busy={loading}>
           {loading && (
-            <tr>
-              <td
-                colSpan={heads.length}
-                className="px-4 py-10 text-center text-slate-400"
-              >
-                Loading…
-              </td>
-            </tr>
+            <SkeletonTableRows
+              columns={heads.map((_, i) => ({ key: i }))}
+              rows={5}
+            />
           )}
           {!loading && error && (
             <tr>
@@ -69824,7 +69882,7 @@ const CB_DESIGN_CSS = `
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 :root{--cb-primary:#2563eb;--cb-primary-dark:#1d4ed8;--cb-navy:#0f1f3d;--cb-bg:#f4f7fb;--cb-border:#e5eaf2;--cb-text:#10213f;--cb-muted:#6b7b96;}
-html,body,#root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+html,body,#root{font-family:Inter,"Noto Sans Khmer","Khmer OS Battambang",ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
 body{background:var(--cb-bg);color:var(--cb-text);}
 /* No elastic page bounce: it shifts the page under fixed (blurred) overlays and leaves an unblurred strip at the top. */
 html,body{overscroll-behavior:none;}
@@ -69901,7 +69959,7 @@ html,body{overscroll-behavior:none;}
    permissions, Supabase calls, and business logic are intentionally untouched.
    ================================================================ */
 :root{
-  --jz-font-sans:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  --jz-font-sans:Inter,"Noto Sans Khmer","Khmer OS Battambang",ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
   --jz-font-xs:11px; --jz-font-sm:12px; --jz-font-body:13px;
   --jz-font-control:13px; --jz-font-section:16px; --jz-font-page:24px;
   --jz-leading-tight:1.25; --jz-leading-normal:1.5;
@@ -69940,142 +69998,66 @@ html.cb-admin-dark .cb-app :is(input,select,textarea){color:var(--cbx-text,#e2e8
   .cb-app :is(.cb-table-row,[role="row"],.cb-input,.cbx-search){transition:none!important;}
 }
 
-/* ================= Smooth motion layer ================= */
-:root{--cb-ease:cubic-bezier(.22,.8,.24,1);}
-
-/* Page change: soft fade + rise. fill-mode "backwards" => no transform is
-   left behind afterwards (a lingering transform would break fixed modals). */
-@keyframes cb-page-in{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
-.cb-page-enter{animation:cb-page-in .34s var(--cb-ease) backwards;}
-
-/* Cards / sections / table rows glide in right after the page appears */
-@keyframes cb-rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-.cb-page-enter :is(.cb-surface,.cb-card,.cbx-card){animation:cb-rise .42s var(--cb-ease) backwards;}
-.cb-page-enter :is(.cb-surface,.cb-card,.cbx-card):nth-child(2){animation-delay:.04s;}
-.cb-page-enter :is(.cb-surface,.cb-card,.cbx-card):nth-child(3){animation-delay:.08s;}
-.cb-page-enter :is(.cb-surface,.cb-card,.cbx-card):nth-child(4){animation-delay:.12s;}
-.cb-page-enter :is(.cb-surface,.cb-card,.cbx-card):nth-child(n+5){animation-delay:.16s;}
-.cb-page-enter tbody tr{animation:cb-rise .32s var(--cb-ease) backwards;}
-.cb-page-enter tbody tr:nth-child(2){animation-delay:.02s;}
-.cb-page-enter tbody tr:nth-child(3){animation-delay:.04s;}
-.cb-page-enter tbody tr:nth-child(4){animation-delay:.06s;}
-.cb-page-enter tbody tr:nth-child(5){animation-delay:.08s;}
-.cb-page-enter tbody tr:nth-child(6){animation-delay:.10s;}
-.cb-page-enter tbody tr:nth-child(7){animation-delay:.12s;}
-.cb-page-enter tbody tr:nth-child(8){animation-delay:.14s;}
-.cb-page-enter tbody tr:nth-child(n+9){animation-delay:.16s;}
-
-/* Modals / popups: backdrop fades, card pops in */
-@keyframes cb-backdrop-in{from{opacity:0}to{opacity:1}}
-@keyframes cb-modal-pop{from{opacity:0;transform:translateY(14px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
-@keyframes cb-sheet-up{from{opacity:0;transform:translateY(28px)}to{opacity:1;transform:translateY(0)}}
-.fixed.inset-0:is([class*="bg-slate-9"],[class*="bg-ink-900"]):not([class*="transition-opacity"]){animation:cb-backdrop-in .2s ease-out backwards;}
-.fixed.inset-0:is([class*="bg-slate-9"],[class*="bg-ink-900"]):not([class*="transition-opacity"]):not(.items-end)>*{animation:cb-modal-pop .28s var(--cb-ease) backwards;}
-.fixed.inset-0.items-end:is([class*="bg-slate-9"],[class*="bg-ink-900"])>*{animation:cb-sheet-up .3s var(--cb-ease) backwards;}
-
-/* Dropdown menus */
-@keyframes cb-menu-in{from{opacity:0;transform:translateY(-6px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
-.cbx-menu{animation:cb-menu-in .16s var(--cb-ease) backwards;transform-origin:top right;}
-
-/* Buttons & links: smooth hover + tactile press */
-.cb-app :is(button,a,[role="button"],select,.cb-card,.cb-surface){transition:background-color .18s ease,border-color .18s ease,color .18s ease,box-shadow .22s ease,transform .18s var(--cb-ease),opacity .18s ease;}
-.cb-app :is(button,[role="button"]):not(:disabled):active{transform:scale(.96);}
-.cb-app button:disabled{transition:opacity .2s ease;}
-.cb-app tbody tr{transition:background-color .15s ease;}
-.cb-app :is(.cbx-nav-link,.cbx-icon-btn,.cbx-user-pill){transition:background-color .18s ease,color .18s ease,transform .18s var(--cb-ease);}
-.cb-app .cbx-nav-link:not(.is-active):hover{transform:translateX(2px);}
-
-/* Smooth scrolling inside the app */
-.cb-app main{scroll-behavior:smooth;}
-
-/* ================= Comfortable typography (larger, clearer, roomier) =================
-   Scoped to the admin shell (.cb-app) + the shared CN modal. Presentation only. */
-:root{--jz-font-xs:12.5px;--jz-font-sm:13.5px;--jz-font-body:14.5px;--jz-font-control:14.5px;--jz-font-section:18px;--jz-font-page:28px;}
-.cb-app{font-size:14.5px;line-height:1.55;}
-:is(.cb-app,.cb-modal-backdrop) .text-xs{font-size:13px;line-height:1.5;}
-:is(.cb-app,.cb-modal-backdrop) .text-sm{font-size:14.5px;line-height:1.55;}
-:is(.cb-app,.cb-modal-backdrop) .text-base{font-size:16px;}
-:is(.cb-app,.cb-modal-backdrop) .text-lg{font-size:18.5px;}
-:is(.cb-app,.cb-modal-backdrop) [class~="text-[9px]"]{font-size:10.5px;}
-:is(.cb-app,.cb-modal-backdrop) [class~="text-[10px]"]{font-size:11.5px;}
-:is(.cb-app,.cb-modal-backdrop) [class~="text-[10.5px]"]{font-size:12px;}
-:is(.cb-app,.cb-modal-backdrop) [class~="text-[11px]"]{font-size:12.5px;}
-:is(.cb-app,.cb-modal-backdrop) [class~="text-[11.5px]"]{font-size:13px;}
-:is(.cb-app,.cb-modal-backdrop) [class~="text-[12px]"]{font-size:13.5px;}
-:is(.cb-app,.cb-modal-backdrop) [class~="text-[13px]"]{font-size:14.5px;}
-:is(.cb-app,.cb-modal-backdrop) [class~="text-[14px]"]{font-size:15.5px;}
-:is(.cb-app,.cb-modal-backdrop) [class~="text-[15px]"]{font-size:16.5px;}
-.cb-app :is(button,[role="button"],input,select,textarea){font-size:14.5px;}
-.cb-app :is(input,select,textarea){min-height:42px;}
-.cb-modal-backdrop :is(input,select,textarea){font-size:14.5px;min-height:42px;}
-
-/* Tables: clearer header, readable cells, taller rows */
-.cb-app :is(th,[role="columnheader"]){font-size:12px;font-weight:650;letter-spacing:.04em;}
-.cb-app main table th{padding-top:14px;padding-bottom:14px;}
-.cb-app :is(td,[role="cell"]){font-size:14.5px;line-height:1.5;font-weight:450;}
-.cb-app main table td{padding-top:16px;padding-bottom:16px;}
-.cb-app main table td :is(.font-mono){font-size:14px;}
-
-/* Sidebar / topbar */
-.cb-app .cbx-nav-link{font-size:14.5px;}
-.cb-app :is(h1,.cb-page-title,.cbx-page-title){font-size:28px;}
-
-/* Muted text was too faint (text-ink-600/40..70). Lift contrast, keep hierarchy. */
-html:not(.cb-admin-dark) :is(.cb-app,.cb-modal-backdrop) :is([class~="text-ink-600/35"],[class~="text-ink-600/40"],[class~="text-ink-600/45"]){color:rgba(71,85,105,.66)!important;}
-html:not(.cb-admin-dark) :is(.cb-app,.cb-modal-backdrop) :is([class~="text-ink-600/50"],[class~="text-ink-600/55"]){color:rgba(71,85,105,.76)!important;}
-html:not(.cb-admin-dark) :is(.cb-app,.cb-modal-backdrop) :is([class~="text-ink-600/60"],[class~="text-ink-600/65"],[class~="text-ink-600/70"]){color:rgba(51,65,85,.86)!important;}
-html:not(.cb-admin-dark) :is(.cb-app,.cb-modal-backdrop) [class~="text-slate-400"]{color:#7b8aa3;}
-html:not(.cb-admin-dark) :is(.cb-app,.cb-modal-backdrop) [class~="text-slate-500"]{color:#56657d;}
-
-@media(max-width:767px){
-  :root{--jz-font-page:23px;--jz-font-section:16px;}
-  .cb-app :is(h1,.cb-page-title,.cbx-page-title){font-size:23px;}
-  .cb-app main table td{padding-top:12px;padding-bottom:12px;}
-}
-
-@media(prefers-reduced-motion:reduce){
-  .cb-page-enter,.cb-page-enter *,.cbx-menu,.fixed.inset-0,.fixed.inset-0>*{animation:none!important;}
-  .cb-app *{transition-duration:.01ms!important;}
-  .cb-app main{scroll-behavior:auto;}
-}
-
-
-/* ================= Clean Enterprise look — Phase 1 =================
-   Presentation only (fonts / icons / sidebar / cards / tables).
-   Inspired by a standard logistics-admin layout: larger thin-stroke icons,
-   roomy sidebar, soft bordered cards, grey table header band, tall rows. */
-:root{--cbx-side-w:288px;}
-
-/* Icons: lighter stroke so larger icons do not look heavy */
-.cb-app svg.lucide{stroke-width:1.7;}
-.cb-app .cbx-nav-link svg{width:22px;height:22px;stroke-width:1.55;flex:none;}
-.cb-app .cbx-nav-link{gap:14px;padding:11px 14px;font-size:15px;font-weight:500;line-height:1.3;border-radius:10px;}
+/* ================= Unified admin presentation ================= */
+:root{--jz-font-xs:12px;--jz-font-sm:13px;--jz-font-body:14px;--jz-font-control:14px;--jz-font-section:18px;--jz-font-page:26px;--cbx-side-w:264px;}
+.cb-app{height:100dvh;min-height:0;background:var(--cbx-page);font-size:14px;line-height:1.6;}
+.cb-app main{padding:24px;scrollbar-gutter:stable;}
+.cb-page-enter{width:100%;min-width:0;margin-inline:auto;}
+.cb-page-enter.is-settings{max-width:1120px;}
+.cb-app :is(h1,.cb-page-title,.cbx-page-title){font-size:26px;line-height:1.35;letter-spacing:-.02em;}
+.cb-app :is(h2,h3){line-height:1.45;}
+:is(.cb-app,.cb-modal-backdrop,.cb-premium-dialog) .text-xs{font-size:12px;line-height:1.6;}
+:is(.cb-app,.cb-modal-backdrop,.cb-premium-dialog) .text-sm{font-size:14px;line-height:1.6;}
+:is(.cb-app,.cb-modal-backdrop,.cb-premium-dialog) :is([class~="text-[10px]"],[class~="text-[11px]"],[class~="text-[11.5px]"]){font-size:12px;line-height:1.55;}
+:is(.cb-app,.cb-modal-backdrop,.cb-premium-dialog) :is([class~="text-ink-600/35"],[class~="text-ink-600/40"],[class~="text-ink-600/45"],[class~="text-ink-600/50"],[class~="text-ink-600/55"]){color:var(--cbx-muted)!important;}
+.cb-app :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]),select,textarea){min-height:42px;border-radius:10px;}
+.cb-app input:is([type="checkbox"],[type="radio"]){min-height:0;accent-color:var(--cbx-blue);}
+.cb-app :is(button,a,input,select,textarea):focus-visible,.cb-premium-dialog :is(button,a,input,select,textarea):focus-visible{outline:2px solid var(--cbx-blue);outline-offset:3px;}
+.cb-app .cbx-btn{min-height:40px;height:auto;padding:9px 14px;font-size:14px;}
+.cb-app .cbx-nav-link{font-size:14px;font-weight:500;gap:12px;padding:11px 12px;}
 .cb-app .cbx-nav-link.is-active{font-weight:600;}
-.cb-app .cbx-side-group{font-size:13px;font-weight:500;letter-spacing:0;text-transform:none;padding-top:18px;padding-bottom:6px;}
-
-/* Typography: slightly larger, darker body text; stronger page title */
-.cb-app{font-size:15px;}
-.cb-app :is(h1,.cb-page-title,.cbx-page-title){font-size:32px;font-weight:700;letter-spacing:-.03em;}
-.cb-app :is(td,[role="cell"]){font-size:15px;font-weight:450;}
-html:not(.cb-admin-dark) .cb-app main table td{color:#1f2937;}
-
-/* Cards: flat, thin border, generous radius */
-html:not(.cb-admin-dark) .cb-app :is(.cb-surface,.cb-card,.cbx-card){border:1px solid #e8edf4;border-radius:16px;box-shadow:0 1px 2px rgba(16,24,40,.04)!important;}
-.cb-app .cb-stat:hover{transform:none;box-shadow:0 4px 14px rgba(16,24,40,.06)!important;}
-
-/* Tables: grey header band with rounded ends, taller rows, soft dividers */
-html:not(.cb-admin-dark) .cb-app main table thead tr{background:#f6f8fb;border-bottom-color:transparent!important;}
-html:not(.cb-admin-dark) .cb-app main table thead th{background:#f6f8fb;color:#6b7280;font-size:12px;font-weight:600;letter-spacing:.05em;white-space:nowrap;}
-.cb-app main table thead th:first-child{border-top-left-radius:12px;border-bottom-left-radius:12px;}
-.cb-app main table thead th:last-child{border-top-right-radius:12px;border-bottom-right-radius:12px;}
-.cb-app main table td{padding-top:18px;padding-bottom:18px;}
-html:not(.cb-admin-dark) .cb-app main table tbody tr{border-color:#eef1f6;}
-html:not(.cb-admin-dark) .cb-app main table tbody tr:hover{background:#f8fafd;}
-
-/* Filter / search controls: roomy rounded "chips" */
-.cb-app :is(input,select,textarea){border-radius:10px;}
-html:not(.cb-admin-dark) .cb-app main :is(input[type="text"],input[type="search"],input:not([type]),select){border-color:#e3e8ef;background:#fff;}
-
+.cb-app .cbx-nav-link svg{width:20px;height:20px;flex:none;stroke-width:1.8;}
+.cb-app .cbx-side-group{font-size:12px;line-height:1.5;}
+.cb-app :is(.cb-card,.cb-surface,.cbx-card){border:1px solid var(--cbx-border);border-radius:16px;box-shadow:var(--cbx-shadow-sm)!important;}
+html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){box-shadow:0 2px 8px rgba(0,0,0,.12)!important;}
+.cb-app .cb-stat:hover{transform:none;}
+.cb-app main table{font-variant-numeric:tabular-nums;}
+.cb-app main table th{padding-top:13px;padding-bottom:13px;background:var(--cbx-page);color:var(--cbx-muted);font-size:12px;font-weight:600;letter-spacing:.02em;line-height:1.5;}
+.cb-app main table td{padding-top:14px;padding-bottom:14px;font-size:14px;line-height:1.6;}
+.cb-app main table tbody tr{border-color:var(--cbx-border);}
+.cb-app main table tbody tr:hover{background:var(--cbx-hover);}
+.cb-table-scroll{max-width:100%;overscroll-behavior-x:contain;border-radius:12px;}
+.cb-table-scroll:focus-visible{outline:2px solid var(--cbx-blue);outline-offset:2px;}
+.cb-cell-wrap{white-space:normal;min-width:160px;max-width:320px;overflow-wrap:anywhere;}
+.cb-info-label{color:var(--cbx-muted);font-size:12px;font-weight:500;line-height:1.6;}
+.cb-info-value{color:var(--cbx-text);font-size:14px;font-weight:500;line-height:1.6;overflow-wrap:anywhere;}
+.cb-premium-dialog{background:var(--cbx-card);color:var(--cbx-text);border:1px solid var(--cbx-border);border-radius:16px;box-shadow:var(--cbx-menu-shadow);max-height:90dvh;}
+.cb-premium-dialog-head,.cb-premium-dialog-foot{border-color:var(--cbx-border);flex-shrink:0;}
+.cb-premium-dialog-head h2{color:var(--cbx-text);font-size:18px;font-weight:600;line-height:1.5;}
+.cb-premium-dialog-body{min-height:0;overscroll-behavior:contain;}
+.cb-premium-dialog-foot{flex-wrap:wrap;background:var(--cbx-page);border-radius:0 0 16px 16px;}
+.cb-premium-dialog-close{display:grid;place-items:center;width:40px;height:40px;border-radius:10px;color:var(--cbx-muted);}
+.cb-premium-dialog-close:hover{background:var(--cbx-hover);}
+html.cb-admin-dark .cb-app .cb-sk,html.cb-admin-dark .cb-premium-dialog .cb-sk{background-color:#263043;background-image:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.07) 50%,transparent 70%);}
+@media(max-width:767px){
+ .cb-app main{padding:16px 12px;}
+ .cb-app :is(h1,.cb-page-title,.cbx-page-title){font-size:22px;}
+ .cb-app .cbx-topbar{height:64px;}
+ .cb-app :is(.cbx-row-action,.cbx-icon-btn){width:44px;height:44px;}
+ .cb-app .cbx-btn{min-height:44px;}
+ .cb-app main table td{padding:12px;}
+ .cb-app .cbx-searchbox{min-width:0;max-width:none;flex-basis:100%;}
+ .cb-app .cbx-kpi-strip{grid-template-columns:repeat(2,minmax(0,1fr));}
+ .cb-app .cbx-kpi-cell{padding:16px;min-width:0;overflow-wrap:anywhere;}
+ .cb-premium-dialog{max-height:calc(100dvh - 24px);}
+ .cb-premium-dialog :is(input,select,textarea){font-size:16px;}
+ .cb-premium-dialog-foot button{min-height:44px;}
+}
+@media(prefers-reduced-motion:reduce){
+ .cb-page-enter,.cb-page-enter *,.cbx-menu,.fixed.inset-0,.fixed.inset-0>*{animation:none!important;}
+ .cb-app *{transition-duration:.01ms!important;}
+ .cb-app main{scroll-behavior:auto;}
+}
 
 /* ================= Clean Enterprise look — Phase 2 ================= */
 /* KPI strip: one card, cells split by 1px dividers (works when wrapping) */
@@ -70110,6 +70092,298 @@ button.cbx-kpi-cell{width:100%;border:0;cursor:pointer;font:inherit;}
 .cbx-kpi-cell.is-on{box-shadow:inset 0 0 0 2px var(--cbx-blue,#2563eb);}
 .cbx-select{appearance:none;-webkit-appearance:none;height:44px;min-width:160px;width:auto;padding:0 40px 0 14px;border:1px solid var(--cbx-border,#e3e8ef);border-radius:10px;background-color:var(--cbx-card,#fff);color:var(--cbx-text,#1f2937);font-size:14.5px;font-weight:500;cursor:pointer;}
 .cb-app select.cbx-select{min-height:44px;width:auto;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")!important;background-repeat:no-repeat!important;background-position:right 12px center!important;background-size:16px!important;}
+
+/* =====================================================================
+   JEN-Z / ATELIER NAVY — unified system skin
+   Scoped presentation only. No route, permission, or data changes.
+   ===================================================================== */
+:root{
+ --jz-ease:cubic-bezier(.22,.8,.24,1);--jz-duration:180ms;
+ --cbx-page:#f3f6fb;--cbx-card:#fff;--cbx-text:#17263e;--cbx-muted:#586a83;
+ --cbx-border:#e1e8f2;--cbx-border-strong:#b9c9df;--cbx-hover:#eef4fc;
+ --cbx-blue:#2563eb;--cbx-blue-soft:#edf3ff;
+ --jz-glass:rgba(255,255,255,.92);--jz-shadow:0 2px 4px rgba(20,41,75,.025),0 12px 32px -20px rgba(20,41,75,.2);
+ --cbx-side-w:264px;--cbx-side-w-collapsed:76px;
+ --cbx-side-bg:#10213c;--cbx-side-border:#243651;--cbx-side-title:#f3f7ff;
+ --cbx-side-sub:#a8b9d3;--cbx-side-group:#92a7c6;--cbx-side-text:#c7d4e8;
+ --cbx-side-hover-bg:#1c3456;--cbx-side-hover-text:#fff;
+ --cbx-side-active-bg:#2864df;--cbx-side-active-text:#fff;--cbx-side-bar:#80b8ff;
+}
+html.cb-admin-dark{
+ --cbx-page:#0b1323;--cbx-card:#131f33;--cbx-text:#e8eef8;--cbx-muted:#a1b1ca;
+ --cbx-border:#28384f;--cbx-border-strong:#465c7a;--cbx-hover:#1c2c45;
+ --cbx-blue-soft:#1c3357;--cbx-blue:#60a5fa;
+ --cbx-side-bg:#0c182b;--cbx-side-border:#24334b;--cbx-side-title:#f3f7ff;
+ --cbx-side-sub:#a8b9d3;--cbx-side-group:#92a7c6;--cbx-side-text:#c7d4e8;
+ --cbx-side-hover-bg:#1c3456;--cbx-side-hover-text:#fff;
+ --cbx-side-active-bg:#2864df;--cbx-side-active-text:#fff;
+ --jz-glass:rgba(19,31,51,.94);--jz-shadow:0 6px 24px -12px rgba(0,0,0,.45);
+ color-scheme:dark;
+}
+/* White admin navigation, independently scoped from the workspace theme. */
+.cb-app .cbx-sidebar{
+ --cbx-side-bg:#fff;--cbx-side-border:#e2e8f0;--cbx-side-title:#17263e;
+ --cbx-side-sub:#64748b;--cbx-side-group:#64748b;--cbx-side-text:#40516b;
+ --cbx-side-hover-bg:#f3f6fb;--cbx-side-hover-text:#17263e;
+ --cbx-side-active-bg:#edf4ff;--cbx-side-active-text:#2563eb;
+}
+.cb-app .cbx-sidebar{background:var(--cbx-side-bg);border-right:1px solid var(--cbx-side-border);box-shadow:8px 0 32px -24px rgba(15,35,65,.12);}
+.cb-app .cbx-side-head{height:80px;padding-inline:20px;border-bottom-color:var(--cbx-side-border);}
+.cb-app .cbx-side-title{font-size:15px;letter-spacing:0;}
+.cb-app .cbx-side-sub{font-size:11px;}
+.cb-app .cbx-side-group{font-size:11px;letter-spacing:.06em;margin-top:14px;}
+.cb-app .cbx-nav-link{min-height:44px;border:1px solid transparent;border-radius:12px;padding:11px 13px;transition:background-color var(--jz-duration),border-color var(--jz-duration),color var(--jz-duration);}
+/* Restore navigation micro-interaction, including smooth hover-out. */
+.cb-app .cbx-sidebar .cbx-nav-link{
+ transition:transform 200ms var(--jz-ease),background-color 180ms ease,border-color 180ms ease,color 180ms ease,box-shadow 200ms ease;
+}
+.cb-app .cbx-sidebar .cbx-nav-link svg{
+ transition:transform 200ms var(--jz-ease),color 180ms ease;
+}
+@media(hover:hover) and (pointer:fine){
+ .cb-app .cbx-sidebar .cbx-nav-link:hover{
+  transform:translateX(3px);border-color:#dbe8ff;
+  box-shadow:0 4px 12px -7px rgba(37,99,235,.25);
+ }
+ .cb-app .cbx-sidebar .cbx-nav-link:hover svg{transform:scale(1.08);}
+ .cb-app .cbx-sidebar.is-collapsed .cbx-nav-link:hover{transform:none;}
+}
+.cb-app .cbx-sidebar .cbx-nav-link:focus-visible{border-color:#93b8f5;}
+@media(prefers-reduced-motion:reduce){
+ .cb-app .cbx-sidebar .cbx-nav-link,.cb-app .cbx-sidebar .cbx-nav-link svg{
+  transition:none!important;transform:none!important;
+ }
+}
+.cb-app .cbx-nav-link.is-active{background:var(--cbx-side-active-bg);box-shadow:none;border-color:#dbe8ff;color:var(--cbx-side-active-text);}
+.cb-app .cbx-collapse-btn{color:var(--cbx-side-sub);border-color:var(--cbx-side-border);}
+.cb-app .cbx-sidebar.is-collapsed .cbx-side-head{padding-inline:0;}
+.cb-app .cbx-sidebar.is-collapsed .cbx-nav-link{padding-inline:0;}
+.cb-app .cbx-row-action.is-primary:hover,.cb-app .cbx-queue-ico.is-blue,.cb-app .cbx-queue-link{color:var(--cbx-blue);}
+/* Workspace: quiet background, glass header, generous content gutters. */
+.cb-app{background:var(--cbx-page);color:var(--cbx-text);}
+.cb-app .cbx-topbar{height:80px;background:var(--jz-glass);border-bottom:1px solid var(--cbx-border);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);gap:14px;}
+.cb-app .cbx-topbar .cbx-page-title{font-size:21px;font-weight:650;line-height:1.5;}
+.cb-app .cbx-icon-btn{border-color:var(--cbx-border);box-shadow:0 1px 2px rgba(15,30,60,.03);border-radius:12px;}
+.cb-app .cbx-user-pill{border-radius:14px;padding:5px 12px 5px 6px;height:46px;}
+.cb-app .cbx-search{border-radius:12px;background:var(--cbx-page);}
+.cb-app .cbx-version{color:var(--cbx-text);background:var(--cbx-hover);border:1px solid var(--cbx-border);font-size:12px;}
+.cb-app main{padding:28px 32px;}
+.cb-page-enter{max-width:1680px;}
+.cb-page-enter.is-settings{max-width:1080px;}
+.cb-app main :is(h1,.cbx-h1,.cb-page-title){font-size:28px;font-weight:650;letter-spacing:-.025em;line-height:1.4;}
+.cb-app main :is(h2,h3){letter-spacing:-.01em;}
+/* Cards and summary panels */
+.cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--cbx-card);border:1px solid var(--cbx-border);border-radius:18px!important;box-shadow:var(--jz-shadow)!important;}
+html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--cbx-card)!important;box-shadow:var(--jz-shadow)!important;}
+.cb-app .cb-stat{padding:22px;border-top:3px solid var(--cbx-blue);}
+.cb-app .cbx-kpi-strip{border-radius:18px;box-shadow:var(--jz-shadow);grid-template-columns:repeat(auto-fit,minmax(180px,1fr));}
+.cb-app .cbx-kpi-cell{padding:22px 24px;}
+.cb-app .cbx-kpi-cell.is-on{box-shadow:inset 0 -3px 0 var(--cbx-blue);background:var(--cbx-blue-soft);}
+.cb-app .cbx-kpi-cell:focus-visible{outline:2px solid var(--cbx-blue);outline-offset:-3px;}
+/* Shared controls keep destructive/status colors intact. */
+.cb-app :is(.cbx-btn,.cbx-chip,.cbx-select,.cbx-searchbox){min-height:44px;border-radius:12px;}
+.cb-app .cbx-chip.is-active{color:var(--cbx-text);background:var(--cbx-blue-soft);}
+.cb-app main :is(button,a)[class~="bg-signal-blue"],.cb-app main :is(button,a)[class~="bg-blue-600"]{background:linear-gradient(120deg,#3278ef,#235bd3)!important;color:#fff!important;box-shadow:0 4px 12px -6px rgba(37,99,235,.5);border-radius:11px;}
+.cb-app :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="hidden"]),select,textarea){border-radius:11px;}
+.cb-app :is(input,select,textarea):focus-visible{outline:2px solid var(--cbx-blue);outline-offset:2px;}
+.cb-app input::placeholder,.cb-premium-dialog input::placeholder{color:var(--cbx-muted);opacity:.8;}
+.cb-app .cbx-searchbox:focus-within{box-shadow:0 0 0 3px var(--cbx-blue-soft);}
+/* Dense operational data stays legible, with restrained row interaction. */
+.cb-app main table{border-collapse:separate;border-spacing:0;}
+.cb-app main table th{background:var(--cbx-page);color:var(--cbx-muted);font-size:12px;font-weight:600;text-transform:none;letter-spacing:.01em;padding:14px 16px;border-bottom:1px solid var(--cbx-border);}
+.cb-app main table td{padding:15px 16px;border-bottom:1px solid var(--cbx-border);font-size:14px;line-height:1.6;}
+.cb-app main table tbody tr:last-child td{border-bottom:0;}
+.cb-app main table tbody tr:hover{background:var(--cbx-hover);}
+.cb-app .cbx-row-action{border:1px solid var(--cbx-border);background:var(--cbx-card);width:34px;height:34px;border-radius:10px;}
+.cb-app .cbx-state{padding:48px 20px;gap:8px;}
+.cb-app .cbx-state-ico{height:52px;width:52px;border-radius:16px;}
+/* Menus and dialogs share the same surfaces, including body portals. */
+.cbx-menu,.cb-premium-dialog{border-radius:18px;background:var(--cbx-card);border-color:var(--cbx-border);box-shadow:var(--cbx-menu-shadow);}
+.cbx-menu-item{min-height:42px;padding:10px 16px;}
+.cb-modal-backdrop>form{border-radius:18px;border:1px solid var(--cbx-border);background:var(--cbx-card);color:var(--cbx-text);}
+.cb-premium-dialog-head{padding:20px 24px;}
+.cb-premium-dialog-body{padding:20px 24px;}
+.cb-premium-dialog-foot{padding:16px 24px;}
+/* Customer app: matching surfaces and a glass bottom navigation dock. */
+.jz-customer{--jz-c-page:#f3f6fb;--jz-c-card:#fff;--jz-c-text:#17263e;--jz-c-muted:#60718a;--jz-c-border:#e1e8f2;--jz-c-glass:rgba(255,255,255,.94);background:var(--jz-c-page);}
+.jz-customer.cb-cust-dark{--jz-c-page:#0b1323;--jz-c-card:#131f33;--jz-c-text:#e8eef8;--jz-c-muted:#a1b1ca;--jz-c-border:#28384f;--jz-c-glass:rgba(19,31,51,.94);}
+.jz-customer .bg-slate-50{background-color:var(--jz-c-page);}
+.jz-customer .bg-white{background-color:var(--jz-c-card);}
+.jz-customer .bg-white.rounded-2xl{border-radius:20px;border-color:var(--jz-c-border);box-shadow:0 5px 24px -16px rgba(15,30,60,.2);}
+.jz-customer header.bg-blue-600{background:linear-gradient(135deg,#153358,#2458a0);border-radius:0 0 28px 28px;}
+.jz-customer .jz-customer-content{padding-bottom:calc(108px + env(safe-area-inset-bottom));}
+.jz-customer .jz-bottom-nav{left:12px;right:12px;bottom:10px;max-width:448px;margin-inline:auto;background:var(--jz-c-glass)!important;border:1px solid var(--jz-c-border);border-radius:22px;box-shadow:0 8px 36px -14px rgba(5,20,45,.3);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);overflow:hidden;}
+.jz-customer .jz-bottom-nav>div{display:flex;overflow-x:auto;scrollbar-width:thin;}
+.jz-customer .jz-bottom-nav a{flex:1 0 60px;min-width:0;min-height:62px;padding:10px 4px;font-size:11px;line-height:1.4;color:var(--jz-c-muted);}
+.jz-customer .jz-bottom-nav a[aria-current="page"]{color:#3b82f6;background:rgba(59,130,246,.1);box-shadow:inset 0 3px 0 #3b82f6;}
+.jz-customer .jz-bottom-nav a[aria-current="page"] svg{stroke-width:2.3;}
+.jz-customer .jz-toast{max-width:calc(100vw - 32px);width:max-content;bottom:calc(100px + env(safe-area-inset-bottom));border:1px solid #3c506c;border-radius:16px;background:#142945;color:#fff;box-shadow:0 12px 28px -12px #071327;padding:12px 18px;}
+/* Motion: fade-only page entry avoids creating containing blocks for fixed UI. */
+@keyframes jz-fade{from{opacity:0}to{opacity:1}}
+@keyframes jz-dialog{from{opacity:0;transform:translateY(8px) scale(.99)}to{opacity:1;transform:none}}
+.cb-page-enter{animation:jz-fade 220ms ease-out;}
+.cb-premium-dialog,.cb-modal-backdrop>form{animation:jz-dialog 220ms var(--jz-ease) backwards;}
+.cbx-menu,.jz-toast{animation:jz-fade 160ms ease-out;}
+.cb-app :is(button,a,input,select,textarea),.jz-customer :is(button,a){transition:background-color var(--jz-duration),border-color var(--jz-duration),box-shadow var(--jz-duration),color var(--jz-duration);}
+.cb-app button:not(:disabled):active{filter:brightness(.96);}
+.cb-app button:disabled{cursor:not-allowed;}
+@media(hover:hover){.cb-app .cb-stat:hover{box-shadow:0 10px 30px -18px rgba(37,99,235,.35)!important;border-top-color:#60a5fa;}}
+@media(min-width:1024px){.cb-app .cbx-sidebar.is-collapsed .cbx-side-head{min-height:80px;}}
+@media(max-width:1023px){.cb-app main{padding:22px 20px;}.cb-app .cbx-sidebar{box-shadow:16px 0 44px -20px #071327;}}
+@media(max-width:767px){
+ .cb-app main{padding:18px 12px;}.cb-app .cbx-topbar{height:68px;gap:8px;}
+ .cb-app .cbx-topbar .cbx-page-title{font-size:18px;}.cb-app main :is(h1,.cbx-h1,.cb-page-title){font-size:23px;}
+ .cb-app .cbx-kpi-strip{grid-template-columns:repeat(2,minmax(0,1fr));}.cb-app .cbx-kpi-cell{padding:16px;}
+ .cb-app .cbx-row-action{height:44px;width:44px;}.cb-app .cb-stat{padding:18px;}
+ .cb-app main table :is(td,th){padding:12px;}.cb-premium-dialog-head,.cb-premium-dialog-body,.cb-premium-dialog-foot{padding:16px;}
+ .cb-app input:not([type="checkbox"]):not([type="radio"]),.cb-app select,.cb-app textarea{font-size:16px;}
+}
+@media(prefers-reduced-motion:reduce){
+ .cb-app *,.cb-premium-dialog,.cb-modal-backdrop>form,.cbx-menu,.jz-customer *{animation:none!important;transition:none!important;scroll-behavior:auto!important;}
+}
+@media print{.cb-app .cbx-sidebar,.cb-app .cbx-topbar,.jz-bottom-nav{display:none!important;}.cb-app main{padding:0;overflow:visible;}.cb-app{height:auto;overflow:visible;background:#fff;}}
+
+/* Comfortable admin scale: restore large, crisp type and icons. */
+.cb-app,.cb-modal-backdrop,.cb-premium-dialog{
+ --jz-font-body:16px;--jz-font-control:16px;--jz-font-sm:15px;
+ --jz-font-xs:13px;--jz-font-section:20px;--jz-font-page:30px;
+ font-size:16px;line-height:1.6;
+}
+.cb-app{--cbx-side-w:288px;}
+.cb-app .cbx-sidebar{--cbx-side-text:#334155;--cbx-side-group:#52627a;--cbx-side-sub:#52627a;}
+.cb-app .cbx-nav-link{font-size:16px;font-weight:500;line-height:1.5;min-height:48px;gap:12px;}
+.cb-app .cbx-nav-link.is-active{font-weight:600;}
+.cb-app .cbx-nav-link svg{width:24px;height:24px;stroke-width:2;flex-shrink:0;}
+.cb-app .cbx-side-group{font-size:13px;font-weight:600;letter-spacing:.015em;}
+.cb-app .cbx-side-title{font-size:17px;font-weight:700;}
+.cb-app .cbx-side-sub{font-size:12.5px;}
+.cb-app .cbx-topbar .cbx-page-title{font-size:28px;font-weight:700;}
+.cb-app main :is(h1,.cbx-h1,.cb-page-title){font-size:30px;font-weight:700;}
+.cb-app main :is(h2,.cb-section-title){font-size:20px;font-weight:650;}
+:is(.cb-app,.cb-modal-backdrop,.cb-premium-dialog) .text-xs{font-size:13.5px;line-height:1.6;}
+:is(.cb-app,.cb-modal-backdrop,.cb-premium-dialog) .text-sm{font-size:15.5px;line-height:1.6;}
+:is(.cb-app,.cb-modal-backdrop,.cb-premium-dialog) :is([class~="text-[10px]"],[class~="text-[11px]"],[class~="text-[11.5px]"],[class~="text-[12px]"]){font-size:13px;line-height:1.6;}
+:is(.cb-app,.cb-modal-backdrop,.cb-premium-dialog) [class~="text-[13px]"]{font-size:15px;line-height:1.6;}
+:is(.cb-app,.cb-modal-backdrop,.cb-premium-dialog) [class~="text-[14px]"]{font-size:16px;line-height:1.6;}
+.cb-app :is(button,input,select,textarea,.cbx-chip,.cbx-select,.cbx-btn){font-size:15.5px;}
+.cb-app :is(.cbx-user-name,.cbx-lang-btn){font-size:15px;}
+.cb-app .cbx-user-role{font-size:13px;}
+.cb-app .cbx-search{min-height:44px;}
+.cb-app .cbx-searchbox input{font-size:16px;}
+.cb-app .cbx-topbar :is(.cbx-icon-btn,.cbx-search)>svg{width:22px;height:22px;stroke-width:2;}
+.cb-app main :is(button,a) svg.lucide[width="14"],.cb-app main :is(button,a) svg.lucide[width="15"],.cb-app main :is(button,a) svg.lucide[width="16"]{width:18px;height:18px;stroke-width:2;flex-shrink:0;}
+.cb-app main table th{font-size:13px;font-weight:600;line-height:1.5;}
+.cb-app main table td{font-size:15.5px;line-height:1.6;padding-top:16px;padding-bottom:16px;}
+.cb-app .cb-info-label{font-size:13.5px;}
+.cb-app .cb-info-value{font-size:16px;}
+.cb-app .jz-fin-icon{width:44px;height:44px;}
+.cb-app .jz-fin-icon svg{width:23px;height:23px;stroke-width:2;}
+.cb-app .jz-fin-group>div:first-child svg{width:22px;height:22px;stroke-width:2;}
+.cb-app .jz-fin-stat>p.tabular-nums,.cb-app .jz-fin-group p.tabular-nums{font-size:28px;line-height:1.35;letter-spacing:-.015em;}
+.cb-app .jz-fin-stat>div>p{font-size:15px;font-weight:500;}
+.cb-app .jz-fin-stat>p:last-child:not(.tabular-nums){font-size:14px;line-height:1.6;}
+html:not(.cb-admin-dark) :is(.cb-app,.cb-modal-backdrop,.cb-premium-dialog){--cbx-muted:#52627a;}
+html:not(.cb-admin-dark) :is(.cb-app,.cb-modal-backdrop,.cb-premium-dialog) :is([class~="text-ink-600/35"],[class~="text-ink-600/40"],[class~="text-ink-600/45"],[class~="text-ink-600/50"],[class~="text-ink-600/55"],[class~="text-ink-600/60"],[class~="text-ink-600/65"],[class~="text-ink-600/70"],[class~="text-slate-400"],[class~="text-slate-500"]){color:#52627a!important;}
+html.cb-admin-dark :is(.cb-app,.cb-modal-backdrop,.cb-premium-dialog) :is([class~="text-ink-600/35"],[class~="text-ink-600/40"],[class~="text-ink-600/45"],[class~="text-ink-600/50"],[class~="text-ink-600/55"],[class~="text-ink-600/60"],[class~="text-ink-600/65"],[class~="text-ink-600/70"],[class~="text-slate-400"],[class~="text-slate-500"]){color:#aabbd2!important;}
+@media(max-width:767px){
+ .cb-app .cbx-topbar .cbx-page-title{font-size:23px;}
+ .cb-app main :is(h1,.cbx-h1,.cb-page-title){font-size:25px;}
+ .cb-app main table td{font-size:15px;}
+ .cb-app .jz-fin-stat>p.tabular-nums,.cb-app .jz-fin-group p.tabular-nums{font-size:25px;}
+ .cb-app :is(input,select,textarea){font-size:16px;}
+}
+
+/* ===== Page content scale = Menu scale (menu: 16px text / 24px icon) =====
+   Tune everything from these 4 variables. */
+.cb-app main{
+ --pg-text:16px;      /* main text (same as menu) */
+ --pg-text-sm:15px;   /* secondary lines under a value */
+ --pg-badge:14px;     /* status pills, tags, chips */
+ --pg-th:14px;        /* table headers */
+ --pg-icon:22px;      /* icons beside text, buttons, table cells */
+ --pg-icon-lg:26px;   /* KPI / card icons */
+}
+/* ---- Text ---- */
+.cb-app main :is(.text-xs){font-size:var(--pg-text-sm);line-height:1.55;}
+.cb-app main :is(.text-sm){font-size:var(--pg-text);line-height:1.55;}
+.cb-app main :is([class~="text-[10px]"],[class~="text-[11px]"],[class~="text-[11.5px]"],[class~="text-[12px]"]){font-size:var(--pg-badge);line-height:1.5;}
+.cb-app main :is([class~="text-[13px]"],[class~="text-[14px]"]){font-size:var(--pg-text);line-height:1.55;}
+.cb-app main :is(button,a,select,input,.cbx-chip,.cbx-select,.cbx-btn){font-size:var(--pg-text);}
+.cb-app main table th{font-size:var(--pg-th);font-weight:600;padding-top:14px;padding-bottom:14px;}
+.cb-app main table td{font-size:var(--pg-text);line-height:1.5;padding-top:18px;padding-bottom:18px;}
+.cb-app main table td :is(.text-xs,[class~="text-[11px]"],[class~="text-[12px]"]){font-size:var(--pg-text-sm);}
+/* status pills / tags inside tables */
+.cb-app main table td :is(.rounded-full,.rounded-md,.rounded-sm){font-size:var(--pg-badge);font-weight:600;padding:3px 11px;}
+/* ---- Icons (lucide renders width="14" etc. -> force menu-like size) ---- */
+.cb-app main svg.lucide:is([width="10"],[width="11"],[width="12"],[width="13"],[width="14"],[width="15"],[width="16"],[width="17"],[width="18"]){
+ width:var(--pg-icon);height:var(--pg-icon);stroke-width:2;flex-shrink:0;
+}
+.cb-app main table svg.lucide{width:var(--pg-icon);height:var(--pg-icon);stroke-width:2;flex-shrink:0;}
+.cb-app main :is(.cbx-row-action,button[aria-label]) svg{width:var(--pg-icon);height:var(--pg-icon);}
+.cb-app main .cbx-row-action{width:44px;height:44px;}
+/* ---- Dashboard KPI cards ---- */
+.cb-app .jz-fin-icon{width:50px;height:50px;}
+.cb-app .jz-fin-icon svg,.cb-app .jz-fin-group>div:first-child svg{width:var(--pg-icon-lg);height:var(--pg-icon-lg);stroke-width:2;}
+.cb-app .jz-fin-stat>div>p{font-size:var(--pg-text);font-weight:500;}
+.cb-app .jz-fin-stat>p:last-child:not(.tabular-nums){font-size:var(--pg-text-sm);}
+.cb-app .jz-fin-stat>p.tabular-nums,.cb-app .jz-fin-group p.tabular-nums{font-size:32px;}
+.cb-app .jz-fin-group :is(p,span,div):not(.tabular-nums){font-size:var(--pg-text);}
+/* ---- Toolbar (search / filter / date) ---- */
+.cb-app main :is(input,select){min-height:46px;}
+.cb-app main input::placeholder{font-size:var(--pg-text);}
+
+/* ===== Dark mode fix: sidebar follows theme + status badges readable ===== */
+html.cb-admin-dark .cb-app .cbx-sidebar{
+ --cbx-side-bg:#0c182b;--cbx-side-border:#24334b;--cbx-side-title:#f3f7ff;
+ --cbx-side-sub:#9fb0c9;--cbx-side-group:#8fa3c2;--cbx-side-text:#cbd7ea;
+ --cbx-side-hover-bg:#1b2b45;--cbx-side-hover-text:#fff;
+ --cbx-side-active-bg:rgba(96,165,250,.16);--cbx-side-active-text:#93c5fd;
+ box-shadow:8px 0 32px -24px rgba(0,0,0,.6);
+}
+html.cb-admin-dark .cb-app .cbx-nav-link.is-active{border-color:rgba(96,165,250,.32);}
+html.cb-admin-dark .cb-app .cbx-sidebar .cbx-nav-link:focus-visible{border-color:#60a5fa;}
+html.cb-admin-dark .cb-app .cbx-sidebar :is(.bg-white,.bg-slate-50,.bg-mist-50){background-color:transparent!important;}
+html.cb-admin-dark :is(.bg-indigo-50,.bg-indigo-100){background-color:rgba(99,102,241,.18)!important;}
+html.cb-admin-dark :is(.text-indigo-600,.text-indigo-700,.text-indigo-800,.text-indigo-900){color:#a5b4fc!important;}
+html.cb-admin-dark :is(.border-indigo-100,.border-indigo-200){border-color:rgba(99,102,241,.35)!important;}
+html.cb-admin-dark :is(.bg-pink-50,.bg-pink-100){background-color:rgba(236,72,153,.18)!important;}
+html.cb-admin-dark :is(.text-pink-600,.text-pink-700,.text-pink-800,.text-pink-900){color:#f9a8d4!important;}
+html.cb-admin-dark :is(.border-pink-100,.border-pink-200){border-color:rgba(236,72,153,.35)!important;}
+html.cb-admin-dark :is(.bg-blue-50,.bg-blue-100){background-color:rgba(59,130,246,.18)!important;}
+html.cb-admin-dark :is(.text-blue-600,.text-blue-700,.text-blue-800,.text-blue-900){color:#93c5fd!important;}
+html.cb-admin-dark :is(.border-blue-100,.border-blue-200){border-color:rgba(59,130,246,.35)!important;}
+html.cb-admin-dark :is(.bg-violet-50,.bg-violet-100){background-color:rgba(139,92,246,.18)!important;}
+html.cb-admin-dark :is(.text-violet-600,.text-violet-700,.text-violet-800,.text-violet-900){color:#c4b5fd!important;}
+html.cb-admin-dark :is(.border-violet-100,.border-violet-200){border-color:rgba(139,92,246,.35)!important;}
+html.cb-admin-dark :is(.bg-orange-50,.bg-orange-100){background-color:rgba(249,115,22,.18)!important;}
+html.cb-admin-dark :is(.text-orange-600,.text-orange-700,.text-orange-800,.text-orange-900){color:#fdba74!important;}
+html.cb-admin-dark :is(.border-orange-100,.border-orange-200){border-color:rgba(249,115,22,.35)!important;}
+html.cb-admin-dark :is(.bg-cyan-50,.bg-cyan-100){background-color:rgba(6,182,212,.18)!important;}
+html.cb-admin-dark :is(.text-cyan-600,.text-cyan-700,.text-cyan-800,.text-cyan-900){color:#67e8f9!important;}
+html.cb-admin-dark :is(.border-cyan-100,.border-cyan-200){border-color:rgba(6,182,212,.35)!important;}
+html.cb-admin-dark :is(.bg-lime-50,.bg-lime-100){background-color:rgba(132,204,22,.18)!important;}
+html.cb-admin-dark :is(.text-lime-600,.text-lime-700,.text-lime-800,.text-lime-900){color:#bef264!important;}
+html.cb-admin-dark :is(.border-lime-100,.border-lime-200){border-color:rgba(132,204,22,.35)!important;}
+html.cb-admin-dark :is(.bg-teal-50,.bg-teal-100){background-color:rgba(20,184,166,.18)!important;}
+html.cb-admin-dark :is(.text-teal-600,.text-teal-700,.text-teal-800,.text-teal-900){color:#5eead4!important;}
+html.cb-admin-dark :is(.border-teal-100,.border-teal-200){border-color:rgba(20,184,166,.35)!important;}
+html.cb-admin-dark :is(.bg-emerald-50,.bg-emerald-100){background-color:rgba(16,185,129,.18)!important;}
+html.cb-admin-dark :is(.text-emerald-600,.text-emerald-700,.text-emerald-800,.text-emerald-900){color:#6ee7b7!important;}
+html.cb-admin-dark :is(.border-emerald-100,.border-emerald-200){border-color:rgba(16,185,129,.35)!important;}
+html.cb-admin-dark :is(.bg-amber-50,.bg-amber-100){background-color:rgba(245,158,11,.18)!important;}
+html.cb-admin-dark :is(.text-amber-600,.text-amber-700,.text-amber-800,.text-amber-900){color:#fcd34d!important;}
+html.cb-admin-dark :is(.border-amber-100,.border-amber-200){border-color:rgba(245,158,11,.35)!important;}
+html.cb-admin-dark :is(.bg-red-50,.bg-red-100){background-color:rgba(239,68,68,.18)!important;}
+html.cb-admin-dark :is(.text-red-600,.text-red-700,.text-red-800,.text-red-900){color:#fca5a5!important;}
+html.cb-admin-dark :is(.border-red-100,.border-red-200){border-color:rgba(239,68,68,.35)!important;}
+html.cb-admin-dark :is(.bg-rose-50,.bg-rose-100){background-color:rgba(244,63,94,.18)!important;}
+html.cb-admin-dark :is(.text-rose-600,.text-rose-700,.text-rose-800,.text-rose-900){color:#fda4af!important;}
+html.cb-admin-dark :is(.border-rose-100,.border-rose-200){border-color:rgba(244,63,94,.35)!important;}
+html.cb-admin-dark :is(.bg-sky-50,.bg-sky-100){background-color:rgba(14,165,233,.18)!important;}
+html.cb-admin-dark :is(.text-sky-600,.text-sky-700,.text-sky-800,.text-sky-900){color:#7dd3fc!important;}
+html.cb-admin-dark :is(.border-sky-100,.border-sky-200){border-color:rgba(14,165,233,.35)!important;}
+html.cb-admin-dark .bg-slate-100.text-slate-600,html.cb-admin-dark .bg-slate-100.text-slate-700{background-color:rgba(148,163,184,.18)!important;color:#cbd5e1!important;}
+html.cb-admin-dark .cb-app main table td :is(.rounded-full,.rounded-md){border:1px solid transparent;}
 
 `;
 
