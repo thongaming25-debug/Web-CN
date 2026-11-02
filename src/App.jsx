@@ -30804,19 +30804,32 @@ const CustomerApp = (() => {
       </div>
     );
   }
-  function LangBtn() {
+  function LangBtn({ pill = false }) {
     const { lang, tr } = useApp();
     const [open, setOpen] = useState(false);
     return (
       <>
-        <button
-          type="button"
-          aria-label={tr("Language", "ភាសា")}
-          onClick={() => setOpen(true)}
-          className="w-10 h-10 grid place-items-center rounded-full bg-white/15 text-xl"
-        >
-          {lang === "km" ? "🇰🇭" : "🇬🇧"}
-        </button>
+        {pill ? (
+          <button
+            type="button"
+            aria-label={tr("Language", "ភាសា")}
+            onClick={() => setOpen(true)}
+            className="h-10 pl-3 pr-2.5 flex items-center gap-1.5 rounded-full bg-[#eef2fa] text-[#14284b] font-semibold text-[15px] active:bg-[#e2e8f5]"
+          >
+            <Icons.Globe size={20} strokeWidth={1.8} />
+            {lang === "km" ? "KH" : "EN"}
+            <ChevronDown size={16} strokeWidth={2.2} />
+          </button>
+        ) : (
+          <button
+            type="button"
+            aria-label={tr("Language", "ភាសា")}
+            onClick={() => setOpen(true)}
+            className="w-10 h-10 grid place-items-center rounded-full bg-white/15 text-xl"
+          >
+            {lang === "km" ? "🇰🇭" : "🇬🇧"}
+          </button>
+        )}
         {open && <LangSheet onClose={() => setOpen(false)} />}
       </>
     );
@@ -31396,11 +31409,11 @@ const CustomerApp = (() => {
           )}
         </div>
         <nav
-          className="jz-bottom-nav fixed bottom-0 inset-x-0 bg-white border-t border-slate-100 z-40"
-          style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+          className="jz-bottom-nav fixed bottom-0 inset-x-0 z-40 px-3 pointer-events-none"
+          style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
         >
           <div
-            className="max-w-md mx-auto grid"
+            className="max-w-md mx-auto grid bg-white rounded-3xl shadow-[0_8px_30px_-6px_rgba(15,40,90,.25)] border border-slate-100 pointer-events-auto overflow-hidden"
             style={{
               gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))`,
             }}
@@ -31411,7 +31424,7 @@ const CustomerApp = (() => {
                 to={to}
                 end={to === P()}
                 className={({ isActive }) =>
-                  `min-h-[52px] py-2 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors active:bg-slate-50 ${isActive ? "text-blue-600" : "text-slate-400"}`
+                  `min-h-[52px] py-2 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors active:bg-slate-50 ${isActive ? "text-violet-600 bg-violet-50" : "text-slate-500"}`
                 }
               >
                 <I size={22} />
@@ -31580,6 +31593,53 @@ const CustomerApp = (() => {
     );
   }
 
+  // Horizontal brand lockup (JZ mark + wordmark) used in the customer Home header.
+  function BrandLockup({ brandName, brandLogo }) {
+    if (!/jen-?\s?z/i.test(brandName || "")) {
+      return brandLogo ? (
+        <img
+          src={brandLogo}
+          alt={`${brandName} logo`}
+          className="h-10 w-auto max-w-[170px] object-contain"
+        />
+      ) : (
+        <span className="text-lg font-extrabold italic text-[color:var(--jz-c-text,#14284b)] truncate">
+          {brandName}
+        </span>
+      );
+    }
+    return (
+      <div className="flex items-center gap-2.5 min-w-0" aria-label={brandName}>
+        <svg
+          viewBox="0 0 120 66"
+          className="h-9 w-auto shrink-0"
+          aria-hidden="true"
+        >
+          <g fill="none" strokeLinecap="round" strokeWidth="2.4">
+            <path d="M6 20H40" stroke="#14284b" />
+            <path d="M2 31H34" stroke="#14284b" />
+            <path d="M8 43H30" stroke="#f47c20" />
+          </g>
+          <path
+            className="jz-brand-j"
+            fill="#14284b"
+            d="M44 8H86L79 21H72L63 47Q59 59 45 59H20L26 47H38Q44 47 46 41L54 21H38Z"
+          />
+          <path
+            fill="#f47c20"
+            d="M68 8H114L108 19L88 46H110L103 59H54L60 49L84 21H62Z"
+          />
+        </svg>
+        <span
+          className="jz-brand-text text-[21px] font-extrabold italic tracking-tight text-[#14284b] whitespace-nowrap"
+          style={{ fontFamily: "'Poppins','Inter',system-ui,sans-serif" }}
+        >
+          Jen-<span className="text-[#f47c20]">Z</span> Express
+        </span>
+      </div>
+    );
+  }
+
   // ---------- Home ----------
   function HomePage() {
     const { me, ships, airShips, cnOrders, wallet, unread, tr } = useApp();
@@ -31713,47 +31773,39 @@ const CustomerApp = (() => {
       );
     return (
       <>
-        <header className="bg-blue-600 text-white px-5 pt-6 pb-16 rounded-b-3xl">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-xl font-bold">
-                {tr(`Hello ${me.name} `, `សួស្តី ${me.name} `)}
-              </h1>
-              <p className="text-blue-100 text-sm flex items-center gap-1.5">
-                {brandLogo ? (
-                  <img
-                    src={brandLogo}
-                    alt={`${brandName} logo`}
-                    className="w-5 h-5 rounded object-cover bg-white/20"
-                  />
-                ) : null}
-                {tr(
-                  `Welcome to ${brandName}`,
-                  `សូមស្វាគមន៍មកកាន់ ${brandName}`,
-                )}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <LangBtn />
-              {feat("notifications") && (
-                <button
-                  type="button"
-                  aria-label={tr("Notifications", "ការជូនដំណឹង")}
-                  onClick={() => nav(P("/notifications"))}
-                  className="relative w-10 h-10 grid place-items-center rounded-full bg-white/15"
-                >
-                  <Bell size={20} />
-                  {unread > 0 && (
-                    <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center">
-                      {unread > 9 ? "9+" : unread}
-                    </span>
-                  )}
-                </button>
-              )}
-            </div>
+        <header
+          className="sticky top-0 z-30 bg-white shadow-[0_2px_10px_-4px_rgba(15,40,90,.15)] px-4 pb-3.5 flex items-center justify-between"
+          style={{ paddingTop: "max(0.875rem, env(safe-area-inset-top))" }}
+        >
+          <div className="flex items-center min-w-0">
+            <BrandLockup brandName={brandName} brandLogo={brandLogo} />
           </div>
+          <div className="flex items-center gap-2">
+            <LangBtn pill />
+            {feat("notifications") && (
+              <button
+                type="button"
+                aria-label={tr("Notifications", "ការជូនដំណឹង")}
+                onClick={() => nav(P("/notifications"))}
+                className="relative w-10 h-10 grid place-items-center rounded-full text-[color:var(--jz-c-text,#14284b)]"
+              >
+                <Bell size={26} strokeWidth={1.7} />
+                {unread > 0 && (
+                  <span className="absolute top-1 right-1 w-2.5 h-2.5 rounded-full bg-orange-500 ring-2 ring-white" />
+                )}
+              </button>
+            )}
+          </div>
+        </header>
+        <div className="px-4 pt-5 pb-1">
+          <h1 className="text-[26px] font-extrabold leading-tight text-[color:var(--jz-c-text,#14284b)]">
+            {tr(`Hello, ${me.name}`, `សួស្តី ${me.name}`)}
+          </h1>
+          <p className="text-slate-500">
+            {tr("Welcome back!", "សូមស្វាគមន៍ការត្រឡប់មកវិញ!")}
+          </p>
           {feat("home_search") && (
-            <div className="mt-4 flex items-center gap-2 h-12 bg-white rounded-xl px-3.5 text-slate-900">
+            <div className="mt-4 flex items-center gap-2 h-12 bg-white rounded-xl px-3.5 text-slate-900 shadow-[0_2px_12px_-4px_rgba(15,40,90,.12)]">
               <Search size={18} className="text-slate-400" />
               <input
                 value={q}
@@ -31763,8 +31815,8 @@ const CustomerApp = (() => {
               />
             </div>
           )}
-        </header>
-        <div className="px-4 -mt-9 space-y-5">
+        </div>
+        <div className="px-4 pt-3 space-y-4">
           {q ? (
             <div className="space-y-2.5 pt-10">
               {hit.length ? (
@@ -31781,53 +31833,83 @@ const CustomerApp = (() => {
           ) : (
             <>
               {feat("home_stats") && (
-                <div className="grid grid-cols-2 gap-3">
-                  {stats.map(([l, k, n, c, I], i) => (
-                    <Card
+                <div className="space-y-3">
+                  {stats.slice(0, 1).map(([l, k, n]) => (
+                    <div
                       key={l}
-                      className={`p-3.5 flex items-center gap-3 ${i === 0 ? "col-span-2" : ""}`}
+                      onClick={() => nav(P("/shipments"))}
+                      className="relative overflow-hidden cursor-pointer rounded-2xl bg-[#14284b] text-white p-4 flex items-center gap-4"
                     >
-                      <Icon i={I} c={c} />
-                      <div>
-                        <p className="text-xs text-slate-500">{tr(l, k)}</p>
-                        <p className="text-2xl font-bold leading-tight">{n}</p>
+                      <span className="absolute left-0 top-3 bottom-3 w-1 rounded-r bg-orange-500" />
+                      <span className="w-14 h-14 rounded-full bg-white/10 grid place-items-center shrink-0">
+                        <Package size={28} />
+                      </span>
+                      <div className="flex-1">
+                        <p className="text-sm text-white/80">
+                          {tr("Total Shipments", "ការដឹកជញ្ជូនសរុប")}
+                        </p>
+                        <p className="text-3xl font-extrabold leading-tight">
+                          {n}
+                        </p>
                       </div>
-                    </Card>
+                      <ChevronRight size={20} className="text-white/70" />
+                    </div>
                   ))}
+                  <div className="grid grid-cols-2 gap-3">
+                    {stats.slice(1).map(([l, k, n, c, I]) => (
+                      <Card key={l} className="p-3.5 flex items-center gap-3">
+                        <Icon i={I} c={c} />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[13px] text-slate-500 leading-tight">
+                            {tr(l, k)}
+                          </p>
+                          <p className="text-2xl font-extrabold leading-tight text-[color:var(--jz-c-text,#14284b)]">
+                            {n}
+                          </p>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
                 </div>
               )}
-              {feat("wallet") && (
-                <Card
-                  onClick={() => nav(P("/wallet"))}
-                  className="p-4 flex items-center gap-3 cursor-pointer"
-                >
-                  <Icon i={Wallet} c="bg-emerald-50 text-emerald-600" />
-                  <div className="flex-1">
-                    <p className="text-xs text-slate-500">
-                      {tr("My Wallet", "កាបូបរបស់ខ្ញុំ")}
-                    </p>
-                    <b
-                      className={`text-xl ${wallet.balance < 0 ? "text-red-600" : ""}`}
+              {(feat("wallet") || (loyalty.on && loyalty.data)) && (
+                <Card className="divide-y divide-slate-100 overflow-hidden">
+                  {feat("wallet") && (
+                    <div
+                      onClick={() => nav(P("/wallet"))}
+                      className="p-4 flex items-center gap-3 cursor-pointer"
                     >
-                      {moneyS(wallet.balance)}
-                    </b>
-                  </div>
-                  <ChevronRight size={18} className="text-slate-300" />
-                </Card>
-              )}
-              {loyalty.on && loyalty.data && (
-                <Card
-                  onClick={() => nav(P("/points"))}
-                  className="p-4 flex items-center gap-3 cursor-pointer"
-                >
-                  <Icon i={Gift} c="bg-amber-50 text-amber-600" />
-                  <div className="flex-1">
-                    <p className="text-xs text-slate-500">
-                      {tr("My Points", "ពិន្ទុរបស់ខ្ញុំ")}
-                    </p>
-                    <b className="text-xl">{fmtPts(loyalty.data.balance)}</b>
-                  </div>
-                  <ChevronRight size={18} className="text-slate-300" />
+                      <Icon i={Wallet} c="bg-emerald-50 text-emerald-600" />
+                      <div className="flex-1">
+                        <p className="text-sm text-slate-500">
+                          {tr("My Wallet", "កាបូបរបស់ខ្ញុំ")}
+                        </p>
+                        <b
+                          className={`text-xl text-[color:var(--jz-c-text,#14284b)] ${wallet.balance < 0 ? "!text-red-600" : ""}`}
+                        >
+                          {moneyS(wallet.balance)}
+                        </b>
+                      </div>
+                      <ChevronRight size={18} className="text-slate-300" />
+                    </div>
+                  )}
+                  {loyalty.on && loyalty.data && (
+                    <div
+                      onClick={() => nav(P("/points"))}
+                      className="p-4 flex items-center gap-3 cursor-pointer"
+                    >
+                      <Icon i={Gift} c="bg-orange-50 text-orange-500" />
+                      <div className="flex-1">
+                        <p className="text-sm text-slate-500">
+                          {tr("My Points", "ពិន្ទុរបស់ខ្ញុំ")}
+                        </p>
+                        <b className="text-xl text-[color:var(--jz-c-text,#14284b)]">
+                          {fmtPts(loyalty.data.balance)}
+                        </b>
+                      </div>
+                      <ChevronRight size={18} className="text-slate-300" />
+                    </div>
+                  )}
                 </Card>
               )}
               {feat("home_pay_alert") &&
@@ -31885,9 +31967,9 @@ const CustomerApp = (() => {
                     {feat("tab_shipments") && (
                       <button
                         onClick={() => nav(P("/shipments"))}
-                        className="text-sm text-blue-600 font-medium"
+                        className="text-sm text-orange-500 font-semibold"
                       >
-                        {tr("View all", "មើលទាំងអស់")}
+                        {tr("View all", "មើលទាំងអស់")} ›
                       </button>
                     )}
                   </div>
@@ -34689,13 +34771,13 @@ const CustomerApp = (() => {
             <button
               type="button"
               onClick={() => nav(P())}
-              className="w-10 h-10 rounded-xl bg-white border border-slate-100 grid place-items-center"
+              className="w-10 h-10 rounded-xl bg-[#eef2fa] text-[#14284b] grid place-items-center"
               aria-label={tr("Back", "ត្រឡប់")}
             >
               <ChevronLeft size={20} />
             </button>
             <div className="min-w-0">
-              <h1 className="font-bold text-xl text-slate-900">
+              <h1 className="font-extrabold text-xl text-[color:var(--jz-c-text,#14284b)]">
                 {tr("CN Purchase Orders", "ការបញ្ជាទិញពីចិន")}
               </h1>
               <p className="text-xs text-slate-500">
@@ -70543,7 +70625,12 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .jz-customer .bg-slate-50{background-color:var(--jz-c-page);}
 .jz-customer .bg-white{background-color:var(--jz-c-card);}
 .jz-customer .bg-white.rounded-2xl{border-radius:20px;border-color:var(--jz-c-border);box-shadow:0 5px 24px -16px rgba(15,30,60,.2);}
-.jz-customer header.bg-blue-600{background:linear-gradient(135deg,#153358,#2458a0);border-radius:0 0 28px 28px;}
+.jz-customer.cb-cust-dark header.bg-blue-600{background:linear-gradient(135deg,#153358,#2458a0);border-radius:0 0 28px 28px;}
+.jz-customer:not(.cb-cust-dark) header.bg-blue-600{position:sticky;top:0;z-index:30;background:#fff;color:#14284b;border-radius:0;padding-bottom:.875rem;box-shadow:0 2px 10px -4px rgba(15,40,90,.15);}
+.jz-customer:not(.cb-cust-dark) header.bg-blue-600 h1{color:#14284b;font-weight:800;}
+.jz-customer:not(.cb-cust-dark) header.bg-blue-600 .bg-white\\/15,.jz-customer:not(.cb-cust-dark) header.bg-blue-600 .bg-white\\/30{background:#eef2fa;color:#14284b;}
+.jz-customer:not(.cb-cust-dark) header.bg-blue-600 button.bg-white{background:#f47c20;color:#fff;}
+.cb-cust-dark .jz-brand-j{fill:#e8eef8;}.cb-cust-dark .jz-brand-text{color:#e8eef8;}
 .jz-customer .jz-customer-content{padding-bottom:calc(108px + env(safe-area-inset-bottom));}
 .jz-customer .jz-bottom-nav{left:12px;right:12px;bottom:10px;max-width:448px;margin-inline:auto;background:var(--jz-c-glass)!important;border:1px solid var(--jz-c-border);border-radius:22px;box-shadow:0 8px 36px -14px rgba(5,20,45,.3);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);overflow:hidden;}
 .jz-customer .jz-bottom-nav>div{display:flex;overflow-x:auto;scrollbar-width:thin;}
