@@ -31412,12 +31412,9 @@ const CustomerApp = (() => {
             </div>
           )}
         </div>
-        <nav
-          className="jz-bottom-nav fixed bottom-0 inset-x-0 z-40 px-3 pointer-events-none"
-          style={{ paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
-        >
+        <nav className="jz-bottom-nav fixed bottom-0 inset-x-0 z-40">
           <div
-            className="max-w-md mx-auto grid bg-white rounded-3xl shadow-[0_8px_30px_-6px_rgba(15,40,90,.25)] border border-slate-100 pointer-events-auto overflow-hidden"
+            className="grid"
             style={{
               gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))`,
             }}
@@ -31428,7 +31425,7 @@ const CustomerApp = (() => {
                 to={to}
                 end={to === P()}
                 className={({ isActive }) =>
-                  `min-h-[52px] py-2 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors active:bg-slate-50 ${isActive ? "text-violet-600 bg-violet-50" : "text-slate-500"}`
+                  `min-h-[52px] py-2 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors active:bg-slate-50 ${isActive ? "text-blue-500" : "text-slate-500"}`
                 }
               >
                 <I size={22} />
@@ -31842,21 +31839,29 @@ const CustomerApp = (() => {
                     <div
                       key={l}
                       onClick={() => nav(P("/shipments"))}
-                      className="relative overflow-hidden cursor-pointer rounded-2xl bg-[#14284b] text-white p-4 flex items-center gap-4"
+                      className="relative overflow-hidden cursor-pointer rounded-2xl text-white p-4 flex items-center gap-4 shadow-[0_10px_24px_-10px_rgba(244,124,32,.65)] active:scale-[0.99] transition-transform"
+                      style={{
+                        background:
+                          "linear-gradient(135deg, #ff9a3d 0%, #f47c20 55%, #e8650f 100%)",
+                      }}
                     >
-                      <span className="absolute left-0 top-3 bottom-3 w-1 rounded-r bg-orange-500" />
-                      <span className="w-14 h-14 rounded-full bg-white/10 grid place-items-center shrink-0">
+                      {/* decorative circles */}
+                      <span className="pointer-events-none absolute -right-6 -top-8 w-28 h-28 rounded-full bg-white/10" />
+                      <span className="pointer-events-none absolute right-10 -bottom-10 w-24 h-24 rounded-full bg-white/10" />
+                      <span className="relative w-14 h-14 rounded-full bg-white/20 ring-1 ring-white/30 grid place-items-center shrink-0">
                         <Package size={28} />
                       </span>
-                      <div className="flex-1">
-                        <p className="text-sm text-white/80">
+                      <div className="relative flex-1">
+                        <p className="text-sm font-medium text-white/90">
                           {tr("Total Shipments", "ការដឹកជញ្ជូនសរុប")}
                         </p>
-                        <p className="text-3xl font-extrabold leading-tight">
+                        <p className="text-3xl font-extrabold leading-tight drop-shadow-sm">
                           {n}
                         </p>
                       </div>
-                      <ChevronRight size={20} className="text-white/70" />
+                      <span className="relative w-8 h-8 rounded-full bg-white/20 grid place-items-center shrink-0">
+                        <ChevronRight size={18} />
+                      </span>
                     </div>
                   ))}
                   <div className="grid grid-cols-2 gap-3">
@@ -70824,7 +70829,7 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .jz-customer:not(.cb-cust-dark) header.bg-blue-600 button.bg-white{background:#f47c20;color:#fff;}
 .cb-cust-dark .jz-brand-j{fill:#e8eef8;}.cb-cust-dark .jz-brand-text{color:#e8eef8;}
 .jz-customer .jz-customer-content{padding-bottom:calc(108px + env(safe-area-inset-bottom));}
-.jz-customer .jz-bottom-nav{left:12px;right:12px;bottom:10px;max-width:448px;margin-inline:auto;background:var(--jz-c-glass)!important;border:1px solid var(--jz-c-border);border-radius:22px;box-shadow:0 8px 36px -14px rgba(5,20,45,.3);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);overflow:hidden;}
+.jz-customer .jz-bottom-nav{left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));max-width:448px;margin-inline:auto;background:var(--jz-c-glass)!important;border:1px solid var(--jz-c-border);border-radius:22px;box-shadow:0 8px 36px -14px rgba(5,20,45,.3);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);overflow:hidden;}
 .jz-customer .jz-bottom-nav>div{display:flex;overflow-x:auto;scrollbar-width:thin;}
 .jz-customer .jz-bottom-nav a{flex:1 0 60px;min-width:0;min-height:62px;padding:10px 4px;font-size:11px;line-height:1.4;color:var(--jz-c-muted);}
 .jz-customer .jz-bottom-nav a[aria-current="page"]{color:#3b82f6;background:rgba(59,130,246,.1);box-shadow:inset 0 3px 0 #3b82f6;}
