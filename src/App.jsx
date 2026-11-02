@@ -34368,6 +34368,23 @@ const CustomerApp = (() => {
     );
   }
 
+  // ---------- Cambodia flag (round badge, official flag cropped) ----------
+  const KH_FLAG_SRC =
+    "data:image/webp;base64,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";
+  function CambodiaFlag({ size = 32 }) {
+    return (
+      <img
+        src={KH_FLAG_SRC}
+        width={size}
+        height={size}
+        alt="Cambodia"
+        draggable={false}
+        className="shrink-0 rounded-full object-cover shadow-sm ring-1 ring-black/5"
+        style={{ width: size, height: size }}
+      />
+    );
+  }
+
   // ---------- Settings (Language · Appearance · Security · Log Out) ----------
   function CustomerSettings() {
     const { logout, tr, lang, theme } = useApp();
@@ -34419,10 +34436,24 @@ const CustomerApp = (() => {
           {langOpen && <LangSheet onClose={() => setLangOpen(false)} />}
           {themeOpen && <ThemeSheet onClose={() => setThemeOpen(false)} />}
           <div className="pt-2">
-            <Btn danger onClick={logout}>
-              <LogOut size={18} />
-              {tr("Log Out", "ចាកចេញ")}
-            </Btn>
+            <button
+              type="button"
+              onClick={logout}
+              className="w-full h-14 rounded-3xl flex items-center justify-center gap-3 text-white text-base font-bold shadow-[0_10px_24px_-10px_rgba(232,48,15,.7)] active:scale-[0.98] transition-transform"
+              style={{
+                background:
+                  "linear-gradient(135deg, #ff4d4d 0%, #f23b26 55%, #e8300f 100%)",
+              }}
+            >
+              <LogOut size={22} strokeWidth={2.4} />
+              {tr("Log out", "ចាកចេញ")}
+            </button>
+          </div>
+          <div className="flex items-center justify-center gap-2.5 pt-4 pb-2">
+            <CambodiaFlag size={28} />
+            <span className="text-[14px] font-semibold text-[color:var(--jz-c-text,#14284b)]">
+              {tr("Proudly built in Cambodia", "ផលិតដោយមោទនភាពនៅកម្ពុជា")}
+            </span>
           </div>
         </div>
       </>
