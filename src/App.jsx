@@ -2255,7 +2255,7 @@ function orderMethodCol(extra) {
           {row.cn_order_id && row.cn_order_no ? (
             <Link
               to={`/cn-orders/${encodeURIComponent(row.cn_order_no)}`}
-              className="inline-flex items-center rounded-full bg-violet-50 text-violet-700 px-2 py-0.5 text-[11px] font-bold hover:underline"
+              className="inline-flex items-center rounded-full border border-slate-200 bg-white text-slate-700 px-2 py-0.5 text-[11px] font-medium hover:underline"
             >
               {row.cn_order_no}
             </Link>
@@ -2275,7 +2275,7 @@ function PkgTypeTag({ row }) {
   const pl = isParseLinkPkg(row);
   return (
     <span
-      className={`inline-flex items-center gap-1.5 text-xs font-semibold ${pl ? "text-violet-700" : "text-sky-700"}`}
+      className={`inline-flex items-center gap-1.5 text-xs font-medium text-ink-600/80`}
     >
       <span
         className={`w-1.5 h-1.5 rounded-full ${pl ? "bg-violet-500" : "bg-sky-500"}`}
@@ -2340,7 +2340,7 @@ const MODULES = {
           row.cn_order_id && row.cn_order_no ? (
             <Link
               to={`/cn-orders/${encodeURIComponent(row.cn_order_no)}`}
-              className="inline-flex items-center rounded-full bg-violet-50 text-violet-700 px-2.5 py-1 text-[11px] font-bold hover:underline"
+              className="inline-flex items-center rounded-full border border-slate-200 bg-white text-slate-700 px-2.5 py-1 text-[11px] font-medium hover:underline"
             >
               {row.cn_order_no}
             </Link>
@@ -2353,12 +2353,12 @@ const MODULES = {
       col("type", "Type", {
         render: (row) =>
           isParseLinkPkg(row) ? (
-            <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-violet-700">
+            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-ink-600/80">
               <span className="w-1.5 h-1.5 rounded-full bg-violet-500" />
               Parse Link
             </span>
           ) : (
-            <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-sky-700">
+            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-ink-600/80">
               <span className="w-1.5 h-1.5 rounded-full bg-sky-500" />
               Shipment
             </span>
@@ -2441,7 +2441,7 @@ const MODULES = {
               {row.cn_order_id && row.cn_order_no ? (
                 <Link
                   to={`/cn-orders/${encodeURIComponent(row.cn_order_no)}`}
-                  className="inline-flex items-center rounded-full bg-violet-50 text-violet-700 px-2 py-0.5 text-[11px] font-bold hover:underline"
+                  className="inline-flex items-center rounded-full border border-slate-200 bg-white text-slate-700 px-2 py-0.5 text-[11px] font-medium hover:underline"
                 >
                   {row.cn_order_no}
                 </Link>
@@ -12574,6 +12574,9 @@ const ADMIN_KM = {
   Dashboard: "ផ្ទាំងគ្រប់គ្រង",
   Operations: "ប្រតិបត្តិការ",
   "Packages / TK": "កញ្ចប់ / TK",
+  Filter: "ត្រង",
+  "Advanced filters": "តម្រងលម្អិត",
+  Export: "នាំចេញ",
   "Scan Center": "មជ្ឈមណ្ឌលស្កេន",
   "Process Tracking": "តាមដានដំណើរការ",
   "Exception Center": "មជ្ឈមណ្ឌលករណីលើកលែង",
@@ -16722,6 +16725,7 @@ function ListPage({
   path,
 }) {
   const isLinkedTk = LINKED_TK_PATHS.includes(path);
+  const { t } = useAdminPrefs();
   const { user } = useAuth();
   const navigateTo = useNavigate();
   const {
@@ -17219,7 +17223,7 @@ function ListPage({
               className={`cbx-chip${statusFilter ? " is-active" : ""}`}
             >
               <Filter size={16} />
-              {statusFilter || "ត្រង"}
+              {statusFilter || t("Filter")}
               <Icons.ChevronDown size={15} />
             </button>
             {showFilterMenu && statusColumn && (
@@ -17266,7 +17270,7 @@ function ListPage({
               className={`cbx-chip is-dashed${advCount > 0 ? " is-active" : ""}`}
             >
               <Icons.SlidersHorizontal size={16} />
-              តម្រងលម្អិត
+              {t("Advanced filters")}
               {advCount > 0 && (
                 <span className="bg-signal-blue text-white text-[11px] px-1.5 rounded-sm">
                   {advCount}
@@ -17282,7 +17286,7 @@ function ListPage({
             className="cbx-chip"
           >
             <Download size={16} />
-            នាំចេញ
+            {t("Export")}
           </button>
         </div>
         {isLinkedTk && showAdv && (
@@ -47785,7 +47789,8 @@ function CnRefundModal({ open, row, onClose, onSaved }) {
 // ------------------------------------------------------------
 // History
 // ------------------------------------------------------------
-function CnHistoryModal({ history, onClose }) {
+function CnHistoryModal({ history, onClose, timeline = null }) {
+  const [tab, setTab] = useState(timeline ? "timeline" : "history");
   return (
     <div
       className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4"
@@ -47801,7 +47806,29 @@ function CnHistoryModal({ history, onClose }) {
             <Icons.X size={18} />
           </button>
         </div>
-        <div className="p-5 max-h-[70vh] overflow-y-auto divide-y divide-slate-100">
+        {timeline && (
+          <div className="flex gap-6 border-b border-slate-200 px-5">
+            {[
+              ["timeline", "Timeline"],
+              ["history", "History"],
+            ].map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setTab(k)}
+                className={`-mb-px border-b-2 py-2.5 text-sm font-semibold ${tab === k ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {timeline && tab === "timeline" && (
+          <div className="p-5 max-h-[70vh] overflow-y-auto">{timeline}</div>
+        )}
+        <div
+          className={`p-5 max-h-[70vh] overflow-y-auto divide-y divide-slate-100 ${timeline && tab !== "history" ? "hidden" : ""}`}
+        >
           {!history.length && (
             <p className="text-sm text-slate-400 text-center py-6">
               No history.
@@ -50173,6 +50200,33 @@ function CnPrintLabelModalLoader({ row, tk, onClose }) {
   );
 }
 
+// Row-style label / value list used by the CN order detail page
+// (label on the left, value on the right, hairline between rows).
+function CnInfoRows({ items }) {
+  return (
+    <dl className="divide-y divide-slate-100 text-sm">
+      {items.map((item) => (
+        <div
+          key={item.label}
+          className="grid grid-cols-[9rem_minmax(0,1fr)] items-start gap-4 py-2.5"
+        >
+          <dt className="text-slate-500">{item.label}</dt>
+          <dd className="min-w-0 break-words font-semibold text-slate-900">
+            {item.value ?? "—"}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function CnSectionLabel({ children }) {
+  return (
+    <div className="mb-0.5 mt-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+      {children}
+    </div>
+  );
+}
 function CnOrderDetailPage() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -50580,6 +50634,32 @@ function CnOrderDetailPage() {
   const labelTks = parcels
     .filter((p) => p.tk && cnTkLabelReady(p.tk_status || p.status))
     .map((p) => p.tk);
+  const hasItems =
+    Array.isArray(row.cn_order_items) && row.cn_order_items.length > 0;
+  const multiItems = hasItems && row.cn_order_items.length > 1;
+  const cnHasVal = (it) =>
+    it.value != null && it.value !== "" && it.value !== "—";
+  const profitText = purchaseFinance.refunded
+    ? "Excluded (Refunded)"
+    : estMargin != null
+      ? estMargin > 0.005
+        ? `Profit ${money(estMargin)}`
+        : estMargin < -0.005
+          ? `Loss ${money(Math.abs(estMargin))}`
+          : `Break-even ${money(0)}`
+      : purchaseFinance.minimumKnownLossUsd > 0.005
+        ? `Loss at least ${money(purchaseFinance.minimumKnownLossUsd)} (shipping not recorded)`
+        : "Pending actual goods + China shipping costs";
+  const profitTone =
+    purchaseFinance.refunded || estMargin == null
+      ? purchaseFinance.minimumKnownLossUsd > 0.005
+        ? "text-red-600"
+        : "text-slate-500"
+      : estMargin > 0.005
+        ? "text-emerald-700"
+        : estMargin < -0.005
+          ? "text-red-600"
+          : "text-slate-700";
 
   return (
     <div className="space-y-5">
@@ -50850,6 +50930,12 @@ function CnOrderDetailPage() {
         </div>
       </div>
 
+      {row.note && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-900">
+          <span className="font-bold">Note: </span>
+          {row.note}
+        </div>
+      )}
       {!canAdvance && !terminal && next && CN_AUTO_STAGES.has(next) && (
         <div className="rounded-xl bg-blue-50 text-blue-700 px-3.5 py-2.5 text-sm">
           Next step <b>{next}</b> updates automatically from the linked TK
@@ -50863,208 +50949,229 @@ function CnOrderDetailPage() {
         </div>
       )}
 
-      <div className="grid lg:grid-cols-3 gap-5">
+      <div className="grid lg:grid-cols-3 gap-5 items-start">
         <div className="lg:col-span-2 space-y-5">
-          <div className="cb-surface p-5">
-            <h2 className="font-bold text-sm mb-5">Order Timeline</h2>
-            <CnStatusTimeline
-              row={row}
-              history={history}
-              orderType={row.order_type}
-            />
-          </div>
-          <div className="cb-surface p-5">
-            <h2 className="font-bold text-sm mb-3">China Tracking / Parcels</h2>
-            {!parcels.length ? (
-              <p className="text-sm text-slate-400">
-                No tracking numbers yet. Required before moving to Shipping to
-                China WH.
-              </p>
-            ) : (
-              <div className="divide-y divide-slate-100">
-                {parcels.map((p) => (
-                  <div
-                    key={p.id}
-                    className="py-2.5 flex items-center justify-between gap-3 text-sm"
-                  >
-                    <div className="min-w-0">
-                      {editParcelId === p.id ? (
-                        <span className="inline-flex items-center gap-1.5 mr-2">
-                          <input
-                            autoFocus
-                            className={`${INPUT_CLS} font-mono !h-8 !py-0 w-56`}
-                            value={editParcelVal}
-                            onChange={(e) => setEditParcelVal(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                saveParcelEdit(p);
-                              }
-                              if (e.key === "Escape") setEditParcelId(null);
-                            }}
+          <div className="cb-surface divide-y divide-slate-100">
+            <div className="p-5">
+              <h2 className="font-bold text-sm mb-3">Order Details</h2>
+              <CnSectionLabel>Order</CnSectionLabel>
+              <CnInfoRows
+                items={[
+                  {
+                    label: "Order Type",
+                    value: cnOrderTypeLabel(row.order_type),
+                  },
+                  { label: "Platform", value: row.platform || "—" },
+                  { label: "Shop", value: row.shop_name || "—" },
+                  {
+                    label: "Supplier Order No.",
+                    value: row.supplier_order_no || "—",
+                  },
+                  ...(!hasItems
+                    ? [
+                        { label: "Product", value: row.product_name || "—" },
+                        {
+                          label: "Link",
+                          value: row.product_url ? (
+                            <a
+                              href={row.product_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-blue-600 hover:underline break-all"
+                            >
+                              {row.product_url}
+                            </a>
+                          ) : (
+                            "—"
+                          ),
+                        },
+                        { label: "Variant", value: row.variant || "—" },
+                        {
+                          label: "Qty · Unit Price",
+                          value: `${row.quantity ?? "—"} · ${row.pricing_mode === "usd" ? money(row.unit_price_usd ?? 0) : cnCny(row.unit_price_cny)}`,
+                        },
+                      ]
+                    : multiItems
+                      ? [
+                          {
+                            label: "Total Quantity",
+                            value: `${row.cn_order_items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0)} units`,
+                          },
+                        ]
+                      : []),
+                  { label: "Purchased by", value: row.purchased_by || "—" },
+                  {
+                    label: "Created",
+                    value: row.created_at
+                      ? formatDbTimestamp(row.created_at)
+                      : "—",
+                  },
+                ].filter(cnHasVal)}
+              />
+              <div className="mt-4">
+                <CnSectionLabel>Shipping Method</CnSectionLabel>
+                <CnInfoRows
+                  items={[
+                    {
+                      label: "Shipping Method",
+                      value: (
+                        <span className="inline-flex items-center gap-1.5">
+                          <ShipMethodIcon
+                            m={row.shipping_method}
+                            size={15}
+                            className="text-indigo-700"
                           />
-                          <button
-                            type="button"
-                            onClick={() => saveParcelEdit(p)}
-                            className="text-emerald-600 hover:text-emerald-700"
-                            aria-label="Save"
-                          >
-                            <Icons.Check size={15} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setEditParcelId(null)}
-                            className="text-slate-400 hover:text-slate-600"
-                            aria-label="Cancel"
-                          >
-                            <Icons.X size={15} />
-                          </button>
+                          {normShipMethod(row.shipping_method) || "Land"}
                         </span>
-                      ) : (
-                        <b className="font-mono text-slate-900">
-                          {p.domestic_tracking}
-                        </b>
-                      )}
-                      <span className="text-xs text-slate-400">
-                        {p.courier ? ` · ${p.courier}` : ""}
-                        {p.tk ? " · " : " · not scanned yet"}
-                      </span>
-                      {p.tk && (
-                        <Link
-                          to={`/packages/${encodeURIComponent(p.tk)}`}
-                          className="text-xs font-semibold text-signal-blue hover:underline"
-                        >
-                          View TK {p.tk}
-                        </Link>
-                      )}
-                      {p.tk && cnTkLabelReady(p.tk_status || p.status) && (
-                        <button
-                          type="button"
-                          onClick={() => setLabelTk(p.tk)}
-                          className="ml-2 inline-flex items-center gap-1 align-middle text-xs font-semibold text-slate-600 hover:text-signal-blue"
-                          title="Print label"
-                        >
-                          <Icons.Printer size={12} /> Print Label
-                        </button>
-                      )}
-                      {p.tk && hasPermission(user, "tk.edit") && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            CN_ORDER_NO_BY_ID[row.id] = row.order_id;
-                            CN_SHIP_METHOD_BY_ID[row.id] =
-                              row.shipping_method || "";
-                            setChangeTkTarget(p.tk);
-                          }}
-                          className="ml-2 align-middle text-slate-400 hover:text-signal-blue"
-                          title="Change tracking number"
-                        >
-                          <Icons.Pencil size={12} />
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <CnStatusBadge
-                        status={p.status || "Shipping to China WH"}
-                      />
-                      {canEdit &&
-                        !p.tk &&
-                        !p.status &&
-                        editParcelId !== p.id && (
+                      ),
+                    },
+                  ]}
+                />
+              </div>
+            </div>
+            <div className="p-5">
+              <h2 className="font-bold text-sm mb-3">
+                China Tracking / Parcels
+              </h2>
+              {!parcels.length ? (
+                <p className="text-sm text-slate-400">
+                  No tracking numbers yet. Required before moving to Shipping to
+                  China WH.
+                </p>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {parcels.map((p) => (
+                    <div
+                      key={p.id}
+                      className="py-2.5 flex items-center justify-between gap-3 text-sm"
+                    >
+                      <div className="min-w-0">
+                        {editParcelId === p.id ? (
+                          <span className="inline-flex items-center gap-1.5 mr-2">
+                            <input
+                              autoFocus
+                              className={`${INPUT_CLS} font-mono !h-8 !py-0 w-56`}
+                              value={editParcelVal}
+                              onChange={(e) => setEditParcelVal(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  saveParcelEdit(p);
+                                }
+                                if (e.key === "Escape") setEditParcelId(null);
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => saveParcelEdit(p)}
+                              className="text-emerald-600 hover:text-emerald-700"
+                              aria-label="Save"
+                            >
+                              <Icons.Check size={15} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditParcelId(null)}
+                              className="text-slate-400 hover:text-slate-600"
+                              aria-label="Cancel"
+                            >
+                              <Icons.X size={15} />
+                            </button>
+                          </span>
+                        ) : (
+                          <b className="font-mono text-slate-900">
+                            {p.domestic_tracking}
+                          </b>
+                        )}
+                        <span className="text-xs text-slate-400">
+                          {p.courier ? ` · ${p.courier}` : ""}
+                          {p.tk ? " · " : " · not scanned yet"}
+                        </span>
+                        {p.tk && (
+                          <Link
+                            to={`/packages/${encodeURIComponent(p.tk)}`}
+                            className="text-xs font-semibold text-signal-blue hover:underline"
+                          >
+                            View TK {p.tk}
+                          </Link>
+                        )}
+                        {p.tk && cnTkLabelReady(p.tk_status || p.status) && (
+                          <button
+                            type="button"
+                            onClick={() => setLabelTk(p.tk)}
+                            className="ml-2 inline-flex items-center gap-1 align-middle text-xs font-semibold text-slate-600 hover:text-signal-blue"
+                            title="Print label"
+                          >
+                            <Icons.Printer size={12} /> Print Label
+                          </button>
+                        )}
+                        {p.tk && hasPermission(user, "tk.edit") && (
                           <button
                             type="button"
                             onClick={() => {
-                              setEditParcelId(p.id);
-                              setEditParcelVal(p.domestic_tracking || "");
+                              CN_ORDER_NO_BY_ID[row.id] = row.order_id;
+                              CN_SHIP_METHOD_BY_ID[row.id] =
+                                row.shipping_method || "";
+                              setChangeTkTarget(p.tk);
                             }}
-                            className="text-slate-400 hover:text-signal-blue"
+                            className="ml-2 align-middle text-slate-400 hover:text-signal-blue"
                             title="Change tracking number"
                           >
-                            <Icons.Pencil size={14} />
+                            <Icons.Pencil size={12} />
                           </button>
                         )}
-                      {canEdit && !p.tk && !p.status && (
-                        <button
-                          onClick={() => removeParcel(p)}
-                          className="text-slate-400 hover:text-red-500"
-                        >
-                          <Icons.Trash2 size={14} />
-                        </button>
-                      )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <CnStatusBadge
+                          status={p.status || "Shipping to China WH"}
+                        />
+                        {canEdit &&
+                          !p.tk &&
+                          !p.status &&
+                          editParcelId !== p.id && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditParcelId(p.id);
+                                setEditParcelVal(p.domestic_tracking || "");
+                              }}
+                              className="text-slate-400 hover:text-signal-blue"
+                              title="Change tracking number"
+                            >
+                              <Icons.Pencil size={14} />
+                            </button>
+                          )}
+                        {canEdit && !p.tk && !p.status && (
+                          <button
+                            onClick={() => removeParcel(p)}
+                            className="text-slate-400 hover:text-red-500"
+                          >
+                            <Icons.Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {canEdit && !terminal && (
-              <form onSubmit={addParcel} className="flex gap-2 mt-3">
-                <input
-                  className={`${INPUT_CLS} font-mono`}
-                  value={newTrack}
-                  onChange={(e) => setNewTrack(e.target.value)}
-                  placeholder="Add another tracking number"
-                />
-                <button className="h-9 px-3 rounded-md bg-slate-900 text-white text-sm font-semibold shrink-0">
-                  Add
-                </button>
-              </form>
-            )}
+                  ))}
+                </div>
+              )}
+              {canEdit && !terminal && (
+                <form onSubmit={addParcel} className="flex gap-2 mt-3">
+                  <input
+                    className={`${INPUT_CLS} font-mono`}
+                    value={newTrack}
+                    onChange={(e) => setNewTrack(e.target.value)}
+                    placeholder="Add another tracking number"
+                  />
+                  <button className="h-9 px-3 rounded-md bg-slate-900 text-white text-sm font-semibold shrink-0">
+                    Add
+                  </button>
+                </form>
+              )}
+            </div>
           </div>
         </div>
 
         <div className="space-y-5">
-          {row.order_type !== "direct" && (
-            <div className="cb-surface p-5">
-              <h2 className="font-bold text-sm mb-4">Payment</h2>
-              <InfoGrid
-                items={[
-                  {
-                    label:
-                      row.pricing_mode === "usd"
-                        ? "Goods (USD)"
-                        : "Goods (CNY)",
-                    value:
-                      row.pricing_mode === "usd"
-                        ? money(
-                            (Number(row.total_due_usd) || 0) -
-                              (Number(row.domestic_shipping_usd) || 0) -
-                              (Number(row.service_fee_usd) || 0) -
-                              (Number(row.additional_services_total_usd) || 0),
-                          )
-                        : cnCny(row.product_total_cny),
-                  },
-                  {
-                    label: "China shipping",
-                    value:
-                      row.pricing_mode === "usd"
-                        ? money(row.domestic_shipping_usd || 0)
-                        : cnCny(row.domestic_shipping_cny),
-                  },
-                  { label: "Rate (CNY/USD)", value: row.cny_per_usd ?? "—" },
-                  {
-                    label: `Service fee ${row.service_fee_pct ?? 0}%`,
-                    value: money(row.service_fee_usd),
-                  },
-                  { label: "Total due", value: money(due) },
-                  { label: "Paid", value: money(paid) },
-                  { label: "Remaining", value: money(Math.max(0, due - paid)) },
-                  { label: "Method", value: row.payment_method || "—" },
-                  ...(row.refunded_usd > 0
-                    ? [{ label: "Refunded", value: money(row.refunded_usd) }]
-                    : []),
-                  ...(row.paid_at
-                    ? [
-                        {
-                          label: "Paid at",
-                          value: formatDbTimestamp(row.paid_at),
-                          span: true,
-                        },
-                      ]
-                    : []),
-                ]}
-              />
-            </div>
-          )}
           {cnShippingFeeRows(parcels).length > 0 && (
             <div className="cb-surface p-5">
               <h2 className="font-bold text-sm mb-3">
@@ -51158,275 +51265,353 @@ function CnOrderDetailPage() {
               </div>
             </div>
           )}
-          {(cnImages.length > 0 || canEdit) && (
-            <div className="cb-surface p-5">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="font-bold text-sm">
-                  Product / Package Images
-                  {cnImages.length > 0 ? ` (${cnImages.length})` : ""}
-                </h2>
-                {canEdit && (
-                  <button
-                    type="button"
-                    onClick={() => setCnImgOpen(true)}
-                    className="h-8 px-3 rounded-lg border border-slate-200 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-50 inline-flex items-center gap-1.5"
-                  >
-                    <Icons.Image size={13} />
-                    {cnImages.length ? "Manage" : "Add"}
-                  </button>
-                )}
-              </div>
-              {cnImages.length > 0 ? (
-                (() => {
-                  const its =
-                    Array.isArray(row.cn_order_items) &&
-                    row.cn_order_items.length
-                      ? row.cn_order_items
-                      : [{ product_name: row.product_name }];
-                  const g = groupCnImages(cnImages, its.length);
-                  const thumbs = (list) => (
-                    <div className="flex flex-wrap gap-3">
-                      {list.map((im) => (
-                        <AirImg
-                          key={im.id}
-                          src={im.url}
-                          onClick={() => setCnViewer(cnImages.indexOf(im))}
-                          className="w-24 h-24 rounded-xl border border-slate-200"
-                          FallbackIcon={Icons.ShoppingCart}
-                        />
-                      ))}
-                    </div>
-                  );
-                  return (
-                    <div className="space-y-4">
-                      {its.map((it, i) => (
-                        <div key={i}>
-                          <div className="mb-2 flex items-center gap-2 text-xs">
-                            <span className="h-5 min-w-5 px-1.5 rounded-full bg-slate-900 text-white font-bold grid place-items-center">
-                              {i + 1}
-                            </span>
-                            <b className="text-slate-800 truncate">
-                              {it.product_name || `Item ${i + 1}`}
-                            </b>
-                            {it.variant && (
-                              <span className="text-slate-500 truncate">
-                                · {it.variant}
+          <div className="cb-surface divide-y divide-slate-100">
+            {(cnImages.length > 0 || canEdit) && (
+              <div className="p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="font-bold text-sm">
+                    Product / Package Images
+                    {cnImages.length > 0 ? ` (${cnImages.length})` : ""}
+                  </h2>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={() => setCnImgOpen(true)}
+                      className="h-8 px-3 rounded-lg border border-slate-200 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-50 inline-flex items-center gap-1.5"
+                    >
+                      <Icons.Image size={13} />
+                      {cnImages.length ? "Manage" : "Add"}
+                    </button>
+                  )}
+                </div>
+                {cnImages.length > 0 ? (
+                  (() => {
+                    const its =
+                      Array.isArray(row.cn_order_items) &&
+                      row.cn_order_items.length
+                        ? row.cn_order_items
+                        : [{ product_name: row.product_name }];
+                    const g = groupCnImages(cnImages, its.length);
+                    const thumbs = (list) => (
+                      <div className="flex flex-wrap gap-3">
+                        {list.map((im) => (
+                          <AirImg
+                            key={im.id}
+                            src={im.url}
+                            onClick={() => setCnViewer(cnImages.indexOf(im))}
+                            className="w-24 h-24 rounded-xl border border-slate-200"
+                            FallbackIcon={Icons.ShoppingCart}
+                          />
+                        ))}
+                      </div>
+                    );
+                    return (
+                      <div className="space-y-4">
+                        {its.map((it, i) => (
+                          <div key={i}>
+                            <div className="mb-2 flex items-center gap-2 text-xs">
+                              <span className="h-5 min-w-5 px-1.5 rounded-full bg-slate-900 text-white font-bold grid place-items-center">
+                                {i + 1}
                               </span>
-                            )}
-                          </div>
-                          {g.byItem[i].length ? (
-                            thumbs(g.byItem[i])
-                          ) : (
-                            <p className="text-xs text-slate-400">
-                              No photo for this item.
-                            </p>
-                          )}
-                        </div>
-                      ))}
-                      {g.loose.length > 0 && (
-                        <div>
-                          <div className="mb-2 text-xs font-bold text-amber-700">
-                            Not assigned to an item ({g.loose.length}) — open
-                            Manage to assign
-                          </div>
-                          {thumbs(g.loose)}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })()
-              ) : (
-                <p className="text-xs text-slate-400">No images yet.</p>
-              )}
-            </div>
-          )}
-          <div className="cb-surface p-5">
-            <h2 className="font-bold text-sm mb-4">Order Information</h2>
-            {Array.isArray(row.cn_order_items) &&
-              row.cn_order_items.length > 0 && (
-                <div className="mb-4 rounded-xl border border-slate-200 overflow-hidden">
-                  <div className="bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600">
-                    Product Items ({row.cn_order_items.length})
-                  </div>
-                  <div className="divide-y divide-slate-100">
-                    {row.cn_order_items.map((item, index) => {
-                      const itemPhotos = cnImages.filter(
-                        (im) => Number(im.item_no) === index + 1,
-                      );
-                      return (
-                        <div
-                          key={`${row.id}-item-${index}`}
-                          className="grid grid-cols-12 gap-2 px-3 py-3 text-sm"
-                        >
-                          <div className="col-span-8 min-w-0 flex gap-3">
-                            {itemPhotos[0] && (
-                              <div className="relative shrink-0">
-                                <AirImg
-                                  src={itemPhotos[0].url}
-                                  onClick={() =>
-                                    setCnViewer(cnImages.indexOf(itemPhotos[0]))
-                                  }
-                                  className="w-12 h-12 rounded-lg border border-slate-200"
-                                  FallbackIcon={Icons.ShoppingCart}
-                                />
-                                {itemPhotos.length > 1 && (
-                                  <span className="absolute -bottom-1 -right-1 h-4 min-w-4 px-1 rounded-full bg-blue-600 text-white text-[9px] font-bold grid place-items-center">
-                                    +{itemPhotos.length - 1}
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                            <div className="min-w-0">
-                              <b className="block text-slate-800">
-                                {item.product_name || `Item ${index + 1}`}
+                              <b className="text-slate-800 truncate">
+                                {it.product_name || `Item ${i + 1}`}
                               </b>
-                              {item.variant && (
-                                <span className="block text-xs text-slate-500">
-                                  {item.variant}
+                              {it.variant && (
+                                <span className="text-slate-500 truncate">
+                                  · {it.variant}
                                 </span>
                               )}
-                              {item.product_url && (
-                                <a
-                                  href={item.product_url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="block truncate text-xs text-blue-600 hover:underline"
-                                >
-                                  {item.product_url}
-                                </a>
-                              )}
                             </div>
+                            {g.byItem[i].length ? (
+                              thumbs(g.byItem[i])
+                            ) : (
+                              <p className="text-xs text-slate-400">
+                                No photo for this item.
+                              </p>
+                            )}
                           </div>
-                          <div className="col-span-4 text-right">
-                            <b>
-                              {item.quantity} ×{" "}
-                              {row.pricing_mode === "usd"
-                                ? money(item.unit_price_usd || 0)
-                                : cnCny(item.unit_price_cny || 0)}
-                            </b>
-                            <span className="block text-xs text-slate-500">
-                              {row.pricing_mode === "usd"
-                                ? money(
-                                    item.line_total_usd ??
-                                      (Number(item.quantity) || 0) *
-                                        (Number(item.unit_price_usd) || 0),
-                                  )
-                                : cnCny(
-                                    item.line_total_cny ??
-                                      (Number(item.quantity) || 0) *
-                                        (Number(item.unit_price_cny) || 0),
-                                  )}
-                            </span>
+                        ))}
+                        {g.loose.length > 0 && (
+                          <div>
+                            <div className="mb-2 text-xs font-bold text-amber-700">
+                              Not assigned to an item ({g.loose.length}) — open
+                              Manage to assign
+                            </div>
+                            {thumbs(g.loose)}
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                        )}
+                      </div>
+                    );
+                  })()
+                ) : (
+                  <p className="text-xs text-slate-400">No images yet.</p>
+                )}
+              </div>
+            )}
+            <div className="p-5">
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="font-bold text-sm">
+                  Purchase Cost &amp; Profit
+                </h2>
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                  Internal
+                </span>
+              </div>
+              <div className="mb-4 rounded-xl bg-slate-50 px-3.5 py-3">
+                <div className="text-xs text-slate-500">
+                  Pre-freight profit / loss
                 </div>
-              )}
-            <InfoGrid
-              items={[
-                {
-                  label: "Order Type",
-                  value: cnOrderTypeLabel(row.order_type),
-                },
-                { label: "Platform", value: row.platform || "—" },
-                { label: "Shop", value: row.shop_name || "—" },
-                {
-                  label: "Shipping Method",
-                  value: normShipMethod(row.shipping_method) || "Land",
-                },
-                {
-                  label: "Product",
-                  value: row.product_name || "—",
-                  span: true,
-                },
-                {
-                  label: "Link",
-                  span: true,
-                  value: row.product_url ? (
-                    <a
-                      href={row.product_url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-blue-600 hover:underline break-all"
-                    >
-                      {row.product_url}
-                    </a>
-                  ) : (
-                    "—"
-                  ),
-                },
-                { label: "Variant", value: row.variant || "—" },
-                {
-                  label:
-                    Array.isArray(row.cn_order_items) &&
-                    row.cn_order_items.length > 1
-                      ? "Total Quantity"
-                      : "Qty · Unit Price",
-                  value:
-                    Array.isArray(row.cn_order_items) &&
-                    row.cn_order_items.length > 1
-                      ? `${row.cn_order_items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0)} units · Individual prices shown above`
-                      : `${row.quantity ?? "—"} · ${row.pricing_mode === "usd" ? money(row.unit_price_usd ?? 0) : cnCny(row.unit_price_cny)}`,
-                },
-                {
-                  label: "Supplier Order No.",
-                  value: row.supplier_order_no || "—",
-                  span: true,
-                },
-                {
-                  label: "Actual goods cost",
-                  value:
-                    purchaseFinance.goodsUsd == null
-                      ? "Pending actual cost"
-                      : `${cnCny(row.actual_cost_cny)} (${money(purchaseFinance.goodsUsd)})`,
-                },
-                {
-                  label: "Actual China shipping cost",
-                  value:
-                    purchaseFinance.shippingUsd == null
-                      ? "Pending actual cost"
-                      : `${cnCny(row.actual_domestic_shipping_cny)} (${money(purchaseFinance.shippingUsd)})`,
-                },
-                {
-                  label: "Total actual purchase cost",
-                  value:
-                    purchaseFinance.totalCostUsd == null
-                      ? "Pending — record both actual cost fields"
-                      : money(purchaseFinance.totalCostUsd),
-                },
-                {
-                  label: "Purchase FX rate (CNY/USD)",
-                  value: purchaseFinance.rate || "—",
-                },
-                {
-                  label: "Pre-freight profit / loss",
-                  value: purchaseFinance.refunded
-                    ? "Excluded (Refunded)"
-                    : estMargin != null
-                      ? estMargin > 0.005
-                        ? `Profit ${money(estMargin)}`
-                        : estMargin < -0.005
-                          ? `Loss ${money(Math.abs(estMargin))}`
-                          : `Break-even ${money(0)}`
-                      : purchaseFinance.minimumKnownLossUsd > 0.005
-                        ? `Loss at least ${money(purchaseFinance.minimumKnownLossUsd)} (shipping not recorded)`
-                        : "Pending actual goods + China shipping costs",
-                },
-                { label: "Purchased by", value: row.purchased_by || "—" },
-                {
-                  label: "Created",
-                  value: row.created_at
-                    ? formatDbTimestamp(row.created_at)
-                    : "—",
-                },
-                { label: "Note", value: row.note || "—", span: true },
-              ]}
-            />
+                <div className={`mt-0.5 text-base font-bold ${profitTone}`}>
+                  {profitText}
+                </div>
+              </div>
+              <CnInfoRows
+                items={[
+                  {
+                    label: "Actual goods cost",
+                    value:
+                      purchaseFinance.goodsUsd == null
+                        ? "Pending actual cost"
+                        : `${cnCny(row.actual_cost_cny)} (${money(purchaseFinance.goodsUsd)})`,
+                  },
+                  {
+                    label: "Actual China shipping cost",
+                    value:
+                      purchaseFinance.shippingUsd == null
+                        ? "Pending actual cost"
+                        : `${cnCny(row.actual_domestic_shipping_cny)} (${money(purchaseFinance.shippingUsd)})`,
+                  },
+                  {
+                    label: "Total actual purchase cost",
+                    value:
+                      purchaseFinance.totalCostUsd == null
+                        ? "Pending — record both actual cost fields"
+                        : money(purchaseFinance.totalCostUsd),
+                  },
+                  ...(purchaseFinance.rate
+                    ? [
+                        {
+                          label: "Purchase FX rate (CNY/USD)",
+                          value: purchaseFinance.rate,
+                        },
+                      ]
+                    : []),
+                ]}
+              />
+            </div>
           </div>
         </div>
       </div>
+
+      {hasItems && (
+        <div className="cb-surface overflow-hidden">
+          <div className="px-6 pt-6 pb-4">
+            <h2 className="font-bold text-base">
+              Order Items ({row.cn_order_items.length})
+            </h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-base">
+              <thead>
+                <tr className="bg-slate-50 text-xs font-bold uppercase tracking-wider text-slate-500">
+                  <th className="px-6 py-3.5 text-left">Product / Variant</th>
+                  <th className="px-4 py-3.5 text-right">Quantity</th>
+                  <th className="px-4 py-3.5 text-right">Unit Price</th>
+                  <th className="px-6 py-3.5 text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {row.cn_order_items.map((item, index) => {
+                  const itemPhotos = cnImages.filter(
+                    (im) => Number(im.item_no) === index + 1,
+                  );
+                  return (
+                    <tr key={`${row.id}-item-${index}`} className="align-top">
+                      <td className="px-6 py-5">
+                        <div className="flex min-w-0 gap-4">
+                          {itemPhotos[0] && (
+                            <div className="relative shrink-0">
+                              <AirImg
+                                src={itemPhotos[0].url}
+                                onClick={() =>
+                                  setCnViewer(cnImages.indexOf(itemPhotos[0]))
+                                }
+                                className="w-16 h-16 rounded-xl border border-slate-200"
+                                FallbackIcon={Icons.ShoppingCart}
+                              />
+                              {itemPhotos.length > 1 && (
+                                <span className="absolute -bottom-1.5 -right-1.5 h-5 min-w-5 px-1.5 rounded-full bg-blue-600 text-white text-[10px] font-bold grid place-items-center ring-2 ring-white">
+                                  +{itemPhotos.length - 1}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <b className="block text-base font-semibold text-slate-900">
+                              {item.product_name || `Item ${index + 1}`}
+                            </b>
+                            {item.variant && (
+                              <span className="mt-0.5 block text-sm text-slate-500">
+                                {item.variant}
+                              </span>
+                            )}
+                            {item.product_url && (
+                              <a
+                                href={item.product_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block max-w-md truncate text-xs text-blue-600 hover:underline"
+                              >
+                                {item.product_url}
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-5 text-right text-base font-semibold">
+                        ×{item.quantity}
+                      </td>
+                      <td className="px-4 py-5 text-right text-base">
+                        {row.pricing_mode === "usd"
+                          ? money(item.unit_price_usd || 0)
+                          : cnCny(item.unit_price_cny || 0)}
+                      </td>
+                      <td className="px-6 py-5 text-right text-base font-bold">
+                        {row.pricing_mode === "usd"
+                          ? money(
+                              item.line_total_usd ??
+                                (Number(item.quantity) || 0) *
+                                  (Number(item.unit_price_usd) || 0),
+                            )
+                          : cnCny(
+                              item.line_total_cny ??
+                                (Number(item.quantity) || 0) *
+                                  (Number(item.unit_price_cny) || 0),
+                            )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {row.order_type !== "direct" && (
+        <div className="grid xl:grid-cols-2 gap-5 items-start">
+          <div className="cb-surface overflow-hidden">
+            <div className="px-5 pt-5 pb-2">
+              <h2 className="font-bold text-sm">Summary</h2>
+            </div>
+            <dl className="divide-y divide-slate-100 px-5 text-sm">
+              {[
+                ...(hasItems
+                  ? [
+                      {
+                        label: "Total Quantity",
+                        value: row.cn_order_items.reduce(
+                          (sum, item) => sum + (Number(item.quantity) || 0),
+                          0,
+                        ),
+                      },
+                    ]
+                  : []),
+                {
+                  label:
+                    row.pricing_mode === "usd" ? "Goods (USD)" : "Goods (CNY)",
+                  value:
+                    row.pricing_mode === "usd"
+                      ? money(
+                          (Number(row.total_due_usd) || 0) -
+                            (Number(row.domestic_shipping_usd) || 0) -
+                            (Number(row.service_fee_usd) || 0) -
+                            (Number(row.additional_services_total_usd) || 0),
+                        )
+                      : cnCny(row.product_total_cny),
+                },
+                {
+                  label: "China shipping",
+                  value:
+                    row.pricing_mode === "usd"
+                      ? money(row.domestic_shipping_usd || 0)
+                      : cnCny(row.domestic_shipping_cny),
+                },
+                ...(Number(row.cny_per_usd) > 0
+                  ? [{ label: "Rate (CNY/USD)", value: row.cny_per_usd }]
+                  : []),
+                {
+                  label: `Service fee ${row.service_fee_pct ?? 0}%`,
+                  value: money(row.service_fee_usd),
+                },
+                ...(Number(row.additional_services_total_usd) > 0
+                  ? [
+                      {
+                        label: "Additional services",
+                        value: money(row.additional_services_total_usd),
+                      },
+                    ]
+                  : []),
+              ].map((r) => (
+                <div
+                  key={r.label}
+                  className="flex items-center justify-between gap-4 py-2.5"
+                >
+                  <dt className="text-slate-500">{r.label}</dt>
+                  <dd className="font-semibold text-slate-900">{r.value}</dd>
+                </div>
+              ))}
+            </dl>
+            <div className="mt-1 flex items-center justify-between border-t border-slate-200 bg-slate-50/70 px-5 py-3.5">
+              <span className="font-bold text-slate-900">Total due</span>
+              <span className="text-lg font-bold text-slate-900">
+                {money(due)}
+              </span>
+            </div>
+          </div>
+
+          <div className="cb-surface overflow-hidden">
+            <div className="flex items-center justify-between px-5 pt-5 pb-3">
+              <h2 className="font-bold text-sm">Payment</h2>
+              <CnPaymentBadge status={row.payment_status} />
+            </div>
+            <div className="grid grid-cols-2 border-y border-slate-100">
+              <div className="px-5 py-3.5">
+                <div className="text-xs text-slate-500">Paid</div>
+                <div className="mt-0.5 text-lg font-bold text-slate-900">
+                  {money(paid)}
+                </div>
+              </div>
+              <div className="border-l border-slate-100 px-5 py-3.5">
+                <div className="text-xs text-slate-500">Outstanding</div>
+                <div
+                  className={`mt-0.5 text-lg font-bold ${due - paid > 0.005 ? "text-red-600" : "text-slate-900"}`}
+                >
+                  {money(Math.max(0, due - paid))}
+                </div>
+              </div>
+            </div>
+            <div className="px-5 pb-3">
+              <CnInfoRows
+                items={[
+                  { label: "Method", value: row.payment_method || "—" },
+                  ...(row.paid_at
+                    ? [
+                        {
+                          label: "Paid at",
+                          value: formatDbTimestamp(row.paid_at),
+                        },
+                      ]
+                    : []),
+                  ...(row.refunded_usd > 0
+                    ? [{ label: "Refunded", value: money(row.refunded_usd) }]
+                    : []),
+                ]}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {cnViewer >= 0 && (
         <AirImageViewer
@@ -51539,6 +51724,13 @@ function CnOrderDetailPage() {
         <CnHistoryModal
           history={history}
           onClose={() => setHistoryOpen(false)}
+          timeline={
+            <CnStatusTimeline
+              row={row}
+              history={history}
+              orderType={row.order_type}
+            />
+          }
         />
       )}
     </div>
@@ -70840,6 +71032,22 @@ html.cb-admin-dark .cb-app main table td :is(.rounded-full,.rounded-md){border:1
 @media(min-width:1000px){
  .jz-customer .jz-skel-list{grid-template-columns:repeat(3,minmax(0,1fr));}
 }
+
+
+/* ===== DRSB-style polish (final layer) =====
+   One title per page, quieter KPI strip, calmer table hierarchy. */
+@media(min-width:640px){
+ .cb-app:has(main h1) .cbx-topbar .cbx-page-title{display:none;}
+ .cb-app:has(main h1) .cbx-topbar .cbx-search{margin-inline:0 auto!important;}
+}
+.cb-app .cbx-kpi-cell span.rounded-full.w-8.h-8{display:none;}
+.cb-app .cbx-kpi-cell .flex.items-center>span:last-child{color:var(--cbx-muted);font-weight:500;}
+.cb-app .cbx-kpi-strip{box-shadow:none;border-radius:16px;}
+.cb-app .cb-stat{border-top:0;}
+.cb-app :is(.cb-card,.cb-surface,.cbx-card){box-shadow:0 1px 2px rgba(16,24,40,.04)!important;border-radius:16px!important;}
+.cb-app main table th{background:transparent;text-transform:uppercase;letter-spacing:.06em;font-size:12.5px;font-weight:600;color:var(--cbx-muted);border-bottom:1px solid var(--cbx-border);}
+.cb-app main table td{padding-top:16px;padding-bottom:16px;}
+.cb-app main table td :is(.rounded-full,.rounded-md,.rounded-sm){font-weight:500;padding:2px 10px;}
 
 `;
 
