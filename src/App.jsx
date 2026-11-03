@@ -8002,14 +8002,22 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
     }
   }
 
-  const shell = (children) => (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-stretch sm:items-center justify-center sm:px-4"
-      onClick={onClose}
-    >
-      {children}
-    </div>
-  );
+  // Rendered as a direct child of the app shell (portal) so the dim + blur always
+  // cover the WHOLE viewport, including the topbar and the sidebar header. Inside
+  // <main>, ancestors can clip the overlay and leave an un-dimmed strip at the top.
+  // The portal target stays inside .cb-app so the shell's form styles still apply.
+  const shell = (children) =>
+    createPortal(
+      <div
+        className="cb-modal-backdrop fixed inset-0 bg-ink-900/40 backdrop-blur-sm z-[120] flex items-stretch sm:items-center justify-center sm:px-4"
+        style={{ top: 0, left: 0, right: 0, bottom: 0, minHeight: "100dvh" }}
+        onClick={onClose}
+      >
+        {children}
+      </div>,
+      (typeof document !== "undefined" && document.querySelector(".cb-app")) ||
+        document.body,
+    );
 
   if (done) {
     return shell(
@@ -9534,6 +9542,236 @@ const SCAN_PHASE_LABEL = {
   error: "Failed",
 };
 
+// ------------------------------------------------------------
+// CameraScanModal — scan a barcode / QR with the phone (or laptop) camera.
+// Uses the native BarcodeDetector when the browser has it (Chrome/Android),
+// otherwise falls back to the `barcode-detector` ponyfill (iOS Safari etc.):
+//   npm i barcode-detector
+// Camera access needs HTTPS (or localhost).
+// ------------------------------------------------------------
+const CAMERA_SCAN_FORMATS = [
+  "code_128",
+  "code_39",
+  "code_93",
+  "codabar",
+  "ean_13",
+  "ean_8",
+  "upc_a",
+  "upc_e",
+  "itf",
+  "qr_code",
+  "data_matrix",
+];
+
+function CameraScanModal({ open, onClose, onDetected }) {
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const [error, setError] = useState("");
+  const [ready, setReady] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
+  const [torchOk, setTorchOk] = useState(false);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    let stopped = false;
+    let timer = null;
+    let last = "";
+    setError("");
+    setReady(false);
+    setTorchOn(false);
+    setTorchOk(false);
+
+    async function start() {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error("Browser នេះមិនគាំទ្រកាមេរ៉ា ឬមិនមែន HTTPS ទេ។");
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        });
+        if (stopped) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        streamRef.current = stream;
+        const track = stream.getVideoTracks()[0];
+        try {
+          setTorchOk(!!track?.getCapabilities?.().torch);
+        } catch {
+          /* torch not supported */
+        }
+        const video = videoRef.current;
+        video.srcObject = stream;
+        await video.play();
+        setReady(true);
+
+        let Detector = window.BarcodeDetector;
+        if (!Detector) {
+          ({ BarcodeDetector: Detector } =
+            await import("barcode-detector/ponyfill"));
+        }
+        let formats = CAMERA_SCAN_FORMATS;
+        try {
+          const supported = await Detector.getSupportedFormats?.();
+          if (supported?.length) {
+            formats = CAMERA_SCAN_FORMATS.filter((f) => supported.includes(f));
+          }
+        } catch {
+          /* use default list */
+        }
+        const detector = new Detector({ formats });
+
+        async function tick() {
+          if (stopped) return;
+          try {
+            if (video.readyState >= 2) {
+              const codes = await detector.detect(video);
+              const raw = codes?.[0]?.rawValue?.trim();
+              if (raw) {
+                // Same code on two consecutive frames = fewer misreads.
+                if (raw === last) {
+                  stopped = true;
+                  navigator.vibrate?.(60);
+                  onDetected(raw);
+                  return;
+                }
+                last = raw;
+              } else {
+                last = "";
+              }
+            }
+          } catch {
+            /* ignore single-frame errors */
+          }
+          timer = setTimeout(tick, 120);
+        }
+        tick();
+      } catch (e) {
+        if (stopped) return;
+        const denied = e?.name === "NotAllowedError";
+        setError(
+          denied
+            ? "សូមអនុញ្ញាត (Allow) កាមេរ៉ាក្នុង Browser រួចព្យាយាមម្តងទៀត។"
+            : e?.name === "NotFoundError"
+              ? "រកមិនឃើញកាមេរ៉ាលើឧបករណ៍នេះទេ។ សូមប្រើម៉ាស៊ីន Scanner ឬវាយលេខដោយដៃ។"
+              : e?.message || "មិនអាចបើកកាមេរ៉ាបានទេ។",
+        );
+      }
+    }
+    start();
+
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  async function toggleTorch() {
+    const track = streamRef.current?.getVideoTracks()[0];
+    if (!track) return;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: !torchOn }] });
+      setTorchOn((v) => !v);
+    } catch {
+      setTorchOk(false);
+    }
+  }
+
+  if (!open) return null;
+  return createPortal(
+    <div
+      className="fixed inset-x-0 top-0 z-[300] flex h-[100dvh] flex-col bg-black"
+      style={{
+        paddingTop: "env(safe-area-inset-top)",
+        paddingBottom: "env(safe-area-inset-bottom)",
+      }}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="flex items-center justify-between px-4 py-3 text-white">
+        <div>
+          <p className="text-sm font-semibold">Scan Barcode / QR</p>
+          <p className="text-xs text-white/60">ដាក់ Barcode ឲ្យចំក្នុងស៊ុម</p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 hover:bg-white/20"
+          aria-label="Close"
+        >
+          <Icons.X size={18} />
+        </button>
+      </div>
+
+      <div className="relative flex-1 overflow-hidden">
+        <video
+          ref={videoRef}
+          playsInline
+          muted
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+        {ready && !error && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <div className="relative h-[22vh] min-h-[7rem] max-h-48 w-[88%] max-w-md rounded-xl border-2 border-white/80 shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]">
+              <span className="absolute left-3 right-3 top-1/2 h-0.5 -translate-y-1/2 bg-signal-red/80" />
+            </div>
+          </div>
+        )}
+        {!ready && !error && (
+          <div className="absolute inset-0 flex items-center justify-center text-sm text-white/70">
+            កំពុងបើកកាមេរ៉ា…
+          </div>
+        )}
+        {error && (
+          <div className="absolute inset-0 flex items-center justify-center px-6">
+            <div className="max-w-sm rounded-md bg-white p-4 text-center text-sm text-ink-900">
+              <p className="mb-3">{error}</p>
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-md bg-signal-blue px-4 py-2 text-xs font-semibold text-white"
+              >
+                បិទ
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-center gap-3 px-4 py-4">
+        {torchOk && (
+          <button
+            type="button"
+            onClick={toggleTorch}
+            className={`inline-flex h-12 items-center gap-2 rounded-full px-5 text-sm font-semibold ${
+              torchOn ? "bg-yellow-400 text-black" : "bg-white/10 text-white"
+            }`}
+          >
+            <Icons.Zap size={16} />
+            Flash
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onClose}
+          className="inline-flex h-12 items-center rounded-full bg-white/10 px-6 text-sm font-semibold text-white"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function TkScanField({
   label = "Scan Tracking Number Or QR Code",
   value,
@@ -9544,8 +9782,14 @@ function TkScanField({
   onAction,
   actionDisabled = false,
   actionLoading = false,
+  camera = true,
 }) {
   const { phase, message, shakeKey, inputRef } = scan;
+  const [camOpen, setCamOpen] = useState(false);
+  const canCamera =
+    camera &&
+    typeof navigator !== "undefined" &&
+    !!navigator.mediaDevices?.getUserMedia;
   const tone =
     phase === "scanning"
       ? "text-signal-blue"
@@ -9568,7 +9812,7 @@ function TkScanField({
         {label}
       </label>
       <div
-        className={`cb-scan cb-scan--${phase} ${shake} ${tone} flex h-10 items-center gap-2.5 bg-white border border-mist-200 rounded-lg px-3 focus-within:border-signal-blue`}
+        className={`cb-scan cb-scan--${phase} ${shake} ${tone} flex h-12 sm:h-10 items-center gap-2 sm:gap-2.5 bg-white border border-mist-200 rounded-lg pl-3 pr-1.5 sm:px-3 focus-within:border-signal-blue`}
       >
         <ScanIconStack />
         <input
@@ -9580,14 +9824,26 @@ function TkScanField({
           spellCheck={false}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="flex-1 min-w-0 outline-none text-[15px] font-medium tracking-wide text-ink-900 bg-transparent placeholder:font-normal placeholder:tracking-normal"
+          className="flex-1 min-w-0 outline-none text-base sm:text-[15px] font-medium tracking-wide text-ink-900 bg-transparent placeholder:font-normal placeholder:tracking-normal"
         />
+        {canCamera && (
+          <button
+            type="button"
+            onClick={() => setCamOpen(true)}
+            className="relative z-10 inline-flex h-9 w-9 sm:h-8 sm:w-auto shrink-0 items-center justify-center gap-1.5 rounded-md border border-signal-blue/30 bg-signal-blue/10 sm:px-2.5 text-xs font-semibold text-signal-blue transition-all duration-200 hover:bg-signal-blue/15 active:scale-[.98]"
+            title="Scan Barcode with camera"
+            aria-label="Scan Barcode with camera"
+          >
+            <Icons.Camera size={18} />
+            <span className="hidden sm:inline">Scan</span>
+          </button>
+        )}
         {actionLabel && (
           <button
             type="button"
             onClick={onAction}
             disabled={actionDisabled || actionLoading}
-            className="relative z-10 inline-flex h-8 min-w-[72px] items-center justify-center gap-1.5 rounded-md bg-signal-blue px-3 text-xs font-semibold text-white shadow-sm transition-all duration-200 hover:bg-signal-blue/90 active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-45"
+            className="relative z-10 inline-flex h-9 sm:h-8 min-w-[72px] items-center justify-center gap-1.5 rounded-md bg-signal-blue px-3 text-xs font-semibold text-white shadow-sm transition-all duration-200 hover:bg-signal-blue/90 active:scale-[.98] disabled:cursor-not-allowed disabled:opacity-45"
           >
             {actionLoading ? (
               <Loader2 size={13} className="animate-spin" />
@@ -9617,6 +9873,14 @@ function TkScanField({
           </div>
         )}
       </div>
+      <CameraScanModal
+        open={camOpen}
+        onClose={() => setCamOpen(false)}
+        onDetected={(code) => {
+          setCamOpen(false);
+          onChange(code);
+        }}
+      />
     </div>
   );
 }
@@ -12619,6 +12883,7 @@ const ADMIN_KM = {
   // top bar / menus
   "Search pages or jump to a menu...": "ស្វែងរកទំព័រ ឬទៅកាន់ម៉ឺនុយ...",
   "Search pages or menu...": "ស្វែងរកទំព័រ ឬម៉ឺនុយ...",
+  "Search pages...": "ស្វែងរកទំព័រ...",
   "Search Results": "លទ្ធផលស្វែងរក",
   "No pages found": "រកមិនឃើញទំព័រ",
   "Try another page name or route.": "សូមសាកល្បងឈ្មោះទំព័រ ឬផ្លូវផ្សេង។",
@@ -12864,14 +13129,33 @@ function AdminPrefsProvider({ children }) {
   );
 }
 
+// ---------- Round flag badges (official flags, cropped) ----------
+const FLAG_SRC = {
+  km: "data:image/webp;base64,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",
+  en: "data:image/webp;base64,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",
+};
+function LangFlag({ code = "km", size = 32 }) {
+  return (
+    <img
+      src={FLAG_SRC[code] || FLAG_SRC.en}
+      width={size}
+      height={size}
+      alt={code === "km" ? "Cambodia" : "United Kingdom"}
+      draggable={false}
+      className="shrink-0 rounded-full object-cover shadow-sm ring-1 ring-black/5"
+      style={{ width: size, height: size }}
+    />
+  );
+}
+
 // Small centred picker used by the user menu (Language / Appearance).
 function AdminPrefsModal({ kind, onClose }) {
   const { theme, setTheme, lang, setLang, t } = useAdminPrefs();
   const isLang = kind === "lang";
   const opts = isLang
     ? [
-        ["en", "English", "🇬🇧"],
-        ["km", "ភាសាខ្មែរ", "🇰🇭"],
+        ["en", "English", "en"],
+        ["km", "ភាសាខ្មែរ", "km"],
       ]
     : [
         ["light", t("Light theme"), Icons.Sun],
@@ -12912,7 +13196,7 @@ function AdminPrefsModal({ kind, onClose }) {
                 }`}
               >
                 {isLang ? (
-                  <span className="text-lg leading-none">{ic}</span>
+                  <LangFlag code={ic} size={24} />
                 ) : (
                   React.createElement(ic, { size: 17 })
                 )}
@@ -12955,7 +13239,7 @@ function AdminLoginPrefs() {
         aria-label={t("Language")}
         onClick={() => setLang(lang === "km" ? "en" : "km")}
       >
-        {lang === "km" ? "🇰🇭" : "🇬🇧"}
+        <LangFlag code={lang === "km" ? "km" : "en"} size={26} />
       </button>
       <button
         type="button"
@@ -13018,7 +13302,7 @@ function Sidebar({ open, onClose, collapsed = false, onToggleCollapse }) {
           ${open ? "translate-x-0" : "-translate-x-full"}`}
       >
         <div className="cbx-side-head flex items-center gap-2.5 px-4 shrink-0">
-          <div className="w-9 h-9 rounded-lg bg-signal-blue flex items-center justify-center overflow-hidden shrink-0">
+          <div className="cbx-side-logo w-10 h-10 rounded-xl bg-signal-blue flex items-center justify-center overflow-hidden shrink-0">
             {sidebarLogo ? (
               <img
                 src={sidebarLogo}
@@ -13375,16 +13659,13 @@ function Topbar({ title, onMenuClick }) {
         <button
           type="button"
           onClick={openCommandPalette}
-          className="cbx-search hidden md:flex flex-1 max-w-2xl mx-auto items-center gap-3 h-10 px-3.5 text-left"
+          className="cbx-search hidden md:flex flex-1 min-w-0 items-center gap-3 h-10 px-3 text-left"
           aria-label="Search pages or jump to a menu"
         >
           <Search size={18} className="shrink-0" />
-          <span className="text-sm flex-1">
+          <span className="text-sm flex-1 truncate">
             {t("Search pages or jump to a menu...")}
           </span>
-          <kbd className="cbx-kbd hidden lg:inline-flex items-center">
-            {shortcutLabel}
-          </kbd>
         </button>
 
         <div className="flex-1 md:hidden" />
@@ -13397,6 +13678,10 @@ function Topbar({ title, onMenuClick }) {
         >
           <Search size={19} />
         </button>
+
+        <kbd className="cbx-kbd hidden lg:inline-flex items-center">
+          {shortcutLabel}
+        </kbd>
 
         {import.meta.env?.VITE_APP_VERSION && (
           <span className="cbx-version hidden lg:inline-flex">
@@ -13411,7 +13696,7 @@ function Topbar({ title, onMenuClick }) {
           aria-label={t("Language")}
           title={t("Language")}
         >
-          <span aria-hidden="true">{lang === "km" ? "🇰🇭" : "🇬🇧"}</span>
+          <LangFlag code={lang === "km" ? "km" : "en"} size={24} />
           <span>{lang === "km" ? "ខ្មែរ" : "English"}</span>
         </button>
 
@@ -13620,26 +13905,23 @@ function Topbar({ title, onMenuClick }) {
           onMouseDown={closeCommandPalette}
         >
           <div
-            className="w-full max-w-3xl overflow-hidden rounded-2xl border border-mist-200 bg-white shadow-2xl"
+            className="cbx-cmd w-full max-w-[580px] overflow-hidden rounded-xl border border-mist-200 bg-white shadow-2xl"
             onMouseDown={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
             aria-label="Search pages"
           >
-            <div className="flex items-center gap-3 px-5 h-16 border-b border-mist-100">
-              <Search size={21} className="text-ink-600/45 shrink-0" />
+            <div className="flex items-center gap-3 px-5 h-14 border-b border-mist-100">
+              <Search size={20} className="text-ink-600/45 shrink-0" />
               <input
                 ref={commandInputRef}
                 value={commandQuery}
                 onChange={(e) => setCommandQuery(e.target.value)}
-                placeholder={t("Search pages or menu...")}
+                placeholder={t("Search pages...")}
                 className="flex-1 bg-transparent outline-none text-base text-ink-900 placeholder:text-ink-600/40"
                 autoComplete="off"
                 aria-label="Search pages"
               />
-              <kbd className="rounded-md border border-mist-200 bg-mist-50 px-2 py-1 text-[11px] text-ink-600/55">
-                Esc
-              </kbd>
             </div>
 
             <div className="max-h-[68vh] overflow-y-auto py-3">
@@ -13660,22 +13942,15 @@ function Topbar({ title, onMenuClick }) {
                             : "text-ink-800 hover:bg-mist-50"
                         }`}
                       >
-                        <span className="w-8 h-8 rounded-lg bg-mist-50 grid place-items-center shrink-0">
-                          <Icon name={item.icon} size={17} strokeWidth={1.9} />
+                        <span className="w-7 grid place-items-center shrink-0 text-ink-600/70">
+                          <Icon name={item.icon} size={20} strokeWidth={1.6} />
                         </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-medium truncate">
-                            {t(item.label)}
-                          </span>
-                          <span className="block text-[11px] text-ink-600/40 truncate">
-                            {item.path}
-                          </span>
+                        <span className="min-w-0 flex-1 text-[15px] font-medium truncate">
+                          {t(item.label)}
                         </span>
-                        {index === activeIndex && (
-                          <span className="text-[11px] text-ink-600/40">
-                            Enter
-                          </span>
-                        )}
+                        <span className="text-[12px] text-ink-600/45 truncate max-w-[220px]">
+                          {item.path}
+                        </span>
                       </button>
                     ))}
                   </div>
@@ -13721,17 +13996,17 @@ function Topbar({ title, onMenuClick }) {
                                 : "text-ink-800 hover:bg-mist-50"
                             }`}
                           >
-                            <span className="w-8 h-8 rounded-lg bg-mist-50 grid place-items-center shrink-0">
+                            <span className="w-7 grid place-items-center shrink-0 text-ink-600/70">
                               <Icon
                                 name={item.icon}
-                                size={17}
-                                strokeWidth={1.9}
+                                size={20}
+                                strokeWidth={1.6}
                               />
                             </span>
-                            <span className="min-w-0 flex-1 text-sm font-medium truncate">
+                            <span className="min-w-0 flex-1 text-[15px] font-medium truncate">
                               {t(item.label)}
                             </span>
-                            <span className="text-[11px] text-ink-600/35 truncate max-w-[220px]">
+                            <span className="text-[12px] text-ink-600/45 truncate max-w-[220px]">
                               {item.path}
                             </span>
                           </button>
@@ -13741,18 +14016,6 @@ function Topbar({ title, onMenuClick }) {
                   ))}
                 </div>
               )}
-            </div>
-
-            <div className="h-11 px-5 border-t border-mist-100 bg-mist-50/50 flex items-center gap-4 text-[11px] text-ink-600/45">
-              <span>
-                <b className="text-ink-600/60">↑ ↓</b> {t("Navigate")}
-              </span>
-              <span>
-                <b className="text-ink-600/60">Enter</b> {t("Open")}
-              </span>
-              <span>
-                <b className="text-ink-600/60">Esc</b> {t("Close")}
-              </span>
             </div>
           </div>
         </div>
@@ -15410,7 +15673,7 @@ function QuickInboundScan({ focusKey = 0, onNeedForm }) {
   return (
     <div className="cb-surface cb-card">
       <style>{OB_CSS}</style>
-      <div className="px-5 py-3.5 border-b border-mist-200">
+      <div className="px-4 sm:px-5 py-3.5 border-b border-mist-200">
         <h2 className="font-display font-bold text-sm text-ink-900">
           Scan &amp; Inbound
         </h2>
@@ -15419,7 +15682,7 @@ function QuickInboundScan({ focusKey = 0, onNeedForm }) {
           ចាំគិតពេល Arrive)
         </p>
       </div>
-      <div className="p-5 grid gap-5 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] items-start">
+      <div className="p-4 sm:p-5 grid gap-4 sm:gap-5 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] items-start">
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -15538,7 +15801,7 @@ function QuickOutboundScan({ addRow, initialTk = "", focusKey = 0 }) {
   return (
     <div className="cb-surface cb-card">
       <style>{OB_CSS}</style>
-      <div className="px-5 py-3.5 border-b border-mist-200">
+      <div className="px-4 sm:px-5 py-3.5 border-b border-mist-200">
         <h2 className="font-display font-bold text-sm text-ink-900">
           Scan &amp; Outbound
         </h2>
@@ -15546,7 +15809,7 @@ function QuickOutboundScan({ addRow, initialTk = "", focusKey = 0 }) {
           Scan TK → Outbound Origin ស្វ័យប្រវត្តិ
         </p>
       </div>
-      <div className="p-5 grid gap-5 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] items-start">
+      <div className="p-4 sm:p-5 grid gap-4 sm:gap-5 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] items-start">
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -17109,7 +17372,7 @@ function ListPage({
                 ? setScanFocusKey((k) => k + 1)
                 : setShowCreate(true)
             }
-            className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 transition-colors"
+            className="flex w-full sm:w-auto items-center justify-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2.5 sm:py-2 rounded-md hover:bg-signal-blue/90 transition-colors"
           >
             <Plus size={16} />
             {primaryAction}
@@ -18815,7 +19078,7 @@ function FinancialGroup({ icon, title, items, note }) {
           >
             <p className="truncate text-sm text-ink-600/70">{it.label}</p>
             <p
-              className={`mt-2 text-2xl font-bold tabular-nums ${it.grand ? (it.tone === "red" ? "text-red-700" : "text-emerald-700") : "text-ink-900"}`}
+              className={`mt-2 text-2xl font-semibold tabular-nums ${it.grand ? (it.tone === "red" ? "text-red-700" : "text-emerald-700") : "text-ink-900"}`}
             >
               {it.value}
             </p>
@@ -18857,7 +19120,7 @@ function FinancialStat({ label, value, detail, tone = "blue", icon }) {
           <Icon name={icon || "Wallet"} size={17} />
         </span>
       </div>
-      <p className="mt-3 break-words text-xl sm:text-2xl font-bold tracking-tight text-ink-900 tabular-nums">
+      <p className="mt-3 break-words text-xl sm:text-2xl font-semibold tracking-tight text-ink-900 tabular-nums">
         {value}
       </p>
       {detail && <p className="mt-1 text-xs text-ink-600/55">{detail}</p>}
@@ -30712,8 +30975,8 @@ const CustomerApp = (() => {
   function LangSheet({ onClose }) {
     const { lang, setLang, tr } = useApp();
     const opts = [
-      ["km", "ភាសាខ្មែរ", "🇰🇭"],
-      ["en", "English", "🇬🇧"],
+      ["km", "ភាសាខ្មែរ"],
+      ["en", "English"],
     ];
     return (
       <div
@@ -30728,7 +30991,7 @@ const CustomerApp = (() => {
           <h2 className="font-bold text-lg">
             {tr("Choose Your Language", "ជ្រើសរើសភាសា")}
           </h2>
-          {opts.map(([k, name, flag]) => (
+          {opts.map(([k, name]) => (
             <button
               key={k}
               type="button"
@@ -30738,9 +31001,7 @@ const CustomerApp = (() => {
               }}
               className={`w-full h-14 rounded-2xl flex items-center gap-3 px-3.5 font-semibold border ${lang === k ? "bg-blue-600 text-white border-blue-600" : "bg-white text-slate-800 border-slate-200"}`}
             >
-              <span className="w-9 h-9 rounded-full bg-white grid place-items-center text-xl shadow-sm">
-                {flag}
-              </span>
+              <LangFlag code={k} size={36} />
               <span className="flex-1 text-left">{name}</span>
               {lang === k && <Check size={18} />}
             </button>
@@ -30820,7 +31081,7 @@ const CustomerApp = (() => {
             onClick={() => setOpen(true)}
             className="h-10 pl-3 pr-2.5 flex items-center gap-1.5 rounded-full bg-[#eef2fa] text-[#14284b] font-semibold text-[15px] active:bg-[#e2e8f5]"
           >
-            <Icons.Globe size={20} strokeWidth={1.8} />
+            <LangFlag code={lang === "km" ? "km" : "en"} size={22} />
             {lang === "km" ? "KH" : "EN"}
             <ChevronDown size={16} strokeWidth={2.2} />
           </button>
@@ -30829,9 +31090,9 @@ const CustomerApp = (() => {
             type="button"
             aria-label={tr("Language", "ភាសា")}
             onClick={() => setOpen(true)}
-            className="w-10 h-10 grid place-items-center rounded-full bg-white/15 text-xl"
+            className="w-10 h-10 grid place-items-center rounded-full bg-white/15"
           >
-            {lang === "km" ? "🇰🇭" : "🇬🇧"}
+            <LangFlag code={lang === "km" ? "km" : "en"} size={26} />
           </button>
         )}
         {open && <LangSheet onClose={() => setOpen(false)} />}
@@ -34368,23 +34629,6 @@ const CustomerApp = (() => {
     );
   }
 
-  // ---------- Cambodia flag (round badge, official flag cropped) ----------
-  const KH_FLAG_SRC =
-    "data:image/webp;base64,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";
-  function CambodiaFlag({ size = 32 }) {
-    return (
-      <img
-        src={KH_FLAG_SRC}
-        width={size}
-        height={size}
-        alt="Cambodia"
-        draggable={false}
-        className="shrink-0 rounded-full object-cover shadow-sm ring-1 ring-black/5"
-        style={{ width: size, height: size }}
-      />
-    );
-  }
-
   // ---------- Settings (Language · Appearance · Security · Log Out) ----------
   function CustomerSettings() {
     const { logout, tr, lang, theme } = useApp();
@@ -34450,7 +34694,7 @@ const CustomerApp = (() => {
             </button>
           </div>
           <div className="flex items-center justify-center gap-2.5 pt-4 pb-2">
-            <CambodiaFlag size={28} />
+            <LangFlag code="km" size={28} />
             <span className="text-[14px] font-semibold text-[color:var(--jz-c-text,#14284b)]">
               {tr("Proudly built in Cambodia", "ផលិតដោយមោទនភាពនៅកម្ពុជា")}
             </span>
@@ -50698,7 +50942,7 @@ function CnOrderDetailPage() {
           : "text-slate-700";
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <Link
         to="/cn-orders"
         className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-900"
@@ -50985,9 +51229,9 @@ function CnOrderDetailPage() {
         </div>
       )}
 
-      <div className="grid lg:grid-cols-3 gap-5 items-start">
-        <div className="lg:col-span-2 space-y-5">
-          <div className="cb-surface divide-y divide-slate-100">
+      <div className="grid lg:grid-cols-3 gap-4 items-stretch">
+        <div className="lg:col-span-2 flex flex-col gap-4">
+          <div className="cb-surface divide-y divide-slate-100 flex-1 flex flex-col">
             <div className="p-5">
               <h2 className="font-bold text-sm mb-3">Order Details</h2>
               <CnSectionLabel>Order</CnSectionLabel>
@@ -51065,7 +51309,7 @@ function CnOrderDetailPage() {
                 />
               </div>
             </div>
-            <div className="p-5">
+            <div className="p-5 flex-1">
               <h2 className="font-bold text-sm mb-3">
                 China Tracking / Parcels
               </h2>
@@ -51207,7 +51451,7 @@ function CnOrderDetailPage() {
           </div>
         </div>
 
-        <div className="space-y-5">
+        <div className="flex flex-col gap-4">
           {cnShippingFeeRows(parcels).length > 0 && (
             <div className="cb-surface p-5">
               <h2 className="font-bold text-sm mb-3">
@@ -51301,7 +51545,7 @@ function CnOrderDetailPage() {
               </div>
             </div>
           )}
-          <div className="cb-surface divide-y divide-slate-100">
+          <div className="cb-surface divide-y divide-slate-100 flex-1">
             {(cnImages.length > 0 || canEdit) && (
               <div className="p-5">
                 <div className="flex items-center justify-between mb-3">
@@ -51535,7 +51779,7 @@ function CnOrderDetailPage() {
       )}
 
       {row.order_type !== "direct" && (
-        <div className="grid xl:grid-cols-2 gap-5 items-start">
+        <div className="grid xl:grid-cols-2 gap-4 items-stretch">
           <div className="cb-surface overflow-hidden">
             <div className="px-5 pt-5 pb-2">
               <h2 className="font-bold text-sm">Summary</h2>
@@ -70536,7 +70780,7 @@ html,body{overscroll-behavior:none;}
 .cb-surface{background:#fff;border:1px solid var(--cb-border);border-radius:16px;box-shadow:0 8px 30px rgba(15,31,61,.055);}
 .cb-sidebar{background:linear-gradient(180deg,#0b1b38 0%,#0f2346 100%);}
 .cb-sidebar .cb-active{background:linear-gradient(135deg,#2f75f4,#2563eb);box-shadow:0 8px 20px rgba(37,99,235,.22);}
-.cb-modal-backdrop,.fixed.inset-0[class*="backdrop-blur"]{-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);}
+.cb-modal-backdrop,.fixed.inset-0[class*="backdrop-blur"],.cb-app .fixed.inset-0[class*="bg-ink-900/"],.cb-app .fixed.inset-0[class*="bg-slate-9"]{-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);}
 .cb-topbar{background:rgba(255,255,255,.92);backdrop-filter:blur(14px);border-bottom:1px solid rgba(229,234,242,.9);}
 .cb-input{border:1px solid var(--cb-border);background:#fbfcfe;border-radius:12px;transition:.2s ease;}
 .cb-input:focus{border-color:#60a5fa;box-shadow:0 0 0 4px rgba(37,99,235,.09);background:#fff;outline:none;}
@@ -70877,6 +71121,22 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .cb-app button:disabled{cursor:not-allowed;}
 @media(hover:hover){.cb-app .cb-stat:hover{box-shadow:0 10px 30px -18px rgba(37,99,235,.35)!important;border-top-color:#60a5fa;}}
 @media(min-width:1024px){.cb-app .cbx-sidebar.is-collapsed .cbx-side-head{min-height:80px;}}
+/* Sidebar head and topbar share ONE height so the bottom borders line up as a single
+   continuous rule across the sidebar and the page (expanded AND collapsed). */
+.cb-app{--cbx-head-h:64px;}
+.cb-app .cbx-side-head{height:var(--cbx-head-h);min-height:var(--cbx-head-h);box-sizing:border-box;}
+.cb-app .cbx-topbar{height:var(--cbx-head-h);box-sizing:border-box;}
+.cb-app .cbx-lang-btn{gap:10px;}
+.cb-app .cbx-lang-btn img{box-shadow:0 0 0 1px rgba(15,30,60,.08);}
+@media(min-width:1024px){
+ .cb-app .cbx-sidebar{position:relative;}
+ .cb-app .cbx-sidebar.is-collapsed .cbx-side-head{flex-direction:row;justify-content:center;gap:0;height:var(--cbx-head-h);min-height:var(--cbx-head-h);padding:0;}
+ /* collapse toggle sits on the sidebar edge, centred on the head row */
+ .cb-app .cbx-collapse-btn{position:absolute;top:calc(var(--cbx-head-h) / 2 - 14px);right:-14px;z-index:45;width:28px;height:28px;border-radius:9999px;background:var(--cbx-card);color:var(--cbx-muted);border:1px solid var(--cbx-border);box-shadow:0 2px 8px -2px rgba(15,30,60,.18);}
+ .cb-app .cbx-collapse-btn:hover{background:var(--cbx-hover);color:var(--cbx-text);}
+}
+@media(max-width:767px){.cb-app{--cbx-head-h:68px;}}
+
 @media(max-width:1023px){.cb-app main{padding:22px 20px;}.cb-app .cbx-sidebar{box-shadow:16px 0 44px -20px #071327;}}
 @media(max-width:767px){
  .cb-app main{padding:18px 12px;}.cb-app .cbx-topbar{height:68px;gap:8px;}
@@ -70974,7 +71234,8 @@ html.cb-admin-dark :is(.cb-app,.cb-modal-backdrop,.cb-premium-dialog) :is([class
 .cb-app .jz-fin-icon svg,.cb-app .jz-fin-group>div:first-child svg{width:var(--pg-icon-lg);height:var(--pg-icon-lg);stroke-width:2;}
 .cb-app .jz-fin-stat>div>p{font-size:var(--pg-text);font-weight:500;}
 .cb-app .jz-fin-stat>p:last-child:not(.tabular-nums){font-size:var(--pg-text-sm);}
-.cb-app .jz-fin-stat>p.tabular-nums,.cb-app .jz-fin-group p.tabular-nums{font-size:32px;}
+.cb-app .jz-fin-stat>p.tabular-nums,.cb-app .jz-fin-group p.tabular-nums{font-size:26px;font-weight:600;letter-spacing:-.01em;}
+@media(max-width:767px){.cb-app .jz-fin-stat>p.tabular-nums,.cb-app .jz-fin-group p.tabular-nums{font-size:23px;}}
 .cb-app .jz-fin-group :is(p,span,div):not(.tabular-nums){font-size:var(--pg-text);}
 /* ---- Toolbar (search / filter / date) ---- */
 .cb-app main :is(input,select){min-height:46px;}
@@ -71074,8 +71335,22 @@ html.cb-admin-dark .cb-app main table td :is(.rounded-full,.rounded-md){border:1
    One title per page, quieter KPI strip, calmer table hierarchy. */
 @media(min-width:640px){
  .cb-app:has(main h1) .cbx-topbar .cbx-page-title{display:none;}
- .cb-app:has(main h1) .cbx-topbar .cbx-search{margin-inline:0 auto!important;}
+ .cb-app:has(main h1) .cbx-topbar .cbx-search{margin-inline:0!important;}
 }
+/* ===== Topbar: flat DRSB-style (no boxed controls) ===== */
+.cb-app .cbx-topbar{gap:12px;}
+.cb-app .cbx-topbar .cbx-search{background:transparent;border:0;box-shadow:none;border-radius:10px;height:40px;min-height:40px;max-width:none;font-size:15px;color:var(--cbx-muted);}
+.cb-app .cbx-topbar .cbx-search:hover{background:var(--cbx-hover);}
+.cb-app .cbx-topbar .cbx-kbd{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;height:28px;padding:0 9px;background:var(--cbx-page);border:1px solid var(--cbx-border);border-radius:7px;font-size:12px;color:var(--cbx-muted);}
+.cb-app .cbx-topbar .cbx-version{background:var(--cbx-blue-soft);color:var(--cbx-blue);border:0;height:36px;padding:0 16px;border-radius:9999px;font-size:14px;font-weight:600;}
+.cb-app .cbx-topbar .cbx-icon-btn{border:0;background:transparent;box-shadow:none;color:var(--cbx-muted);}
+.cb-app .cbx-topbar .cbx-icon-btn:hover{background:var(--cbx-hover);color:var(--cbx-text);}
+.cb-app .cbx-topbar .cbx-lang-btn{font-weight:500;}
+.cb-app .cbx-topbar .cbx-user-pill{border:0;background:transparent;box-shadow:none;padding:4px 8px 4px 4px;height:auto;min-height:44px;}
+.cb-app .cbx-topbar .cbx-user-pill:hover{background:var(--cbx-hover);}
+.cb-app .cbx-topbar .cbx-user-name{font-weight:600;}
+/* Command palette rows: plain icon, label left, route right */
+.cbx-cmd button:hover{background:var(--cbx-hover,#f1f5f9);}
 .cb-app .cbx-kpi-cell span.rounded-full.w-8.h-8{display:none;}
 .cb-app .cbx-kpi-cell .flex.items-center>span:last-child{color:var(--cbx-muted);font-weight:500;}
 .cb-app .cbx-kpi-strip{box-shadow:none;border-radius:16px;}
