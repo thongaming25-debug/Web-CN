@@ -9624,16 +9624,30 @@ function playScanBeep() {
     const ctx = _scanAudioCtx;
     if (!ctx) return;
     const t = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "square";
-    osc.frequency.setValueAtTime(2300, t);
-    gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(0.35, t + 0.005);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(t);
-    osc.stop(t + 0.15);
+    // Loud, sharp supermarket-scanner "BEEP": two square waves layered
+    // (main tone + octave) at full volume, flat for ~130ms, then a quick cut.
+    const master = ctx.createGain();
+    master.gain.setValueAtTime(1, t);
+    const comp = ctx.createDynamicsCompressor(); // makes it louder & punchier
+    comp.threshold.setValueAtTime(-24, t);
+    comp.ratio.setValueAtTime(12, t);
+    master.connect(comp).connect(ctx.destination);
+    [
+      [2700, 0.9],
+      [5400, 0.35],
+    ].forEach(([freq, vol]) => {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.setValueAtTime(freq, t);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(vol, t + 0.002);
+      g.gain.setValueAtTime(vol, t + 0.12);
+      g.gain.linearRampToValueAtTime(0.0001, t + 0.135);
+      osc.connect(g).connect(master);
+      osc.start(t);
+      osc.stop(t + 0.14);
+    });
   } catch {
     /* ignore */
   }
