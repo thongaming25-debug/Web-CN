@@ -9563,6 +9563,82 @@ const CAMERA_SCAN_FORMATS = [
   "data_matrix",
 ];
 
+// Formats with a built-in checksum can be accepted on the FIRST read.
+// The others (code_39, codabar, itf, code_93) need two matching reads.
+const CAMERA_SCAN_SAFE_FORMATS = new Set([
+  "qr_code",
+  "code_128",
+  "ean_13",
+  "ean_8",
+  "upc_a",
+  "upc_e",
+  "data_matrix",
+]);
+
+// Load + create the detector once and reuse it (the ponyfill's WASM is the
+// slow part). Called early so the camera opens with a ready detector.
+let _cameraDetectorPromise = null;
+function getCameraDetector() {
+  if (!_cameraDetectorPromise) {
+    _cameraDetectorPromise = (async () => {
+      let Detector =
+        typeof window !== "undefined" ? window.BarcodeDetector : null;
+      if (!Detector) {
+        ({ BarcodeDetector: Detector } =
+          await import("barcode-detector/ponyfill"));
+      }
+      let formats = CAMERA_SCAN_FORMATS;
+      try {
+        const supported = await Detector.getSupportedFormats?.();
+        if (supported?.length) {
+          formats = CAMERA_SCAN_FORMATS.filter((f) => supported.includes(f));
+        }
+      } catch {
+        /* use default list */
+      }
+      return new Detector({ formats });
+    })().catch((e) => {
+      _cameraDetectorPromise = null; // allow retry
+      throw e;
+    });
+  }
+  return _cameraDetectorPromise;
+}
+
+// "Beep!" like a supermarket scanner. iOS only allows audio after a tap, so
+// unlockScanBeep() must be called from a click/touch handler.
+let _scanAudioCtx = null;
+function unlockScanBeep() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    if (!_scanAudioCtx) _scanAudioCtx = new AC();
+    if (_scanAudioCtx.state === "suspended") _scanAudioCtx.resume();
+  } catch {
+    /* audio not available */
+  }
+}
+function playScanBeep() {
+  try {
+    unlockScanBeep();
+    const ctx = _scanAudioCtx;
+    if (!ctx) return;
+    const t = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(2300, t);
+    gain.gain.setValueAtTime(0.0001, t);
+    gain.gain.exponentialRampToValueAtTime(0.35, t + 0.005);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.15);
+  } catch {
+    /* ignore */
+  }
+}
+
 function CameraScanModal({ open, onClose, onDetected }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -9586,11 +9662,15 @@ function CameraScanModal({ open, onClose, onDetected }) {
         if (!navigator.mediaDevices?.getUserMedia) {
           throw new Error("Browser នេះមិនគាំទ្រកាមេរ៉ា ឬមិនមែន HTTPS ទេ។");
         }
+        unlockScanBeep();
+        // Load the detector WHILE the camera is starting (saves 1-3 seconds).
+        const detectorPromise = getCameraDetector();
+        detectorPromise.catch(() => {});
         const stream = await navigator.mediaDevices.getUserMedia({
           video: {
             facingMode: { ideal: "environment" },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
           },
           audio: false,
         });
@@ -9601,42 +9681,62 @@ function CameraScanModal({ open, onClose, onDetected }) {
         streamRef.current = stream;
         const track = stream.getVideoTracks()[0];
         try {
-          setTorchOk(!!track?.getCapabilities?.().torch);
+          const caps = track?.getCapabilities?.() || {};
+          setTorchOk(!!caps.torch);
+          // Continuous auto-focus = sharper barcodes, faster reads.
+          if (caps.focusMode?.includes?.("continuous")) {
+            await track.applyConstraints({
+              advanced: [{ focusMode: "continuous" }],
+            });
+          }
         } catch {
-          /* torch not supported */
+          /* torch / focus not supported */
         }
         const video = videoRef.current;
         video.srcObject = stream;
         await video.play();
         setReady(true);
 
-        let Detector = window.BarcodeDetector;
-        if (!Detector) {
-          ({ BarcodeDetector: Detector } =
-            await import("barcode-detector/ponyfill"));
-        }
-        let formats = CAMERA_SCAN_FORMATS;
-        try {
-          const supported = await Detector.getSupportedFormats?.();
-          if (supported?.length) {
-            formats = CAMERA_SCAN_FORMATS.filter((f) => supported.includes(f));
-          }
-        } catch {
-          /* use default list */
-        }
-        const detector = new Detector({ formats });
+        const detector = await detectorPromise;
+        const canvas = document.createElement("canvas");
+        const cctx = canvas.getContext("2d", { willReadFrequently: true });
+        let frame = 0;
 
         async function tick() {
           if (stopped) return;
           try {
-            if (video.readyState >= 2) {
-              const codes = await detector.detect(video);
-              const raw = codes?.[0]?.rawValue?.trim();
+            if (video.readyState >= 2 && video.videoWidth) {
+              const vw = video.videoWidth;
+              const vh = video.videoHeight;
+              let source = video;
+              // Most frames: only the centre band (smaller image = much
+              // faster). Every 3rd frame: the full image as a safety net.
+              if (frame++ % 3 !== 2 && cctx) {
+                const cw = Math.round(vw * 0.94);
+                const ch = Math.round(vh * 0.5);
+                canvas.width = cw;
+                canvas.height = ch;
+                cctx.drawImage(
+                  video,
+                  Math.round((vw - cw) / 2),
+                  Math.round((vh - ch) / 2),
+                  cw,
+                  ch,
+                  0,
+                  0,
+                  cw,
+                  ch,
+                );
+                source = canvas;
+              }
+              const codes = await detector.detect(source);
+              const hit = codes?.[0];
+              const raw = hit?.rawValue?.trim();
               if (raw) {
-                // Same code on two consecutive frames = fewer misreads.
-                if (raw === last) {
+                if (CAMERA_SCAN_SAFE_FORMATS.has(hit.format) || raw === last) {
                   stopped = true;
-                  navigator.vibrate?.(60);
+                  playScanBeep();
+                  navigator.vibrate?.(80);
                   onDetected(raw);
                   return;
                 }
@@ -9648,7 +9748,8 @@ function CameraScanModal({ open, onClose, onDetected }) {
           } catch {
             /* ignore single-frame errors */
           }
-          timer = setTimeout(tick, 120);
+          // No fixed delay: go again as soon as this read finishes.
+          timer = setTimeout(tick, 0);
         }
         tick();
       } catch (e) {
@@ -9829,7 +9930,11 @@ function TkScanField({
         {canCamera && (
           <button
             type="button"
-            onClick={() => setCamOpen(true)}
+            onClick={() => {
+              unlockScanBeep(); // iOS: enable sound from the tap
+              getCameraDetector().catch(() => {}); // pre-load the scanner
+              setCamOpen(true);
+            }}
             className="relative z-10 inline-flex h-9 w-9 sm:h-8 sm:w-auto shrink-0 items-center justify-center gap-1.5 rounded-md border border-signal-blue/30 bg-signal-blue/10 sm:px-2.5 text-xs font-semibold text-signal-blue transition-all duration-200 hover:bg-signal-blue/15 active:scale-[.98]"
             title="Scan Barcode with camera"
             aria-label="Scan Barcode with camera"
