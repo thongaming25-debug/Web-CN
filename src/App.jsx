@@ -18,6 +18,7 @@ import React, {
   createContext,
   useContext,
   useMemo,
+  useLayoutEffect,
 } from "react";
 import {
   Link,
@@ -3699,6 +3700,38 @@ function CNDateRangeFilter({ value, onChange }) {
     to: value?.to || "",
   });
   const rootRef = useRef(null);
+  const btnRef = useRef(null);
+  const [pos, setPos] = useState(null);
+  // Keep the calendar inside the screen: it used to hang off the right edge
+  // when the "Created At" button sat far to the right.
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    const place = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const m = 8;
+      const width = Math.min(vw - m * 2, 760);
+      const left = Math.max(m, Math.min(r.left, vw - width - m));
+      const below = vh - r.bottom - m - 8;
+      const above = r.top - m - 8;
+      const placeAbove = below < 420 && above > below;
+      const maxHeight = Math.max(280, placeAbove ? above : below);
+      setPos(
+        placeAbove
+          ? { left, width, maxHeight, bottom: vh - r.top + 8 }
+          : { left, width, maxHeight, top: r.bottom + 8 },
+      );
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
   useEffect(() => {
     const closeOutside = (event) => {
       if (rootRef.current && !rootRef.current.contains(event.target)) {
@@ -3808,6 +3841,7 @@ function CNDateRangeFilter({ value, onChange }) {
     <div className="relative" ref={rootRef}>
       <button
         type="button"
+        ref={btnRef}
         onClick={() => {
           setOpen((v) => !v);
           setDraftStart("");
@@ -3832,8 +3866,10 @@ function CNDateRangeFilter({ value, onChange }) {
             }}
           />
           <div
-            className="absolute left-0 z-[80] mt-2 w-[min(94vw,760px)] overflow-hidden rounded-2xl border border-mist-200 bg-white shadow-2xl shadow-slate-900/15"
+            className="fixed z-[80] overflow-x-hidden overflow-y-auto overscroll-contain rounded-2xl border border-mist-200 bg-white shadow-2xl shadow-slate-900/15"
             style={{
+              ...(pos || { left: 8, top: 8, width: "calc(100vw - 16px)" }),
+              visibility: pos ? "visible" : "hidden",
               animation: "jenzCalendarIn .18s cubic-bezier(.2,.8,.2,1)",
             }}
           >
@@ -3965,24 +4001,34 @@ function CNDateRangeFilter({ value, onChange }) {
 // ------------------------------------------------------------
 // Customers: Registration overview card + list tabs
 // ------------------------------------------------------------
-function ListTab({ active, label, count, onClick }) {
+function ListTab({ active, label, count, onClick, tone }) {
   return (
     <button
       type="button"
+      role="tab"
+      aria-selected={!!active}
       onClick={onClick}
-      className={`flex items-center gap-2 px-3 py-3 text-sm border-b-2 -mb-px transition-colors ${
+      className={`shrink-0 whitespace-nowrap flex items-center gap-2 px-3.5 py-3.5 text-sm font-semibold border-b-[3px] -mb-px transition-colors ${
         active
-          ? "border-signal-blue text-signal-blue font-medium"
-          : "border-transparent text-ink-600/60 hover:text-ink-900"
+          ? "border-signal-blue text-signal-blue"
+          : "border-transparent text-ink-700 hover:text-ink-900 hover:border-mist-200"
       }`}
     >
+      {tone && (
+        <span
+          aria-hidden="true"
+          className={`h-2 w-2 rounded-full bg-current ${tone} ${active ? "" : "opacity-70"}`}
+        />
+      )}
       {label}
       {count !== undefined && (
         <span
-          className={`text-[11px] px-1.5 py-0.5 rounded-sm ${
+          className={`min-w-[26px] text-center text-xs font-semibold tabular-nums px-2 py-0.5 rounded-full ${
             active
-              ? "bg-signal-blue/10 text-signal-blue"
-              : "bg-mist-100 text-ink-600/60"
+              ? "bg-signal-blue text-white"
+              : count === 0
+                ? "bg-mist-100 text-ink-600/40"
+                : "bg-mist-100 text-ink-700"
           }`}
         >
           {count.toLocaleString("en-US")}
@@ -15453,8 +15499,6 @@ function exportRowsToCSV(filename, columns, rows) {
   URL.revokeObjectURL(url);
 }
 
-const PAGE_SIZE = 10;
-
 // ------------------------------------------------------------
 // components/CreateRowModal.jsx
 // ------------------------------------------------------------
@@ -18271,6 +18315,7 @@ function ListPage({
   const [statusFilter, setStatusFilter] = useState("");
   const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(15);
   // Package Detail's "Move to Outbound" button lands here with ?tk=...
   const [searchParams] = useSearchParams();
   const prefillTk =
@@ -18346,11 +18391,11 @@ function ListPage({
     return matchesSearch && matchesStatus && matchesAdv && matchesDate;
   });
 
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
   const currentPage = Math.min(page, totalPages - 1);
   const pagedRows = filteredRows.slice(
-    currentPage * PAGE_SIZE,
-    currentPage * PAGE_SIZE + PAGE_SIZE,
+    currentPage * pageSize,
+    currentPage * pageSize + pageSize,
   );
 
   // Only warehouse/admin roles create TKs and outbound scans; Customer
@@ -18750,39 +18795,24 @@ function ListPage({
             onClose={() => setDeletingRow(null)}
           />
         )}
-        <div className="flex items-center justify-between px-4 lg:px-5 py-3 border-t border-mist-200 text-xs text-ink-600/50">
-          {listLoading ? (
+        {listLoading ? (
+          <div className="flex items-center justify-end px-4 lg:px-5 py-3 border-t border-mist-200">
             <Skeleton className="h-3 w-40" />
-          ) : (
-            <span>
-              បង្ហាញ {pagedRows.length} នៃ {filteredRows.length} លទ្ធផល
-            </span>
-          )}
-          <nav aria-label="Pagination" className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              disabled={currentPage === 0}
-              className="px-2.5 py-1.5 rounded-sm border border-mist-200 hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Previous
-            </button>
-            <span
-              aria-current="page"
-              className="px-2.5 py-1.5 rounded-sm bg-signal-blue text-white"
-            >
-              {currentPage + 1} / {totalPages}
-            </span>
-            <button
-              type="button"
-              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-              disabled={currentPage >= totalPages - 1}
-              className="px-2.5 py-1.5 rounded-sm border border-mist-200 hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              Next
-            </button>
-          </nav>
-        </div>
+          </div>
+        ) : (
+          <PaginationBar
+            page={currentPage}
+            pageCount={totalPages}
+            total={filteredRows.length}
+            shown={pagedRows.length}
+            onPage={setPage}
+            pageSize={pageSize}
+            onPageSize={(n) => {
+              setPageSize(n);
+              setPage(0);
+            }}
+          />
+        )}
       </div>
 
       {isUsersModule ? (
@@ -45990,6 +46020,16 @@ const CN_LEGACY_STATUS = {
 };
 // ONE normalizer used everywhere a CN status is read or displayed.
 const cnNormalizeStatus = (s) => CN_LEGACY_STATUS[s] || s;
+// Display-only: show the same names as the TK list (Inbound Origin /
+// Outbound Origin). The stored/normalized status value is unchanged.
+const CN_DISPLAY_STATUS = {
+  Inbound: "Inbound Origin",
+  Outbound: "Outbound Origin",
+};
+const cnDisplayStatus = (s) => {
+  const core = cnNormalizeStatus(s);
+  return CN_DISPLAY_STATUS[core] || core;
+};
 
 // Order types: they only differ in how the order is created. After
 // "Shipping to China WH" both follow the exact same TK-driven flow.
@@ -46031,7 +46071,13 @@ const TK_TO_CN_STATUS = {
 // (Inbound Origin -> Inbound, Completed -> Complete Order, ...). Used on the
 // Package/TK detail page so a TK and its CN order read the same. Never
 // written to the database; unknown / payment-derived labels pass through.
-const tkUnifiedLabel = (label) => TK_TO_CN_STATUS[label] || label;
+const tkUnifiedLabel = (label) => {
+  if (label === "Inbound" || label === "Inbound Origin")
+    return "Inbound Origin";
+  if (label === "Outbound" || label === "Outbound Origin")
+    return "Outbound Origin";
+  return TK_TO_CN_STATUS[label] || label;
+};
 
 const CN_PLATFORMS = [
   "Taobao",
@@ -46247,7 +46293,7 @@ function CnStatusBadge({ status, partial = false, cancelled = false }) {
       <span
         className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-bold whitespace-nowrap ${cancelled ? "bg-slate-600 text-white" : cnStatusTone(status)}`}
       >
-        {cancelled ? "Cancelled" : cnNormalizeStatus(status)}
+        {cancelled ? "Cancelled" : cnDisplayStatus(status)}
       </span>
       {partial && (
         <span className="rounded-full bg-amber-50 text-amber-700 px-2 py-0.5 text-[10px] font-bold">
@@ -49963,7 +50009,7 @@ function CnStatusTimeline({
                     : `text-sm font-semibold ${done || active ? "text-slate-900" : "text-slate-400"}`
                 }
               >
-                {s}
+                {cnDisplayStatus(s)}
               </p>
               {t ? (
                 <p className="text-xs text-slate-500 mt-0.5">
@@ -51302,18 +51348,27 @@ function CnOrdersPage() {
       </div>
       <div className="cb-surface">
         {activeTab === "orders" && (
-          <div className="flex items-center gap-1 px-3 lg:px-4 border-b border-mist-200 overflow-x-auto">
+          <div
+            role="tablist"
+            aria-label="Order status"
+            className="flex items-center gap-1 px-3 lg:px-4 border-b border-mist-200 overflow-x-auto"
+          >
             <ListTab
               label="All"
               count={rows.length}
               active={!quick}
               onClick={() => setQuick("")}
             />
+            <span
+              aria-hidden="true"
+              className="mx-1 h-5 w-px shrink-0 bg-mist-200"
+            />
             {quickDefs.map((d) => (
               <ListTab
                 key={d.key}
                 label={d.label}
                 count={quickCounts[d.key]}
+                tone={d.color}
                 active={quick === d.key}
                 onClick={() => setQuick(d.key)}
               />
@@ -52098,6 +52153,23 @@ function CnSectionLabel({ children }) {
     </div>
   );
 }
+function CnCardHead({ icon: Ic, title, pill, right }) {
+  return (
+    <div className="flex items-center justify-between gap-3 px-5 py-3.5">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <Ic size={20} className="shrink-0 text-slate-700" aria-hidden="true" />
+        <h2 className="truncate text-base font-bold text-slate-900">{title}</h2>
+        {pill && (
+          <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600">
+            {pill}
+          </span>
+        )}
+      </div>
+      {right}
+    </div>
+  );
+}
+
 function CnOrderDetailPage() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -52508,6 +52580,30 @@ function CnOrderDetailPage() {
   const hasItems =
     Array.isArray(row.cn_order_items) && row.cn_order_items.length > 0;
   const multiItems = hasItems && row.cn_order_items.length > 1;
+  const itemUnits = hasItems
+    ? row.cn_order_items.reduce(
+        (sum, it) => sum + (Number(it.quantity) || 0),
+        0,
+      )
+    : 0;
+  const itemsSubtotal = hasItems
+    ? row.cn_order_items.reduce(
+        (sum, it) =>
+          sum +
+            (row.pricing_mode === "usd"
+              ? Number(
+                  it.line_total_usd ??
+                    (Number(it.quantity) || 0) *
+                      (Number(it.unit_price_usd) || 0),
+                )
+              : Number(
+                  it.line_total_cny ??
+                    (Number(it.quantity) || 0) *
+                      (Number(it.unit_price_cny) || 0),
+                )) || 0,
+        0,
+      )
+    : 0;
   const cnHasVal = (it) =>
     it.value != null && it.value !== "" && it.value !== "—";
   const profitText = purchaseFinance.refunded
@@ -52534,52 +52630,55 @@ function CnOrderDetailPage() {
 
   return (
     <div className="space-y-4">
-      <Link
-        to="/cn-orders"
-        className="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-900"
+      <nav
+        className="flex items-center gap-1.5 text-sm text-slate-500"
+        aria-label="Breadcrumb"
       >
-        <ArrowLeft size={15} /> Back to CN Purchase Orders
-      </Link>
+        <Link
+          to="/cn-orders"
+          className="inline-flex items-center gap-1.5 hover:text-slate-900"
+        >
+          <ArrowLeft size={15} /> CN Purchase Orders
+        </Link>
+        <span className="text-slate-300">/</span>
+        <span className="text-slate-700">Order details</span>
+      </nav>
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-3">
           <span className="w-11 h-11 rounded-xl bg-blue-50 text-blue-600 grid place-items-center">
             <Icons.ShoppingCart size={21} />
           </span>
-          <div>
-            <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-400">
-              <span>Purchase Order</span>
-              <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-violet-700">
-                Parse Link
-              </span>
+          <div className="min-w-0">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              Purchase order
+            </div>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h1 className="font-bold text-3xl leading-tight text-slate-900">
+                {row.order_id}
+              </h1>
               <button
                 type="button"
-                disabled={!canEdit || terminal}
-                onClick={() => setShipOpen(true)}
-                title={
-                  canEdit && !terminal
-                    ? "Change Shipping Method"
-                    : "Shipping Method"
-                }
-                className="inline-flex items-center gap-1.5 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[11px] font-bold normal-case tracking-normal text-indigo-700 enabled:hover:bg-indigo-100 disabled:cursor-default"
+                title="Copy order ID"
+                onClick={() => {
+                  try {
+                    navigator.clipboard.writeText(String(row.order_id || ""));
+                    emitCBToast("ok", "Copied", String(row.order_id || ""));
+                  } catch (_e) {
+                    /* clipboard unavailable */
+                  }
+                }}
+                className="text-slate-400 hover:text-slate-700"
               >
-                <ShipMethodIcon
-                  m={row.shipping_method}
-                  size={14}
-                  className="text-indigo-700"
-                />
-                {
-                  { Land: "By Land", Sea: "By Sea", Air: "By Air" }[
-                    normShipMethod(row.shipping_method) || "Land"
-                  ]
-                }
-                {canEdit && !terminal && <Icons.Pencil size={11} />}
+                <Icons.Copy size={16} />
               </button>
             </div>
-            <h1 className="font-bold text-2xl text-slate-900">
-              {row.order_id}
-            </h1>
-            <p className="text-sm text-slate-500 mt-0.5">
-              {row.customer || "—"} · {cnOrderTypeLabel(row.order_type)}
+            <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-sm text-slate-500">
+              <span>
+                {row.customer || "—"} · {cnOrderTypeLabel(row.order_type)}
+              </span>
+              <span className="font-semibold text-violet-700 underline underline-offset-2">
+                Parse Link
+              </span>
             </p>
           </div>
         </div>
@@ -52801,12 +52900,6 @@ function CnOrderDetailPage() {
         </div>
       </div>
 
-      {row.note && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-900">
-          <span className="font-bold">Note: </span>
-          {row.note}
-        </div>
-      )}
       {!canAdvance && !terminal && next && CN_AUTO_STAGES.has(next) && (
         <div className="rounded-xl bg-blue-50 text-blue-700 px-3.5 py-2.5 text-sm">
           Next step <b>{next}</b> updates automatically from the linked TK
@@ -52820,12 +52913,11 @@ function CnOrderDetailPage() {
         </div>
       )}
 
-      <div className="grid lg:grid-cols-3 gap-4 items-stretch">
-        <div className="lg:col-span-2 flex flex-col gap-4">
-          <div className="cb-surface divide-y divide-slate-100 flex-1 flex flex-col">
-            <div className="p-5">
-              <h2 className="font-bold text-sm mb-3">Order Details</h2>
-              <CnSectionLabel>Order</CnSectionLabel>
+      <div className="grid gap-4 items-start lg:grid-cols-[minmax(0,1fr)_23rem] xl:grid-cols-[minmax(0,1fr)_26rem]">
+        <div className="flex min-w-0 flex-col gap-4">
+          <section className="cb-surface">
+            <CnCardHead icon={Icons.CheckSquare} title="Order details" />
+            <div className="border-t border-slate-100 px-5 py-1.5">
               <CnInfoRows
                 items={[
                   {
@@ -52862,48 +52954,54 @@ function CnOrderDetailPage() {
                           value: `${row.quantity ?? "—"} · ${row.pricing_mode === "usd" ? money(row.unit_price_usd ?? 0) : cnCny(row.unit_price_cny)}`,
                         },
                       ]
-                    : multiItems
-                      ? [
-                          {
-                            label: "Total Quantity",
-                            value: `${row.cn_order_items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0)} units`,
-                          },
-                        ]
-                      : []),
-                  { label: "Purchased by", value: row.purchased_by || "—" },
+                    : []),
                   {
-                    label: "Created",
-                    value: row.created_at
-                      ? formatDbTimestamp(row.created_at)
-                      : "—",
+                    label: "Status",
+                    value: (
+                      <CnStatusBadge
+                        status={row.status}
+                        partial={partial}
+                        cancelled={cnIsCancelledUnpaid(row)}
+                      />
+                    ),
                   },
+                  { label: "Note", value: row.note || "—" },
                 ].filter(cnHasVal)}
               />
-              <div className="mt-4">
-                <CnSectionLabel>Shipping Method</CnSectionLabel>
-                <CnInfoRows
-                  items={[
-                    {
-                      label: "Shipping Method",
-                      value: (
-                        <span className="inline-flex items-center gap-1.5">
-                          <ShipMethodIcon
-                            m={row.shipping_method}
-                            size={15}
-                            className="text-indigo-700"
-                          />
-                          {normShipMethod(row.shipping_method) || "Land"}
-                        </span>
-                      ),
-                    },
-                  ]}
-                />
-              </div>
             </div>
-            <div className="p-5 flex-1">
-              <h2 className="font-bold text-sm mb-3">
-                China Tracking / Parcels
-              </h2>
+          </section>
+
+          <section className="cb-surface">
+            <CnCardHead
+              icon={Icons.Truck}
+              title="Shipping & tracking"
+              pill={`${parcels.length} parcel${parcels.length === 1 ? "" : "s"}`}
+            />
+            <div className="border-t border-slate-100 px-5 py-3">
+              <div className="mb-2 flex items-center justify-between gap-3 border-b border-slate-100 pb-3 text-sm">
+                <span className="text-slate-500">Shipping method</span>
+                <span className="inline-flex items-center gap-2 font-semibold text-slate-900">
+                  <ShipMethodIcon
+                    m={row.shipping_method}
+                    size={16}
+                    className="text-indigo-700"
+                  />
+                  {
+                    { Land: "Land", Sea: "Sea", Air: "Air" }[
+                      normShipMethod(row.shipping_method) || "Land"
+                    ]
+                  }
+                  {canEdit && !terminal && (
+                    <button
+                      type="button"
+                      onClick={() => setShipOpen(true)}
+                      className="text-xs font-semibold text-blue-600 hover:underline"
+                    >
+                      Edit
+                    </button>
+                  )}
+                </span>
+              </div>
               {!parcels.length ? (
                 <p className="text-sm text-slate-400">
                   No tracking numbers yet. Required before moving to Shipping to
@@ -52950,9 +53048,32 @@ function CnOrderDetailPage() {
                             </button>
                           </span>
                         ) : (
-                          <b className="font-mono text-slate-900">
-                            {p.domestic_tracking}
-                          </b>
+                          <>
+                            <b className="font-mono text-slate-900">
+                              {p.domestic_tracking}
+                            </b>
+                            <button
+                              type="button"
+                              title="Copy"
+                              onClick={() => {
+                                try {
+                                  navigator.clipboard.writeText(
+                                    String(p.domestic_tracking || ""),
+                                  );
+                                  emitCBToast(
+                                    "ok",
+                                    "Copied",
+                                    String(p.domestic_tracking || ""),
+                                  );
+                                } catch (_e) {
+                                  /* clipboard unavailable */
+                                }
+                              }}
+                              className="ml-1.5 align-middle text-slate-400 hover:text-slate-700"
+                            >
+                              <Icons.Copy size={13} />
+                            </button>
+                          </>
                         )}
                         <span className="text-xs text-slate-400">
                           {p.courier ? ` · ${p.courier}` : ""}
@@ -53025,6 +53146,12 @@ function CnOrderDetailPage() {
                   ))}
                 </div>
               )}
+              {parcels.some((x) => x.tk) && (
+                <div className="mt-2 flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-700">
+                  <Icons.Info size={15} className="shrink-0" />
+                  Status updates automatically from the linked TK.
+                </div>
+              )}
               {canEdit && !terminal && (
                 <form onSubmit={addParcel} className="flex gap-2 mt-3">
                   <input
@@ -53033,110 +53160,461 @@ function CnOrderDetailPage() {
                     onChange={(e) => setNewTrack(e.target.value)}
                     placeholder="Add another tracking number"
                   />
-                  <button className="h-9 px-3 rounded-md bg-slate-900 text-white text-sm font-semibold shrink-0">
+                  <button className="h-9 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold shrink-0">
                     Add
                   </button>
                 </form>
               )}
             </div>
-          </div>
+          </section>
         </div>
 
-        <div className="flex flex-col gap-4">
-          {cnShippingFeeRows(parcels).length > 0 && (
-            <div className="cb-surface p-5">
-              <h2 className="font-bold text-sm mb-3">
-                Shipping Fee (Cambodia)
-              </h2>
-              <div className="divide-y divide-slate-100 text-sm">
-                {cnShippingFeeRows(parcels).map((r) => (
-                  <div
-                    key={r.tk}
-                    className="py-2.5 flex flex-wrap items-center justify-between gap-3"
-                  >
-                    <Link
-                      to={`/packages/${encodeURIComponent(r.tk)}`}
-                      className="font-mono font-semibold text-signal-blue hover:underline"
+        <div className="flex min-w-0 flex-col gap-4">
+          {(() => {
+            const cm = String(row.customer || "").match(
+              /^([A-Za-z]{1,8}-\d+)\s*·\s*(.+)$/,
+            );
+            const custCode = cm ? cm[1] : "";
+            const custName = cm ? cm[2].trim() : row.customer || "—";
+            const initials =
+              String(custName)
+                .replace(/[^\p{L}\p{N}]/gu, "")
+                .slice(0, 2)
+                .toUpperCase() || "—";
+            return (
+              <section className="cb-surface p-5">
+                <CnSectionLabel>Customer</CnSectionLabel>
+                <div className="mt-2 flex items-center gap-3">
+                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-blue-50 text-sm font-bold text-blue-700">
+                    {initials}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="truncate font-bold text-slate-900">
+                      {custCode || custName}
+                    </div>
+                    {custCode && (
+                      <div className="truncate text-sm text-slate-500">
+                        {custName}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
+            );
+          })()}
+          {row.purchased_by && (
+            <section className="cb-surface p-5">
+              <CnSectionLabel>Purchased by</CnSectionLabel>
+              <div className="mt-2 flex items-center gap-3">
+                <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-blue-50 text-sm font-bold text-blue-700">
+                  {String(row.purchased_by)
+                    .replace(/[^\p{L}\p{N}]/gu, "")
+                    .slice(0, 2)
+                    .toUpperCase() || "—"}
+                </span>
+                <div className="min-w-0">
+                  <div className="truncate font-bold text-slate-900">
+                    {row.purchased_by}
+                  </div>
+                  <div className="text-sm text-slate-500">Purchaser</div>
+                </div>
+              </div>
+            </section>
+          )}
+          <section className="cb-surface bg-slate-50/60 p-5">
+            <CnSectionLabel>Order overview</CnSectionLabel>
+            <dl className="mt-1 divide-y divide-slate-200/70 text-sm">
+              {[
+                {
+                  label: "Total quantity",
+                  value: `${hasItems ? itemUnits : (row.quantity ?? "—")} units`,
+                },
+                {
+                  label: "Products",
+                  value: hasItems ? row.cn_order_items.length : 1,
+                },
+                {
+                  label: "Created",
+                  value: row.created_at
+                    ? formatDbTimestamp(row.created_at)
+                    : "—",
+                },
+                {
+                  label: "Order type",
+                  value: cnOrderTypeLabel(row.order_type),
+                },
+              ].map((r) => (
+                <div
+                  key={r.label}
+                  className="flex items-center justify-between gap-4 py-2"
+                >
+                  <dt className="text-slate-500">{r.label}</dt>
+                  <dd className="font-semibold tabular-nums text-slate-900">
+                    {r.value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        </div>
+      </div>
+
+      {hasItems && (
+        <section className="cb-surface overflow-hidden">
+          <CnCardHead
+            icon={Icons.Package}
+            title="Order items"
+            pill={`${row.cn_order_items.length} product${row.cn_order_items.length === 1 ? "" : "s"} · ${itemUnits} unit${itemUnits === 1 ? "" : "s"}`}
+            right={
+              canEdit && (
+                <button
+                  type="button"
+                  onClick={() => setCnImgOpen(true)}
+                  className="h-9 px-3 rounded-lg border border-slate-200 bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50 inline-flex items-center gap-1.5"
+                >
+                  <Icons.Image size={15} /> Manage images
+                </button>
+              )
+            }
+          />
+          <div className="overflow-x-auto border-t border-slate-100">
+            <table className="w-full min-w-[600px] text-base">
+              <thead>
+                <tr className="bg-slate-50 text-sm font-bold uppercase tracking-wide text-slate-500">
+                  <th className="px-5 py-3.5 text-left">
+                    <span className="text-sm font-bold">Product / Variant</span>
+                  </th>
+                  <th className="w-24 whitespace-nowrap px-4 py-3.5 text-right">
+                    <span className="text-sm font-bold">Qty</span>
+                  </th>
+                  <th className="w-40 whitespace-nowrap px-4 py-3.5 text-right">
+                    <span className="text-sm font-bold">Unit price</span>
+                  </th>
+                  <th className="w-44 whitespace-nowrap px-5 py-3.5 text-right">
+                    <span className="text-sm font-bold">Total</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {row.cn_order_items.map((item, index) => {
+                  const itemPhotos = cnImages.filter(
+                    (im) => Number(im.item_no) === index + 1,
+                  );
+                  return (
+                    <tr
+                      key={`${row.id}-item-${index}`}
+                      className="align-middle"
                     >
-                      {r.tk}
-                    </Link>
-                    <span className="flex items-center gap-2">
-                      <b>{money(r.fee.total)}</b>
-                      <span
-                        className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${r.fee.state === "paid" ? "bg-emerald-100 text-emerald-700" : "bg-red-50 text-red-600"}`}
-                      >
-                        {r.fee.state === "paid"
-                          ? "Paid"
-                          : `Due ${money(r.fee.due)}`}
-                      </span>
-                    </span>
-                    {r.fee.state === "due" && canPayShip && (
-                      <div className="basis-full">
-                        {feePay?.tk === r.tk ? (
-                          <div className="mt-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3 space-y-2">
-                            <p className="text-sm text-slate-600">
-                              {feePay.method === "wallet"
-                                ? `${money(r.fee.due)} will be deducted from the customer's wallet.`
-                                : `Mark ${money(r.fee.due)} as received in cash / bank transfer. The wallet is not touched.`}
-                            </p>
-                            <div className="flex gap-2">
-                              <button
-                                type="button"
-                                disabled={feeBusy}
-                                onClick={() => setFeePay(null)}
-                                className="h-9 px-4 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                type="button"
-                                disabled={feeBusy}
-                                onClick={confirmFeePay}
-                                className="h-9 px-4 rounded-lg bg-blue-600 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50"
-                              >
-                                {feeBusy ? "Saving…" : "Confirm"}
-                              </button>
+                      <td className="px-5 py-4">
+                        <div className="flex min-w-0 items-center gap-4">
+                          {!itemPhotos[0] && (
+                            <div className="grid h-24 w-24 shrink-0 place-items-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-slate-300">
+                              <Icons.Image size={28} aria-hidden="true" />
                             </div>
-                          </div>
-                        ) : (
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              disabled={
-                                custBal === null || custBal + 0.005 < r.fee.due
-                              }
-                              onClick={() =>
-                                setFeePay({ tk: r.tk, method: "wallet" })
-                              }
-                              className="h-9 px-3 rounded-lg bg-blue-600 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-                            >
-                              Pay from Wallet
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setFeePay({ tk: r.tk, method: "cash" })
-                              }
-                              className="h-9 px-3 rounded-lg border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                            >
-                              Received Cash / Bank
-                            </button>
-                            {custBal !== null &&
-                              custBal + 0.005 < r.fee.due && (
-                                <span className="self-center text-[11px] text-slate-500">
-                                  Wallet {money(custBal)} is lower than the fee.
+                          )}
+                          {itemPhotos[0] && (
+                            <div className="relative shrink-0">
+                              <AirImg
+                                src={itemPhotos[0].url}
+                                onClick={() =>
+                                  setCnViewer(cnImages.indexOf(itemPhotos[0]))
+                                }
+                                className="w-24 h-24 rounded-xl border border-slate-200 bg-white"
+                                FallbackIcon={Icons.ShoppingCart}
+                              />
+                              {itemPhotos.length > 1 && (
+                                <span className="absolute -bottom-1.5 -right-1.5 h-5 min-w-5 px-1.5 rounded-full bg-blue-600 text-white text-[10px] font-bold grid place-items-center ring-2 ring-white">
+                                  +{itemPhotos.length - 1}
                                 </span>
                               )}
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <span className="mb-0.5 block text-sm font-medium text-slate-500">
+                              Product name
+                            </span>
+                            <b className="block text-lg font-semibold leading-snug text-slate-900">
+                              {item.product_name || `Item ${index + 1}`}
+                            </b>
+                            {item.variant && (
+                              <span className="mt-1 block text-base text-slate-500">
+                                {item.variant}
+                              </span>
+                            )}
+                            {item.product_url && (
+                              <a
+                                href={item.product_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block max-w-md truncate text-xs text-blue-600 hover:underline"
+                              >
+                                {item.product_url}
+                              </a>
+                            )}
                           </div>
+                        </div>
+                      </td>
+                      <td className="w-24 px-4 py-4 text-right">
+                        <span className="text-lg font-semibold tabular-nums text-slate-900">
+                          {item.quantity}
+                        </span>
+                      </td>
+                      <td className="w-40 whitespace-nowrap px-4 py-4 text-right">
+                        <span className="text-lg font-medium tabular-nums text-slate-700">
+                          {row.pricing_mode === "usd"
+                            ? money(item.unit_price_usd || 0)
+                            : cnCny(item.unit_price_cny || 0)}
+                        </span>
+                      </td>
+                      <td className="w-44 whitespace-nowrap px-5 py-4 text-right">
+                        <span className="text-lg font-semibold tabular-nums text-slate-900">
+                          {row.pricing_mode === "usd"
+                            ? money(
+                                item.line_total_usd ??
+                                  (Number(item.quantity) || 0) *
+                                    (Number(item.unit_price_usd) || 0),
+                              )
+                            : cnCny(
+                                item.line_total_cny ??
+                                  (Number(item.quantity) || 0) *
+                                    (Number(item.unit_price_cny) || 0),
+                              )}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex items-center justify-between bg-blue-50/70 px-5 py-4">
+            <span className="text-base font-semibold text-slate-900">
+              Goods subtotal
+            </span>
+            <span className="text-xl font-semibold tabular-nums text-slate-900">
+              {row.pricing_mode === "usd"
+                ? money(itemsSubtotal)
+                : cnCny(itemsSubtotal)}
+            </span>
+          </div>
+        </section>
+      )}
+
+      {row.order_type !== "direct" && (
+        <div className="grid items-stretch gap-4 md:grid-cols-2">
+          <section className="cb-surface overflow-hidden">
+            <CnCardHead icon={Icons.Layers} title="Order summary" />
+            <dl className="divide-y divide-slate-100 border-t border-slate-100 px-5 text-sm">
+              {[
+                ...(hasItems
+                  ? [
+                      {
+                        label: "Total Quantity",
+                        value: row.cn_order_items.reduce(
+                          (sum, item) => sum + (Number(item.quantity) || 0),
+                          0,
+                        ),
+                      },
+                    ]
+                  : []),
+                {
+                  label:
+                    row.pricing_mode === "usd" ? "Goods (USD)" : "Goods (CNY)",
+                  value:
+                    row.pricing_mode === "usd"
+                      ? money(
+                          (Number(row.total_due_usd) || 0) -
+                            (Number(row.domestic_shipping_usd) || 0) -
+                            (Number(row.service_fee_usd) || 0) -
+                            (Number(row.additional_services_total_usd) || 0),
+                        )
+                      : cnCny(row.product_total_cny),
+                },
+                {
+                  label: "China shipping",
+                  value:
+                    row.pricing_mode === "usd"
+                      ? money(row.domestic_shipping_usd || 0)
+                      : cnCny(row.domestic_shipping_cny),
+                },
+                ...(Number(row.cny_per_usd) > 0
+                  ? [{ label: "Rate (CNY/USD)", value: row.cny_per_usd }]
+                  : []),
+                {
+                  label: `Service fee ${row.service_fee_pct ?? 0}%`,
+                  value: money(row.service_fee_usd),
+                },
+                ...(Number(row.additional_services_total_usd) > 0
+                  ? [
+                      {
+                        label: "Additional services",
+                        value: money(row.additional_services_total_usd),
+                      },
+                    ]
+                  : []),
+              ].map((r) => (
+                <div
+                  key={r.label}
+                  className="flex items-center justify-between gap-4 py-2"
+                >
+                  <dt className="text-slate-500">{r.label}</dt>
+                  <dd className="font-semibold tabular-nums text-slate-900">
+                    {r.value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+            <div className="m-3 flex items-center justify-between rounded-lg bg-blue-50 px-4 py-3">
+              <span className="font-bold text-slate-900">Total due</span>
+              <span className="text-xl font-bold tabular-nums text-slate-900">
+                {money(due)}
+              </span>
+            </div>
+          </section>
+          <section className="cb-surface overflow-hidden">
+            <CnCardHead
+              icon={Icons.CreditCard}
+              title="Payment"
+              right={<CnPaymentBadge status={row.payment_status} />}
+            />
+            <div className="mx-3 mb-2 grid grid-cols-2 rounded-lg bg-slate-50">
+              <div className="px-4 py-3">
+                <div className="text-xs text-slate-500">Paid</div>
+                <div className="mt-0.5 text-xl font-bold tabular-nums text-slate-900">
+                  {money(paid)}
+                </div>
+              </div>
+              <div className="border-l border-slate-200 px-4 py-3">
+                <div className="text-xs text-slate-500">Outstanding</div>
+                <div
+                  className={`mt-0.5 text-xl font-bold tabular-nums ${due - paid > 0.005 ? "text-red-600" : "text-slate-900"}`}
+                >
+                  {money(Math.max(0, due - paid))}
+                </div>
+              </div>
+            </div>
+            <div className="px-5 pb-3">
+              <CnInfoRows
+                items={[
+                  { label: "Method", value: row.payment_method || "—" },
+                  ...(row.paid_at
+                    ? [
+                        {
+                          label: "Paid at",
+                          value: formatDbTimestamp(row.paid_at),
+                        },
+                      ]
+                    : []),
+                  ...(row.refunded_usd > 0
+                    ? [{ label: "Refunded", value: money(row.refunded_usd) }]
+                    : []),
+                ]}
+              />
+            </div>
+          </section>
+        </div>
+      )}
+
+      {cnShippingFeeRows(parcels).length > 0 && (
+        <div className="cb-surface p-5">
+          <h2 className="font-bold text-sm mb-3">Shipping Fee (Cambodia)</h2>
+          <div className="divide-y divide-slate-100 text-sm">
+            {cnShippingFeeRows(parcels).map((r) => (
+              <div
+                key={r.tk}
+                className="py-2.5 flex flex-wrap items-center justify-between gap-3"
+              >
+                <Link
+                  to={`/packages/${encodeURIComponent(r.tk)}`}
+                  className="font-mono font-semibold text-signal-blue hover:underline"
+                >
+                  {r.tk}
+                </Link>
+                <span className="flex items-center gap-2">
+                  <b>{money(r.fee.total)}</b>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${r.fee.state === "paid" ? "bg-emerald-100 text-emerald-700" : "bg-red-50 text-red-600"}`}
+                  >
+                    {r.fee.state === "paid"
+                      ? "Paid"
+                      : `Due ${money(r.fee.due)}`}
+                  </span>
+                </span>
+                {r.fee.state === "due" && canPayShip && (
+                  <div className="basis-full">
+                    {feePay?.tk === r.tk ? (
+                      <div className="mt-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3 space-y-2">
+                        <p className="text-sm text-slate-600">
+                          {feePay.method === "wallet"
+                            ? `${money(r.fee.due)} will be deducted from the customer's wallet.`
+                            : `Mark ${money(r.fee.due)} as received in cash / bank transfer. The wallet is not touched.`}
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            disabled={feeBusy}
+                            onClick={() => setFeePay(null)}
+                            className="h-9 px-4 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            disabled={feeBusy}
+                            onClick={confirmFeePay}
+                            className="h-9 px-4 rounded-lg bg-blue-600 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50"
+                          >
+                            {feeBusy ? "Saving…" : "Confirm"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={
+                            custBal === null || custBal + 0.005 < r.fee.due
+                          }
+                          onClick={() =>
+                            setFeePay({ tk: r.tk, method: "wallet" })
+                          }
+                          className="h-9 px-3 rounded-lg bg-blue-600 text-xs font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+                        >
+                          Pay from Wallet
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setFeePay({ tk: r.tk, method: "cash" })
+                          }
+                          className="h-9 px-3 rounded-lg border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50"
+                        >
+                          Received Cash / Bank
+                        </button>
+                        {custBal !== null && custBal + 0.005 < r.fee.due && (
+                          <span className="self-center text-[11px] text-slate-500">
+                            Wallet {money(custBal)} is lower than the fee.
+                          </span>
                         )}
                       </div>
                     )}
                   </div>
-                ))}
+                )}
               </div>
-            </div>
-          )}
-          <div className="cb-surface divide-y divide-slate-100 flex-1">
+            ))}
+          </div>
+        </div>
+      )}
+      {(!hasItems ||
+        cnImages.some(
+          (im) =>
+            !(
+              Number(im.item_no) >= 1 &&
+              Number(im.item_no) <= row.cn_order_items.length
+            ),
+        )) &&
+        (cnImages.length > 0 || canEdit) && (
+          <section className="cb-surface">
             {(cnImages.length > 0 || canEdit) && (
               <div className="p-5">
                 <div className="flex items-center justify-between mb-3">
@@ -53219,270 +53697,78 @@ function CnOrderDetailPage() {
                 )}
               </div>
             )}
-            <div className="p-5">
-              <div className="mb-4 flex items-center justify-between">
-                <h2 className="font-bold text-sm">
-                  Purchase Cost &amp; Profit
-                </h2>
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                  Internal
-                </span>
-              </div>
-              <div className="mb-4 rounded-xl bg-slate-50 px-3.5 py-3">
-                <div className="text-xs text-slate-500">
-                  Pre-freight profit / loss
-                </div>
-                <div className={`mt-0.5 text-base font-bold ${profitTone}`}>
-                  {profitText}
-                </div>
-              </div>
-              <CnInfoRows
-                items={[
-                  {
-                    label: "Actual goods cost",
-                    value:
-                      purchaseFinance.goodsUsd == null
-                        ? "Pending actual cost"
-                        : `${cnCny(row.actual_cost_cny)} (${money(purchaseFinance.goodsUsd)})`,
-                  },
-                  {
-                    label: "Actual China shipping cost",
-                    value:
-                      purchaseFinance.shippingUsd == null
-                        ? "Pending actual cost"
-                        : `${cnCny(row.actual_domestic_shipping_cny)} (${money(purchaseFinance.shippingUsd)})`,
-                  },
-                  {
-                    label: "Total actual purchase cost",
-                    value:
-                      purchaseFinance.totalCostUsd == null
-                        ? "Pending — record both actual cost fields"
-                        : money(purchaseFinance.totalCostUsd),
-                  },
-                  ...(purchaseFinance.rate
-                    ? [
-                        {
-                          label: "Purchase FX rate (CNY/USD)",
-                          value: purchaseFinance.rate,
-                        },
-                      ]
-                    : []),
-                ]}
+          </section>
+        )}
+
+      <section className="cb-surface overflow-hidden">
+        <CnCardHead
+          icon={Icons.BarChart3}
+          title="Purchase cost & profit"
+          right={
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+              Internal
+            </span>
+          }
+        />
+        <div className="border-t border-slate-100 px-5 py-4">
+          {purchaseFinance.totalCostUsd == null && (
+            <div className="mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+              <Icons.AlertTriangle
+                size={16}
+                className="shrink-0 text-amber-600"
               />
+              Record both actual costs to calculate profit.
             </div>
-          </div>
-        </div>
-      </div>
-
-      {hasItems && (
-        <div className="cb-surface overflow-hidden">
-          <div className="px-6 pt-6 pb-4">
-            <h2 className="font-bold text-base">
-              Order Items ({row.cn_order_items.length})
-            </h2>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-base">
-              <thead>
-                <tr className="bg-slate-50 text-xs font-bold uppercase tracking-wider text-slate-500">
-                  <th className="px-6 py-3.5 text-left">Product / Variant</th>
-                  <th className="px-4 py-3.5 text-right">Quantity</th>
-                  <th className="px-4 py-3.5 text-right">Unit Price</th>
-                  <th className="px-6 py-3.5 text-right">Total</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {row.cn_order_items.map((item, index) => {
-                  const itemPhotos = cnImages.filter(
-                    (im) => Number(im.item_no) === index + 1,
-                  );
-                  return (
-                    <tr key={`${row.id}-item-${index}`} className="align-top">
-                      <td className="px-6 py-5">
-                        <div className="flex min-w-0 gap-4">
-                          {itemPhotos[0] && (
-                            <div className="relative shrink-0">
-                              <AirImg
-                                src={itemPhotos[0].url}
-                                onClick={() =>
-                                  setCnViewer(cnImages.indexOf(itemPhotos[0]))
-                                }
-                                className="w-16 h-16 rounded-xl border border-slate-200"
-                                FallbackIcon={Icons.ShoppingCart}
-                              />
-                              {itemPhotos.length > 1 && (
-                                <span className="absolute -bottom-1.5 -right-1.5 h-5 min-w-5 px-1.5 rounded-full bg-blue-600 text-white text-[10px] font-bold grid place-items-center ring-2 ring-white">
-                                  +{itemPhotos.length - 1}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                          <div className="min-w-0">
-                            <b className="block text-base font-semibold text-slate-900">
-                              {item.product_name || `Item ${index + 1}`}
-                            </b>
-                            {item.variant && (
-                              <span className="mt-0.5 block text-sm text-slate-500">
-                                {item.variant}
-                              </span>
-                            )}
-                            {item.product_url && (
-                              <a
-                                href={item.product_url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="block max-w-md truncate text-xs text-blue-600 hover:underline"
-                              >
-                                {item.product_url}
-                              </a>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-5 text-right text-base font-semibold">
-                        ×{item.quantity}
-                      </td>
-                      <td className="px-4 py-5 text-right text-base">
-                        {row.pricing_mode === "usd"
-                          ? money(item.unit_price_usd || 0)
-                          : cnCny(item.unit_price_cny || 0)}
-                      </td>
-                      <td className="px-6 py-5 text-right text-base font-bold">
-                        {row.pricing_mode === "usd"
-                          ? money(
-                              item.line_total_usd ??
-                                (Number(item.quantity) || 0) *
-                                  (Number(item.unit_price_usd) || 0),
-                            )
-                          : cnCny(
-                              item.line_total_cny ??
-                                (Number(item.quantity) || 0) *
-                                  (Number(item.unit_price_cny) || 0),
-                            )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {row.order_type !== "direct" && (
-        <div className="grid xl:grid-cols-2 gap-4 items-stretch">
-          <div className="cb-surface overflow-hidden">
-            <div className="px-5 pt-5 pb-2">
-              <h2 className="font-bold text-sm">Summary</h2>
-            </div>
-            <dl className="divide-y divide-slate-100 px-5 text-sm">
-              {[
-                ...(hasItems
-                  ? [
-                      {
-                        label: "Total Quantity",
-                        value: row.cn_order_items.reduce(
-                          (sum, item) => sum + (Number(item.quantity) || 0),
-                          0,
-                        ),
-                      },
-                    ]
-                  : []),
-                {
-                  label:
-                    row.pricing_mode === "usd" ? "Goods (USD)" : "Goods (CNY)",
-                  value:
-                    row.pricing_mode === "usd"
-                      ? money(
-                          (Number(row.total_due_usd) || 0) -
-                            (Number(row.domestic_shipping_usd) || 0) -
-                            (Number(row.service_fee_usd) || 0) -
-                            (Number(row.additional_services_total_usd) || 0),
-                        )
-                      : cnCny(row.product_total_cny),
-                },
-                {
-                  label: "China shipping",
-                  value:
-                    row.pricing_mode === "usd"
-                      ? money(row.domestic_shipping_usd || 0)
-                      : cnCny(row.domestic_shipping_cny),
-                },
-                ...(Number(row.cny_per_usd) > 0
-                  ? [{ label: "Rate (CNY/USD)", value: row.cny_per_usd }]
-                  : []),
-                {
-                  label: `Service fee ${row.service_fee_pct ?? 0}%`,
-                  value: money(row.service_fee_usd),
-                },
-                ...(Number(row.additional_services_total_usd) > 0
-                  ? [
-                      {
-                        label: "Additional services",
-                        value: money(row.additional_services_total_usd),
-                      },
-                    ]
-                  : []),
-              ].map((r) => (
-                <div
-                  key={r.label}
-                  className="flex items-center justify-between gap-4 py-2.5"
+          )}
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-4 lg:grid-cols-4">
+            {[
+              {
+                label: "Actual goods cost",
+                value:
+                  purchaseFinance.goodsUsd == null
+                    ? "Pending"
+                    : `${cnCny(row.actual_cost_cny)} (${money(purchaseFinance.goodsUsd)})`,
+              },
+              {
+                label: "Actual China shipping cost",
+                value:
+                  purchaseFinance.shippingUsd == null
+                    ? "Pending"
+                    : `${cnCny(row.actual_domestic_shipping_cny)} (${money(purchaseFinance.shippingUsd)})`,
+              },
+              {
+                label: "Total actual cost",
+                value:
+                  purchaseFinance.totalCostUsd == null
+                    ? "Pending"
+                    : money(purchaseFinance.totalCostUsd),
+              },
+              {
+                label: "Pre-freight profit / loss",
+                value: purchaseFinance.totalCostUsd == null ? "—" : profitText,
+                tone:
+                  purchaseFinance.totalCostUsd == null
+                    ? "text-slate-900"
+                    : profitTone,
+              },
+            ].map((it) => (
+              <div key={it.label}>
+                <dt className="text-xs text-slate-500">{it.label}</dt>
+                <dd
+                  className={`mt-1 text-base font-bold ${it.tone || "text-slate-900"}`}
                 >
-                  <dt className="text-slate-500">{r.label}</dt>
-                  <dd className="font-semibold text-slate-900">{r.value}</dd>
-                </div>
-              ))}
-            </dl>
-            <div className="mt-1 flex items-center justify-between border-t border-slate-200 bg-slate-50/70 px-5 py-3.5">
-              <span className="font-bold text-slate-900">Total due</span>
-              <span className="text-lg font-bold text-slate-900">
-                {money(due)}
-              </span>
-            </div>
-          </div>
-
-          <div className="cb-surface overflow-hidden">
-            <div className="flex items-center justify-between px-5 pt-5 pb-3">
-              <h2 className="font-bold text-sm">Payment</h2>
-              <CnPaymentBadge status={row.payment_status} />
-            </div>
-            <div className="grid grid-cols-2 border-y border-slate-100">
-              <div className="px-5 py-3.5">
-                <div className="text-xs text-slate-500">Paid</div>
-                <div className="mt-0.5 text-lg font-bold text-slate-900">
-                  {money(paid)}
-                </div>
+                  {it.value}
+                </dd>
               </div>
-              <div className="border-l border-slate-100 px-5 py-3.5">
-                <div className="text-xs text-slate-500">Outstanding</div>
-                <div
-                  className={`mt-0.5 text-lg font-bold ${due - paid > 0.005 ? "text-red-600" : "text-slate-900"}`}
-                >
-                  {money(Math.max(0, due - paid))}
-                </div>
-              </div>
-            </div>
-            <div className="px-5 pb-3">
-              <CnInfoRows
-                items={[
-                  { label: "Method", value: row.payment_method || "—" },
-                  ...(row.paid_at
-                    ? [
-                        {
-                          label: "Paid at",
-                          value: formatDbTimestamp(row.paid_at),
-                        },
-                      ]
-                    : []),
-                  ...(row.refunded_usd > 0
-                    ? [{ label: "Refunded", value: money(row.refunded_usd) }]
-                    : []),
-                ]}
-              />
-            </div>
-          </div>
+            ))}
+          </dl>
+          {purchaseFinance.rate ? (
+            <p className="mt-3 text-xs text-slate-500">
+              Purchase FX rate (CNY/USD): {purchaseFinance.rate}
+            </p>
+          ) : null}
         </div>
-      )}
+      </section>
 
       {cnViewer >= 0 && (
         <AirImageViewer
@@ -67688,8 +67974,62 @@ function ShopActionModal({
   );
 }
 
-function ShopPager({ page, pageSize, total, onPage }) {
+function ShopPager({
+  page,
+  pageSize,
+  total,
+  onPage,
+  onPageSize,
+  pageSizes = [15, 30, 50, 100],
+}) {
   const pages = Math.max(1, Math.ceil(total / pageSize));
+  if (onPageSize) {
+    const from = total === 0 ? 0 : page * pageSize + 1;
+    const to = Math.min(total, (page + 1) * pageSize);
+    const arrow =
+      "inline-flex h-9 w-10 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed";
+    return (
+      <div className="flex items-center justify-end gap-x-6 gap-y-2 flex-wrap px-4 py-3 border-t border-slate-200 text-sm text-slate-700">
+        <label className="flex items-center gap-2">
+          Rows per page
+          <select
+            value={pageSize}
+            onChange={(e) => onPageSize(Number(e.target.value))}
+            className="h-9 rounded-lg border border-slate-200 bg-white px-2.5 text-sm"
+          >
+            {pageSizes.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
+        <span>
+          {from} to {to} of {total.toLocaleString("en-US")} results
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-label="Previous page"
+            onClick={() => onPage(Math.max(0, page - 1))}
+            disabled={page <= 0}
+            className={arrow}
+          >
+            <Icons.ChevronLeft size={16} />
+          </button>
+          <button
+            type="button"
+            aria-label="Next page"
+            onClick={() => onPage(Math.min(pages - 1, page + 1))}
+            disabled={page + 1 >= pages}
+            className={arrow}
+          >
+            <Icons.ChevronRight size={16} />
+          </button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="mt-3 flex items-center justify-between text-sm text-slate-500">
       <span>
@@ -70122,10 +70462,11 @@ function ShopOrdersPage() {
   const [error, setError] = useState("");
   const [counts, setCounts] = useState({});
   const [reload, setReload] = useState(0);
-  const PAGE = 20;
+  const [pageSize, setPageSize] = useState(15);
+  const PAGE = pageSize;
   const s = useShopDebounced(search);
   const st = useShopDebounced(staff);
-  useEffect(() => setPage(0), [s, status, pay, method, from, to, st]);
+  useEffect(() => setPage(0), [s, status, pay, method, from, to, st, pageSize]);
 
   useEffect(() => {
     let alive = true;
@@ -70213,7 +70554,7 @@ function ShopOrdersPage() {
     return () => {
       alive = false;
     };
-  }, [s, status, pay, method, from, to, st, page, reload]);
+  }, [s, status, pay, method, from, to, st, page, pageSize, reload]);
 
   return (
     <ShopGate perm="shop.order.review" title="Shop orders">
@@ -70373,6 +70714,7 @@ function ShopOrdersPage() {
             pageSize={PAGE}
             total={total}
             onPage={setPage}
+            onPageSize={setPageSize}
           />
         </div>
       </div>
