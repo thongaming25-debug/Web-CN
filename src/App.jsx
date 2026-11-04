@@ -12944,7 +12944,8 @@ const readAdminTheme = () => {
 };
 const readAdminLang = () => {
   try {
-    return localStorage.getItem(ADMIN_LANG_KEY) === "km" ? "km" : "en";
+    const v = localStorage.getItem(ADMIN_LANG_KEY);
+    return v === "km" || v === "zh" ? v : "en";
   } catch {
     return "en";
   }
@@ -13173,11 +13174,859 @@ html.cb-admin-dark .cb-login-page .border-white\/80{border-color:rgba(148,163,18
 
 // Khmer font for the admin area (the fonts are already loaded by the
 // Customer Portal module; this only switches the family).
+const ADMIN_ZH_CSS = String.raw`
+html.cb-admin-zh body,html.cb-admin-zh #root,html.cb-admin-zh .font-display,
+html.cb-admin-zh .cb-app *:not(.font-mono),html.cb-admin-zh .cb-login-page *:not(.font-mono){font-family:'PingFang SC','Microsoft YaHei','Noto Sans SC','Noto Sans CJK SC','Hiragino Sans GB',Inter,system-ui,sans-serif!important}
+`;
 const ADMIN_KM_CSS = String.raw`
 html.cb-admin-km body,html.cb-admin-km #root,html.cb-admin-km .font-display,
 html.cb-admin-km .cb-app *:not(.font-mono),html.cb-admin-km .cb-login-page *:not(.font-mono){font-family:'Kantumruy Pro','Noto Sans Khmer',Inter,system-ui,sans-serif!important}
 html.cb-admin-km .leading-tight,html.cb-admin-km .leading-snug,html.cb-admin-km .leading-none{line-height:1.5}
 `;
+
+// English → Chinese (Simplified). Missing strings stay English.
+const ADMIN_ZH = {
+  Dashboard: "控制台",
+  Operations: "运营",
+  "Packages / TK": "包裹 / TK",
+  Filter: "筛选",
+  "Advanced filters": "高级筛选",
+  Export: "导出",
+  "Scan Center": "扫描中心",
+  "Process Tracking": "流程跟踪",
+  "Exception Center": "异常中心",
+  "Inbound Origin": "始发地入库",
+  "Outbound Origin": "始发地出库",
+  Containers: "集装箱",
+  "Shipment Lookup": "货件查询",
+  Cambodia: "柬埔寨",
+  "W.H Arrived (Destination)": "到达仓库（目的地）",
+  "Cambodia Warehouse": "柬埔寨仓库",
+  Sorting: "分拣",
+  Delivery: "派送",
+  Customers: "客户",
+  "Customer Accounts": "客户账户",
+  "Customer Addresses": "客户地址",
+  "Customer ID Transfer": "客户ID转移",
+  "Customer Features": "客户功能",
+  "Deleted Accounts": "已删除账户",
+  Warehouse: "仓库",
+  "Warehouse Management": "仓库管理",
+  Locations: "位置",
+  "Warehouse Operations": "仓库作业",
+  Finance: "财务",
+  "Wallet Top Up": "钱包充值",
+  "Loyalty Points": "会员积分",
+  "Exceptions & Reports": "异常与报表",
+  Reports: "报表",
+  "Collapse sidebar": "收起侧边栏",
+  "Expand sidebar": "展开侧边栏",
+  Exceptions: "异常",
+  "Reports & Analytics": "报表与分析",
+  System: "系统",
+  Users: "用户",
+  "Role Management": "角色管理",
+  "Status Master": "状态管理",
+  "Audit Logs": "审计日志",
+  Settings: "设置",
+  Notifications: "通知",
+  MAIN: "主菜单",
+  "Search pages or jump to a menu...": "搜索页面或跳转到菜单...",
+  "Search pages or menu...": "搜索页面或菜单...",
+  "Search pages...": "搜索页面...",
+  "Search Results": "搜索结果",
+  "No pages found": "未找到页面",
+  "Try another page name or route.": "请尝试其他页面名称或路径。",
+  Navigate: "导航",
+  Open: "打开",
+  Close: "关闭",
+  Cancel: "取消",
+  Admin: "管理员",
+  "My Account": "我的账户",
+  "Change photo": "更换头像",
+  Remove: "移除",
+  "Log out": "退出登录",
+  Language: "语言",
+  Appearance: "外观",
+  Light: "浅色",
+  Dark: "深色",
+  Device: "跟随设备",
+  "Light theme": "浅色主题",
+  "Dark theme": "深色主题",
+  "Use device theme": "跟随设备主题",
+  "Sign in": "登录",
+  "Sign in to access your logistics management workspace.":
+    "登录以进入您的物流管理工作台。",
+  Email: "邮箱",
+  Password: "密码",
+  "Forgot password?": "忘记密码？",
+  "Remember me": "记住我",
+  "Signing in...": "登录中...",
+  "Please enter your email and password.": "请输入您的邮箱和密码。",
+  "Incorrect email or password.": "邮箱或密码错误。",
+  "Contact an Admin to reset your password.": "请联系管理员重置密码。",
+  "Welcome back!": "欢迎回来！",
+  "Signing you in…": "正在登录…",
+  "Redirecting to your dashboard": "正在跳转到控制台",
+  "Preparing your workspace": "正在准备工作台",
+  "Sign out": "退出",
+  "Are you sure you want to sign out?": "确定要退出登录吗？",
+  Confirm: "确认",
+  "Operations Dashboard": "运营控制台",
+  "Live overview of China → Cambodia shipments.": "中国 → 柬埔寨货运实时概览。",
+  Refresh: "刷新",
+  "Needs Attention": "需要关注",
+  "Nothing is waiting right now.": "目前没有待处理事项。",
+  "Open exceptions": "未处理异常",
+  "Needs staff follow-up in the Exception Center.": "需要员工在异常中心跟进。",
+  "Waiting for arrival scan": "等待到达扫描",
+  "Left the origin warehouse; waiting for the W.H Arrived scan.":
+    "已离开始发仓库；等待到达仓库扫描。",
+  "Waiting to ship to branch": "等待发往分店",
+  "Arrived at the destination warehouse; not yet sent to a branch.":
+    "已到达目的地仓库；尚未发往分店。",
+  "Waiting for sorting scan": "等待分拣扫描",
+  "On the way to the branch; waiting for the Sorting scan.":
+    "正在发往分店途中；等待分拣扫描。",
+  more: "更多",
+};
+// Language cycle used by the quick toggle buttons: English → Khmer → Chinese
+const nextAdminLang = (l) => (l === "en" ? "km" : l === "km" ? "zh" : "en");
+const adminLangName = (l) =>
+  l === "km" ? "ខ្មែរ" : l === "zh" ? "中文" : "English";
+
+// Extra strings for admin pages that are written directly in English (CN
+// Purchase Orders, statuses, buttons, messages). Applied by the DOM translator.
+const ADMIN_ZH_ALL = {
+  "CN Purchase Orders": "中国采购订单",
+  "Orders, linked TK tracking and purchase costs in one workspace.":
+    "订单、关联TK物流跟踪和采购成本，集中在一个工作台。",
+  "New CN Order": "新建中国订单",
+  "New CN Purchase Order": "新建中国采购订单",
+  "CN Orders": "中国订单",
+  "TK List": "TK 列表",
+  "Purchase & Finance": "采购与财务",
+  "CN purchase workspace": "中国采购工作台",
+  "Total Orders": "订单总数",
+  "Need Payment": "待付款",
+  "Ready to Purchase": "待采购",
+  "In China": "在中国",
+  "To Cambodia": "发往柬埔寨",
+  All: "全部",
+  "All Status": "全部状态",
+  "All Payment": "全部付款状态",
+  "All TK Statuses": "全部TK状态",
+  "Created At": "创建时间",
+  Download: "下载",
+  Refresh: "刷新",
+  "Clear filters": "清除筛选",
+  "Show all orders": "显示全部订单",
+  "Click to filter the table": "点击筛选表格",
+  "Search Order ID, Customer, Product, Supplier Order…":
+    "搜索订单号、客户、商品、供应商订单号…",
+  "Search TK, CN Order ID, customer or product…":
+    "搜索TK、中国订单号、客户或商品…",
+  "Search Customer ID, name or phone…": "搜索客户ID、姓名或电话…",
+  "Searching customers…": "正在搜索客户…",
+  "No CN purchase orders found.": "未找到中国采购订单。",
+  "No orders found": "未找到订单",
+  "Couldn't load CN purchase orders.": "无法加载中国采购订单。",
+  "Unable to load CN orders.": "无法加载中国订单。",
+  "Unable to load TK list.": "无法加载TK列表。",
+  "Supabase is not connected — CN Purchase Orders need the database.":
+    "Supabase 未连接 — 中国采购订单需要数据库。",
+  "Supabase is not connected.": "Supabase 未连接。",
+  "Order ID": "订单号",
+  "Tracking Number": "运单号",
+  "Tracking Numbers": "运单号",
+  Customer: "客户",
+  "Product Items": "商品明细",
+  "Linked TKs": "关联TK",
+  "Total (USD)": "合计（美元）",
+  "Paid / Balance": "已付 / 余额",
+  Payment: "付款",
+  Status: "状态",
+  Created: "创建",
+  Updated: "更新",
+  Balance: "余额",
+  Land: "陆运",
+  Sea: "海运",
+  Air: "空运",
+  "By Land": "陆运",
+  "By Sea": "海运",
+  "By Air": "空运",
+  "Super Admin": "超级管理员",
+  Admin: "管理员",
+  Manager: "经理",
+  Staff: "员工",
+  Intransit: "运输中",
+  Purchased: "已采购",
+  "Waiting Order Payment": "等待订单付款",
+  "Order Processing": "订单处理中",
+  "Shipping to China WH": "运往中国仓库",
+  Inbound: "入库",
+  Outbound: "出库",
+  "Inbound Origin": "始发地入库",
+  "Outbound Origin": "始发地出库",
+  "Arrive Destination": "到达目的地",
+  "Arrived Destination": "已到达目的地",
+  "Arrive WH-KH": "到达柬埔寨仓库",
+  "Inbound WH-KH": "柬埔寨仓库入库",
+  "Inbound Warehouse": "仓库入库",
+  "Shipping To Branch": "运往分店",
+  "Shipping to Branch": "运往分店",
+  "Complete Order": "订单完成",
+  "Refund Order": "订单退款",
+  "Approve Purchase": "批准采购",
+  Arrived: "已到达",
+  Delivery: "派送",
+  Completed: "已完成",
+  Complete: "完成",
+  Cancelled: "已取消",
+  Pending: "待处理",
+  "Waiting Payment": "等待付款",
+  Paid: "已付",
+  Unpaid: "未付",
+  Partial: "部分付款",
+  Refunded: "已退款",
+  "No status": "无状态",
+  "Other Status": "其他状态",
+  Unknown: "未知",
+  Incomplete: "未完成",
+  Late: "逾期",
+  "On Time": "准时",
+  "No Update": "无更新",
+  Warning: "警告",
+  "Assisted Purchase": "代采购",
+  "Customer Direct": "客户自购",
+  Taobao: "淘宝",
+  Tmall: "天猫",
+  Pinduoduo: "拼多多",
+  WeChat: "微信",
+  1688: "1688",
+  Other: "其他",
+  assisted: "代采购",
+  direct: "客户自购",
+  Cash: "现金",
+  Wing: "Wing",
+  ABA: "ABA",
+  KHQR: "KHQR",
+  "Cash / transfer, no deduction": "现金 / 转账，不扣钱包",
+  "Deduct from the app wallet": "从应用钱包扣款",
+  "Customer Wallet": "客户钱包",
+  Wallet: "钱包",
+  "Pay with": "支付方式",
+  "Pay from Wallet": "钱包支付",
+  "Top up wallet": "钱包充值",
+  "Mark as Paid": "标记为已付",
+  "Marked as paid": "已标记为已付",
+  "Record Payment": "记录付款",
+  "Received Cash / Bank": "收到现金 / 银行",
+  "Paid from wallet": "已从钱包支付",
+  "Payment failed": "付款失败",
+  Method: "方式",
+  "Paid at": "付款时间",
+  Reference: "参考号",
+  "Txn / receipt no.": "交易 / 收据号",
+  "Already paid": "已付款",
+  "Balance after payment": "付款后余额",
+  "Customer pays now": "客户现在支付",
+  "Customer already paid the full amount": "客户已全额付款",
+  "Amount (USD)": "金额（美元）",
+  "Balance (USD)": "余额（美元）",
+  Outstanding: "未付",
+  "Outstanding (USD)": "未付（美元）",
+  "Paid (USD)": "已付（美元）",
+  Remaining: "剩余",
+  Total: "合计",
+  "Total due": "应付合计",
+  "Total quantity": "总数量",
+  "Total Quantity": "总数量",
+  "Customer total": "客户合计",
+  Platform: "平台",
+  "Pricing Mode": "计价模式",
+  "Exchange Rate": "汇率",
+  "CNY Exchange → USD": "人民币兑美元汇率",
+  "CNY Exchange to USD": "人民币兑美元汇率",
+  "CNY per 1 USD *": "每1美元兑人民币 *",
+  "Rate (CNY per USD)": "汇率（人民币/美元）",
+  "Rate (CNY/USD)": "汇率（人民币/美元）",
+  "Purchase FX rate (CNY/USD)": "采购汇率（人民币/美元）",
+  "Purchase Exchange Rate (CNY per USD, only for the CNY fields)":
+    "采购汇率（每美元兑人民币，仅用于人民币字段）",
+  "USD Direct": "美元直接",
+  "USD Direct ($)": "美元直接（$）",
+  Shop: "店铺",
+  "Shop / seller name": "店铺 / 卖家名称",
+  "Supplier Order No.": "供应商订单号",
+  "Supplier Order No. (optional)": "供应商订单号（选填）",
+  "Supplier Order No. *": "供应商订单号 *",
+  "Supplier reference": "供应商参考号",
+  "Order no. on Taobao / 1688 …": "淘宝 / 1688 订单号 …",
+  Courier: "快递公司",
+  "SF / ZTO / YTO / JD …": "顺丰 / 中通 / 圆通 / 京东 …",
+  "Customer *": "客户 *",
+  "Customer Charges (USD)": "客户费用（美元）",
+  "Customer Paid (USD)": "客户已付（美元）",
+  "Customer Paid": "客户已付",
+  "Customer Charges": "客户费用",
+  "Customer Charges (Gross)": "客户费用（总额）",
+  "Customer Outstanding": "客户未付",
+  "Customer goods amount": "客户商品金额",
+  Product: "商品",
+  "Product Information": "商品信息",
+  "Product Photos": "商品图片",
+  "Product Images": "商品图片",
+  "Product / Variant": "商品 / 规格",
+  "Product / Package Image": "商品 / 包裹图片",
+  "Product / Package Images": "商品 / 包裹图片",
+  "Product Link": "商品链接",
+  "Product link": "商品链接",
+  "Product name": "商品名称",
+  "Product name / description": "商品名称 / 描述",
+  Products: "商品",
+  Variant: "规格",
+  "Variant / Color / Size": "规格 / 颜色 / 尺寸",
+  "Optional variant": "规格（选填）",
+  Quantity: "数量",
+  "Quantity *": "数量 *",
+  Qty: "数量",
+  "Qty *": "数量 *",
+  "Qty · Unit Price": "数量 · 单价",
+  "Unit Price": "单价",
+  "Unit Price (CNY) *": "单价（人民币）*",
+  "Unit Price (USD) *": "单价（美元）*",
+  "Line Subtotal": "行小计",
+  Item: "商品",
+  Items: "商品",
+  "Description (optional)": "描述（选填）",
+  "Service Name *": "服务名称 *",
+  "Service Fee %": "服务费 %",
+  "Service fee %": "服务费 %",
+  "Service fee (USD)": "服务费（美元）",
+  "Additional Services": "附加服务",
+  "Additional services": "附加服务",
+  "Additional services (USD)": "附加服务（美元）",
+  "Optional service details": "服务详情（选填）",
+  "Optional extra charges in USD.": "可选额外费用（美元）。",
+  "No additional services added.": "未添加附加服务。",
+  "China shipping": "中国运费",
+  "China Shipping (CNY)": "中国运费（人民币）",
+  "China Shipping (USD)": "中国运费（美元）",
+  "China shipping (USD)": "中国运费（美元）",
+  "Shipping Fee (Cambodia)": "运费（柬埔寨）",
+  "Shipping Method": "运输方式",
+  "Shipping Method *": "运输方式 *",
+  "Change Shipping Method": "更改运输方式",
+  "Shipping Method updated": "运输方式已更新",
+  Note: "备注",
+  "Note:": "备注：",
+  "Optional note": "备注（选填）",
+  "Origin Warehouse": "始发仓库",
+  "Cambodia Branch": "柬埔寨分店",
+  "Assign to…": "分配给…",
+  Primary: "主要",
+  "Set primary": "设为主要",
+  Summary: "摘要",
+  Invoice: "发票",
+  Receipt: "收据",
+  Timeline: "时间线",
+  "Order Details": "订单详情",
+  "Order History": "订单历史",
+  History: "历史",
+  "No history.": "暂无历史。",
+  "Order Status": "订单状态",
+  "Order Type": "订单类型",
+  Order: "订单",
+  "Purchase Order": "采购订单",
+  "Purchased by": "采购人",
+  "Next step": "下一步",
+  Add: "添加",
+  "Add another tracking number": "再添加一个运单号",
+  "China tracking number(s) * — one per line": "中国运单号 * — 每行一个",
+  "China tracking number(s) — one per line": "中国运单号 — 每行一个",
+  "China Tracking / Parcels": "中国运单 / 包裹",
+  "China WH.": "中国仓库",
+  "No TKs linked to CN Orders found.": "未找到与中国订单关联的TK。",
+  "No tracking numbers yet.": "暂无运单号。",
+  Link: "链接",
+  "Parse Link": "解析链接",
+  "https://…": "https://…",
+  "e.g. Special Packaging": "例如：特殊包装",
+  "Leave blank if unknown": "未知可留空",
+  "Enter only if actual cost is known": "仅在已知实际成本时填写",
+  "Actual China Shipping": "实际中国运费",
+  "Actual China Shipping (CNY)": "实际中国运费（人民币）",
+  "Actual China Shipping (CNY, optional)": "实际中国运费（人民币，选填）",
+  "Actual China Shipping (USD)": "实际中国运费（美元）",
+  "Actual China shipping cost": "实际中国运费成本",
+  "Actual Cost (USD, internal, optional)": "实际成本（美元，内部，选填）",
+  "Actual Goods Cost": "实际商品成本",
+  "Actual Goods Cost (CNY)": "实际商品成本（人民币）",
+  "Actual Goods Cost (USD)": "实际商品成本（美元）",
+  "Actual Goods Cost Total (CNY, optional)": "实际商品成本合计（人民币，选填）",
+  "Actual Purchase Cost (Optional)": "实际采购成本（选填）",
+  "Actual goods cost": "实际商品成本",
+  "Actual goods cost not recorded": "未记录实际商品成本",
+  "Actual cost paid to supplier (CNY, incl. China shipping)":
+    "支付给供应商的实际成本（人民币，含中国运费）",
+  "Edit Actual Cost": "编辑实际成本",
+  "Record Actual Cost": "记录实际成本",
+  "Save Actual Cost": "保存实际成本",
+  "Actual purchase costs saved": "实际采购成本已保存",
+  "Cost Record": "成本记录",
+  "Known actual cost": "已知实际成本",
+  "Pending actual cost": "待记录实际成本",
+  "Pending actual costs": "待记录实际成本",
+  "Pending actual goods + China shipping costs": "待记录实际商品及中国运费成本",
+  "Goods cost pending": "商品成本待定",
+  "Total Recorded Cost": "已记录成本合计",
+  "Total Recorded Cost (USD)": "已记录成本合计（美元）",
+  "Total recorded actual cost": "已记录实际成本合计",
+  "Total actual purchase cost": "实际采购成本合计",
+  "Total real cost in USD (goods + China shipping)":
+    "美元实际总成本（商品 + 中国运费）",
+  "Recorded Actual Costs (Known)": "已记录实际成本（已知）",
+  "Recorded actual China shipping (USD)": "已记录实际中国运费（美元）",
+  "Recorded actual goods cost (USD)": "已记录实际商品成本（美元）",
+  "Goods (CNY)": "商品（人民币）",
+  "Goods (USD)": "商品（美元）",
+  "Margin Status": "利润状态",
+  "Margin Incomplete": "利润未完整",
+  "Pre-Freight Profit/Loss (USD)": "运前盈亏（美元）",
+  "Pre-freight profit / loss": "运前盈亏",
+  "Pre-freight profit/loss": "运前盈亏",
+  "Pre-Freight Profit / Loss": "运前盈亏",
+  "Pre-Freight Loss (known minimum)": "运前亏损（已知最低）",
+  "Pre-Freight Profit (complete costs)": "运前利润（成本完整）",
+  "Net Pre-Freight Margin": "运前净利润",
+  "Before international freight & other costs": "未计国际运费及其他成本",
+  "Loss before international freight": "国际运费前亏损",
+  "Minimum loss": "最低亏损",
+  Profit: "利润",
+  Loss: "亏损",
+  "Break-even": "持平",
+  "Excluded (Refunded)": "已排除（已退款）",
+  "Linked Orders": "关联订单",
+  "Existing CN Order Prices": "现有中国订单价格",
+  Calculator: "计算器",
+  "No finance records found.": "未找到财务记录。",
+  "Shipping Paid": "运费已付",
+  "Paid / Balance ": "已付 / 余额",
+  "Goods + China shipping + service fee + additional services.":
+    "商品 + 中国运费 + 服务费 + 附加服务。",
+  "International freight is billed later from CBM/weight at Inbound.":
+    "国际运费将在入库时按体积/重量另行结算。",
+  "The Dashboard uses this value for Purchase Profit.":
+    "控制台使用此数值计算采购利润。",
+  "Enter 0 only if shipping is confirmed free.": "仅在确认免运费时填写 0。",
+  "Enter less to keep a cancellation fee.": "填写较小金额以保留取消费。",
+  "Different items can have different quantities and unit prices.":
+    "不同商品可设置不同数量和单价。",
+  "You do not need to enter the CN Order prices again.":
+    "无需重新输入中国订单价格。",
+  "Prices are locked (paid or already purchased). You can correct names, links, shop and note.":
+    "价格已锁定（已付款或已采购）。您可修改名称、链接、店铺和备注。",
+  "Unpaid: you can correct items, prices, rate and fee. The total is recalculated.":
+    "未付款：可修改商品、价格、汇率和费用，合计将重新计算。",
+  "Updated automatically from the TK.": "由TK自动更新。",
+  "Updated automatically from the linked TK (physical shipment workflow).":
+    "由关联TK自动更新（实物货运流程）。",
+  "Only available before the goods leave China.": "仅在货物离开中国前可用。",
+  "Choose which item each photo belongs to.": "请选择每张图片对应的商品。",
+  Save: "保存",
+  "Save Changes": "保存更改",
+  Cancel: "取消",
+  Close: "关闭",
+  Confirm: "确认",
+  Delete: "删除",
+  Remove: "移除",
+  Retry: "重试",
+  "Edit Order": "编辑订单",
+  "Edit CN Order": "编辑中国订单",
+  "Cancel Order": "取消订单",
+  "Cancel CN Order": "取消中国订单",
+  "Confirm Cancel": "确认取消",
+  "Confirm Refund": "确认退款",
+  "Refund CN Order": "中国订单退款",
+  "Refund to customer (USD)": "退还客户（美元）",
+  "Delete Order": "删除订单",
+  "Delete Order + Linked TKs": "删除订单及关联TK",
+  "Delete image": "删除图片",
+  "Delete image?": "删除图片？",
+  "Remove image": "移除图片",
+  "Print Label": "打印标签",
+  "Print label": "打印标签",
+  "Create Order": "创建订单",
+  "Reset to Default": "恢复默认",
+  Manage: "管理",
+  "Manage to assign": "去分配",
+  "View all photos": "查看全部图片",
+  "View only": "仅查看",
+  "Back to CN Purchase Orders": "返回中国采购订单",
+  "Change Tracking Number": "更改运单号",
+  "Change tracking number": "更改运单号",
+  "Cancelling…": "取消中…",
+  "Refunding…": "退款中…",
+  "Creating…": "创建中…",
+  "Saving…": "保存中…",
+  Enter: "回车",
+  Escape: "退出",
+  "Delete CN Order and Linked Shipment Records?":
+    "删除中国订单及关联货件记录？",
+  "This image will be removed from the order.": "此图片将从订单中移除。",
+  "Why is this order cancelled / refunded?": "此订单为何取消 / 退款？",
+  "Why is this order cancelled?": "此订单为何取消？",
+  "This order has several TKs. Which one has the wrong number?":
+    "此订单有多个TK，哪一个运单号有误？",
+  "No photo for this item.": "此商品暂无图片。",
+  "No photo yet.": "暂无图片。",
+  "No images yet.": "暂无图片。",
+  "CN Order not found": "未找到中国订单",
+  "CN Order not found.": "未找到中国订单。",
+  "Customer not found.": "未找到客户。",
+  "Please select a Customer.": "请选择客户。",
+  "Add at least one product item.": "请至少添加一件商品。",
+  "Keep at least one product item.": "请至少保留一件商品。",
+  "Add at least one domestic tracking number.": "请至少添加一个国内运单号。",
+  "Tracking number is required.": "必须填写运单号。",
+  "Supplier Order No. is required.": "必须填写供应商订单号。",
+  "Cancel reason is required.": "必须填写取消原因。",
+  "Refund reason is required.": "必须填写退款原因。",
+  "Amount must be above 0.": "金额必须大于0。",
+  "Not allowed.": "无权限。",
+  "Add failed": "添加失败",
+  "Change failed": "更改失败",
+  "Create failed": "创建失败",
+  "Delete failed": "删除失败",
+  "Update failed": "更新失败",
+  "Upload failed": "上传失败",
+  "Remove failed": "移除失败",
+  "CN Purchase Order created": "中国采购订单已创建",
+  "CN Purchase Order created (Customer Direct)":
+    "中国采购订单已创建（客户自购）",
+  "CN Order and linked TKs deleted": "中国订单及关联TK已删除",
+  "Order cancelled": "订单已取消",
+  "Order refunded": "订单已退款",
+  "Order updated": "订单已更新",
+  "Order marked complete by staff.": "订单已由员工标记为完成。",
+  "Tracking updated": "运单号已更新",
+  "Tracking not saved": "运单号未保存",
+  "Image deleted": "图片已删除",
+  "Image uploaded": "图片已上传",
+  "Image upload failed": "图片上传失败",
+  "Invalid image": "图片无效",
+  "Too many images": "图片过多",
+  "Image is larger than 5 MB.": "图片大于5MB。",
+  "Only JPG, PNG or WEBP images are allowed.": "仅允许 JPG、PNG 或 WEBP 图片。",
+  "No file selected.": "未选择文件。",
+  "The image was removed.": "图片已移除。",
+  "Unable to cancel order.": "无法取消订单。",
+  "Unable to create order.": "无法创建订单。",
+  "Unable to record payment.": "无法记录付款。",
+  "Unable to refund order.": "无法退款。",
+  "Unable to update order.": "无法更新订单。",
+  "Unable to update Shipping Method.": "无法更新运输方式。",
+  "Unable to save actual purchase costs.": "无法保存实际采购成本。",
+  "You do not have permission to record purchase costs.":
+    "您没有记录采购成本的权限。",
+  "Customer wallet could not be loaded.": "无法加载客户钱包。",
+  "Payment must be fully received before purchasing.": "采购前必须全额收款。",
+  "This order already has a payment. Use Refund Order.":
+    "此订单已有付款，请使用“订单退款”。",
+  "This order has no next status.": "此订单没有下一状态。",
+  "This tracking number is already on the order.": "此运单号已在订单中。",
+  Duplicate: "重复",
+  "Unnamed customer": "未命名客户",
+  "Order was not updated. Check your permission.": "订单未更新，请检查权限。",
+  "The order changed meanwhile. Reload and try again.":
+    "订单已被更改，请刷新后重试。",
+  "This order was just updated by someone else. Reload and try again.":
+    "此订单刚被他人更新，请刷新后重试。",
+  "CN Order was updated by another user. Please reload and check the order status.":
+    "中国订单已被其他用户更新，请刷新并检查订单状态。",
+  "The order can only be completed after it reaches Inbound Warehouse.":
+    "订单需到达仓库入库后才能完成。",
+  "Exchange rate (CNY per 1 USD) is required.":
+    "必须填写汇率（每1美元兑人民币）。",
+  "Purchase exchange rate must be greater than 0.": "采购汇率必须大于0。",
+  "Service fee % must be between 0 and 100.": "服务费比例必须在0到100之间。",
+  "Cannot inspect linked TKs": "无法检查关联TK",
+  Edited: "已编辑",
+  Empty: "空",
+  System: "系统",
+  Clock: "时钟",
+  Search: "搜索",
+  Edit: "编辑",
+  "Add New": "新增",
+  Submit: "提交",
+  Back: "返回",
+  Next: "下一步",
+  Previous: "上一步",
+  Yes: "是",
+  No: "否",
+  Name: "名称",
+  Phone: "电话",
+  Email: "邮箱",
+  Address: "地址",
+  Date: "日期",
+  Time: "时间",
+  Actions: "操作",
+  Action: "操作",
+  Active: "启用",
+  Inactive: "停用",
+  "Loading…": "加载中…",
+  "Loading...": "加载中...",
+  "No data": "暂无数据",
+  "No results": "无结果",
+  Details: "详情",
+  Description: "描述",
+  Type: "类型",
+  Notes: "备注",
+  Amount: "金额",
+  Weight: "重量",
+  "Customer ID": "客户ID",
+  "Customer Code": "客户代码",
+  Package: "包裹",
+  Packages: "包裹",
+  Shipments: "货件",
+  Shipment: "货件",
+  Container: "集装箱",
+  Branch: "分店",
+  Warehouse: "仓库",
+  From: "从",
+  To: "至",
+  Today: "今天",
+  Yesterday: "昨天",
+  "This Month": "本月",
+  "Last Month": "上月",
+  Apply: "应用",
+  Reset: "重置",
+  Select: "选择",
+  Export: "导出",
+  Import: "导入",
+  "Actual China shipping cost must be 0 or more.":
+    "实际中国运费必须大于或等于0。",
+  "Actual cost (USD) must be 0 or more.": "实际成本（美元）必须大于或等于0。",
+  "Actual cost must be 0 or more.": "实际成本必须大于或等于0。",
+  "Actual goods cost must be 0 or more.": "实际商品成本必须大于或等于0。",
+  "China shipping must be 0 or more.": "中国运费必须大于或等于0。",
+  "CN Order not found. Reload and try again.": "未找到中国订单，请刷新后重试。",
+  "Connect to Supabase before deleting a CN Order.":
+    "删除中国订单前请先连接 Supabase。",
+  "Customer pays first, then we purchase. Starts at Order Processing.":
+    "客户先付款，我们再采购。从“订单处理中”开始。",
+  "Customer buys the item themselves and ships to our China warehouse. Starts at Shipping to China WH.":
+    "客户自行购买并寄到我们的中国仓库。从“运往中国仓库”开始。",
+  "Customer total (including fees/eligible shipping)":
+    "客户合计（含费用 / 可计费运费）",
+  "Delete unavailable": "无法删除",
+  "Not recorded": "未记录",
+  "Some linked TKs could not be updated. Check TK permissions/RLS and try again.":
+    "部分关联TK无法更新，请检查TK权限/RLS后重试。",
+  "Unable to delete the CN Order and linked shipment records.":
+    "无法删除中国订单及关联货件记录。",
+  "Unable to load CN purchase orders.": "无法加载中国采购订单。",
+  "CN Order": "中国订单",
+  Dashboard: "控制台",
+  Operations: "运营",
+  "Packages / TK": "包裹 / TK",
+  Filter: "筛选",
+  "Advanced filters": "高级筛选",
+  "Scan Center": "扫描中心",
+  "Process Tracking": "流程跟踪",
+  "Exception Center": "异常中心",
+  Containers: "集装箱",
+  "Shipment Lookup": "货件查询",
+  Cambodia: "柬埔寨",
+  "W.H Arrived (Destination)": "到达仓库（目的地）",
+  "Cambodia Warehouse": "柬埔寨仓库",
+  Sorting: "分拣",
+  Customers: "客户",
+  "Customer Accounts": "客户账户",
+  "Customer Addresses": "客户地址",
+  "Customer ID Transfer": "客户ID转移",
+  "Customer Features": "客户功能",
+  "Deleted Accounts": "已删除账户",
+  "Warehouse Management": "仓库管理",
+  Locations: "位置",
+  "Warehouse Operations": "仓库作业",
+  Finance: "财务",
+  "Wallet Top Up": "钱包充值",
+  "Loyalty Points": "会员积分",
+  "Exceptions & Reports": "异常与报表",
+  Reports: "报表",
+  "Collapse sidebar": "收起侧边栏",
+  "Expand sidebar": "展开侧边栏",
+  Exceptions: "异常",
+  "Reports & Analytics": "报表与分析",
+  Users: "用户",
+  "Role Management": "角色管理",
+  "Status Master": "状态管理",
+  "Audit Logs": "审计日志",
+  Settings: "设置",
+  Notifications: "通知",
+  MAIN: "主菜单",
+  "Search pages or jump to a menu...": "搜索页面或跳转到菜单...",
+  "Search pages or menu...": "搜索页面或菜单...",
+  "Search pages...": "搜索页面...",
+  "Search Results": "搜索结果",
+  "No pages found": "未找到页面",
+  "Try another page name or route.": "请尝试其他页面名称或路径。",
+  Navigate: "导航",
+  Open: "打开",
+  "My Account": "我的账户",
+  "Change photo": "更换头像",
+  "Log out": "退出登录",
+  Language: "语言",
+  Appearance: "外观",
+  Light: "浅色",
+  Dark: "深色",
+  Device: "跟随设备",
+  "Light theme": "浅色主题",
+  "Dark theme": "深色主题",
+  "Use device theme": "跟随设备主题",
+  "Sign in": "登录",
+  "Sign in to access your logistics management workspace.":
+    "登录以进入您的物流管理工作台。",
+  Password: "密码",
+  "Forgot password?": "忘记密码？",
+  "Remember me": "记住我",
+  "Signing in...": "登录中...",
+  "Please enter your email and password.": "请输入您的邮箱和密码。",
+  "Incorrect email or password.": "邮箱或密码错误。",
+  "Contact an Admin to reset your password.": "请联系管理员重置密码。",
+  "Welcome back!": "欢迎回来！",
+  "Signing you in…": "正在登录…",
+  "Redirecting to your dashboard": "正在跳转到控制台",
+  "Preparing your workspace": "正在准备工作台",
+  "Sign out": "退出",
+  "Are you sure you want to sign out?": "确定要退出登录吗？",
+  "Operations Dashboard": "运营控制台",
+  "Live overview of China → Cambodia shipments.": "中国 → 柬埔寨货运实时概览。",
+  "Needs Attention": "需要关注",
+  "Nothing is waiting right now.": "目前没有待处理事项。",
+  "Open exceptions": "未处理异常",
+  "Needs staff follow-up in the Exception Center.": "需要员工在异常中心跟进。",
+  "Waiting for arrival scan": "等待到达扫描",
+  "Left the origin warehouse; waiting for the W.H Arrived scan.":
+    "已离开始发仓库；等待到达仓库扫描。",
+  "Waiting to ship to branch": "等待发往分店",
+  "Arrived at the destination warehouse; not yet sent to a branch.":
+    "已到达目的地仓库；尚未发往分店。",
+  "Waiting for sorting scan": "等待分拣扫描",
+  "On the way to the branch; waiting for the Sorting scan.":
+    "正在发往分店途中；等待分拣扫描。",
+  more: "更多",
+};
+const ADMIN_ZH_PATTERNS = [
+  [/^Balance \$([\d,.]+)$/, "余额 $$$1"],
+  [/^Paid \$([\d,.]+)$/, "已付 $$$1"],
+  [/^(\d+) TKs?$/, "$1 个TK"],
+  [/^(\d+) items?$/, "$1 件商品"],
+  [/^Showing (\d+)[–-](\d+) of (\d+)/, "显示第 $1–$2 条，共 $3 条"],
+  [/^(\d+) selected$/, "已选择 $1 项"],
+];
+function adminZhOf(text) {
+  const k = text.trim();
+  if (!k) return null;
+  if (Object.prototype.hasOwnProperty.call(ADMIN_ZH_ALL, k))
+    return ADMIN_ZH_ALL[k];
+  for (const [re, out] of ADMIN_ZH_PATTERNS)
+    if (re.test(k)) return k.replace(re, out);
+  return null;
+}
+// Translates the visible text of the whole admin area into Chinese by exact
+// match against ADMIN_ZH_ALL. Strings that are not listed stay English, and
+// switching language restores the original text.
+function useAdminDomTranslate(lang) {
+  useEffect(() => {
+    if (lang !== "zh" || typeof document === "undefined") return undefined;
+    const SKIP = new Set([
+      "SCRIPT",
+      "STYLE",
+      "TEXTAREA",
+      "INPUT",
+      "CODE",
+      "PRE",
+    ]);
+    const ATTRS = ["placeholder", "title", "aria-label"];
+    const textDone = new Map(); // node -> { raw, out }
+    const attrDone = new Map(); // element -> { attr: { raw, out } }
+    const doText = (n) => {
+      const p = n.parentNode;
+      if (
+        !p ||
+        SKIP.has(p.nodeName) ||
+        (p.closest && p.closest("[data-no-tr]"))
+      )
+        return;
+      const raw = n.nodeValue;
+      const z = raw ? adminZhOf(raw) : null;
+      if (z == null) {
+        textDone.delete(n);
+        return;
+      }
+      const out = raw.replace(raw.trim(), () => z);
+      if (out !== raw) {
+        textDone.set(n, { raw, out });
+        n.nodeValue = out;
+      }
+    };
+    const doAttrs = (el) => {
+      if (!el.getAttribute || (el.closest && el.closest("[data-no-tr]")))
+        return;
+      for (const a of ATTRS) {
+        const raw = el.getAttribute(a);
+        if (!raw) continue;
+        const z = adminZhOf(raw);
+        if (z == null) continue;
+        let rec = attrDone.get(el);
+        if (!rec) attrDone.set(el, (rec = {}));
+        rec[a] = { raw, out: z };
+        el.setAttribute(a, z);
+      }
+    };
+    const walk = (root) => {
+      if (root.nodeType === 3) return doText(root);
+      if (root.nodeType !== 1) return;
+      if (SKIP.has(root.nodeName)) return;
+      doAttrs(root);
+      const tw = document.createTreeWalker(root, 1 | 4);
+      let n = tw.nextNode();
+      while (n) {
+        if (n.nodeType === 3) doText(n);
+        else if (!SKIP.has(n.nodeName)) doAttrs(n);
+        n = tw.nextNode();
+      }
+    };
+    walk(document.body);
+    const mo = new MutationObserver((list) => {
+      for (const m of list) {
+        if (m.type === "childList") m.addedNodes.forEach(walk);
+        else if (m.type === "characterData") doText(m.target);
+        else if (m.type === "attributes") doAttrs(m.target);
+      }
+    });
+    mo.observe(document.body, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+      attributes: true,
+      attributeFilter: ATTRS,
+    });
+    return () => {
+      mo.disconnect();
+      textDone.forEach((v, n) => {
+        if (n.nodeValue === v.out) n.nodeValue = v.raw;
+      });
+      attrDone.forEach((rec, el) => {
+        for (const a in rec)
+          if (el.getAttribute(a) === rec[a].out) el.setAttribute(a, rec[a].raw);
+      });
+    };
+  }, [lang]);
+}
 
 const AdminPrefsCtx = createContext(null);
 const ADMIN_PREFS_FALLBACK = {
@@ -13222,7 +14071,11 @@ function AdminPrefsProvider({ children }) {
   useEffect(() => {
     const el = document.documentElement;
     el.classList.toggle("cb-admin-km", lang === "km");
-    return () => el.classList.remove("cb-admin-km");
+    el.classList.toggle("cb-admin-zh", lang === "zh");
+    return () => {
+      el.classList.remove("cb-admin-km");
+      el.classList.remove("cb-admin-zh");
+    };
   }, [lang]);
 
   const setTheme = (v) => {
@@ -13237,12 +14090,15 @@ function AdminPrefsProvider({ children }) {
       localStorage.setItem(ADMIN_LANG_KEY, v);
     } catch {}
   };
-  const t = (s) => (lang === "km" ? ADMIN_KM[s] || s : s);
+  useAdminDomTranslate(lang);
+  const t = (s) =>
+    lang === "km" ? ADMIN_KM[s] || s : lang === "zh" ? ADMIN_ZH_ALL[s] || s : s;
 
   return (
     <AdminPrefsCtx.Provider value={{ theme, setTheme, dark, lang, setLang, t }}>
       {dark && <style>{ADMIN_DARK_CSS}</style>}
       {lang === "km" && <style>{ADMIN_KM_CSS}</style>}
+      {lang === "zh" && <style>{ADMIN_ZH_CSS}</style>}
       {children}
     </AdminPrefsCtx.Provider>
   );
@@ -13251,6 +14107,7 @@ function AdminPrefsProvider({ children }) {
 // ---------- Round flag badges (official flags, cropped) ----------
 const FLAG_SRC = {
   km: "data:image/webp;base64,UklGRioIAABXRUJQVlA4IB4IAACwKgCdASqAAIAAPjEYikOiIaESCwUkIAMEsQBoRyz8ANpe51+Jf7D/3jrUNgO1f7I/4jq3qy/zH4q/zPtH+YB+ov+h6mXmI/YD1jPSN6AH6d9aZ6AH7Z+mz+qvwWftP/3v9z7jX+CrEHOn4T9seXJzl5k/x77N/jPy+5Offxkl/ynhJ7r8AH5N/Nv9J/UfDp/hvQD6l/5f1IfzH+6eTl4V3av0AfYH/Pf6l/sf8B+LXwRf1X90/NT2lfmX9d/4n91/u3yCfyb+f/7b+zf5D3gPZ3+rvsw/sGSXAEj6QtJ5sdDZYrUpuqIajE4q7xdeKJGqjSQpiE31VNB+T2xxDQCyBdtecu21V3iZCl+7oHE5QeHOX/CodAJ6EevtdpOh1zDlSqHg2r5alEKBp8kAyXdM96WfkCEU61ftUU1J69gmclro1EQsvcHvw4PS5Uxi4DWEfQIAemSgJEetww2uAAD+/SjS7O4mB44yXjMUSFn2AACg6IHGcOzSYtI0MAzB3+L3DDeQ9DePSJctsEulwl0qzrHL1YZcaoAK9fqkX+DEGKJGbh10N5zA4FDDP5t0V7+JdbaYXvn+4X6wxdrDWRMvFvtVrAM1h/e85haU0L0/ZPA6vzJt/Gg8t1s8+dkjHAljaW2lc1IsZK87JR54cXVkLJr15HPCDE245slUP7l9JhvQg+06/39COuTIeElc2+brdhi4hzJzl65amatf6fwQpZsITTWYBw+Pbz/ZO7ykeyfOS5TvMQqDnYsJZqsbEQucWO3upMQ1OrESrDA0DG4A2gr7IGjFAnxYq5ap1XzWCB2lH2T7LKaAaWnntXwZh5Y9SG29OKmf0//ZvpavtmSNUrCZsDqkaRCTJ8RGrDEQZSSHWDBs9fc8GewkpH1xy8k6Kp/Nq9PPfmIIP127MvH0T/CIZULtf2D4oYRedCZ7Rllb1VHfbt+Ws2XJAfDY87FzRrnnF/LK71ney198deSpbEhHQH6DZEH9tCM+dGQnFcyARodlwm2prNLZU7KMR1WrYXjTDEqPBYMxV7Cb/hPubjcr/qpwGnsq8w33BfVLb9HFq5A5dW273wV/4+CCkp4fwys/8Ao/gvOivufOD/Ey1eMNOuF3626zpEMm+NlJaUw4o+ktNmcyj8WX5sRDgakvqmW7dyan6QJHsmRDz0lOAp/prW/kt2IHwOMd/URtYgcLC+rhPN0mct29wgYZ4oAU4HYjfsNtK5eeOBx0peMaUMMX/Ok16rQejM3nBv2XA7QMC07R/Xo0c2kSH5KToAG94x//GvLkfTvBZBxf4sePfw3sIoUcQW7O9uVdeX8VXwVJswQy4+KdvIYOenBjv/0/AoLrQZ+ss6MEkGHnfmp9vf19jzJmakNrf/z6C/spsHmt86ZB3noO18hKabytFw3nd5jnv63W1dG7hM7HIJE4hO5dqXjyUFkgzDTzz5E5zxbLGREPTohwUVuuyo4H3SrdylIwMGQz/8BHPC0hGEmMd4zhcQe9Nvu8oUwIMFEvN3S3b7i7nv4j4ELG31Fwv1uyh2Y2TxiqGCyNHfLs9XZ8Z332LI03mqC09Cy3AB19kclOjPjbl3fe0MkK+0AU/sHNP+6xftvGX+EfSvdnoBRAoVDMESs+RsKQK6JlY4Ol/mxfYUbTpAJdPnfSCRqS/TUptZN2k46cg1cb1pJfR8SfFVHgLAdHPP7PzLiN3jqQzKiqIPMS+hEnDP20SRh6E6Xw8afUji4IQ/LyymJ6LN17YXvGgXxvWH0abNDOeAhx03lNes2mC8gm1NYmBQuSYbOaHF+Ftvtx3CPdHF1pU7cP0r5Fy8E6vW+lVj8htizGBy0QL/MpcT76VP2DONU0a8HQNrGE0bBVPlqa2kXv/Ou9qmMHbAHdJdX/lnkOcWfa0C3FCVIIpnTmdC1UY6a3/41sabzvyqE/y0bR/BsgkaQ9+p2QqFbf7Ga5GfXx675QmJQXZrQN/DnV3hmgUnOViSIrEyKA+ZV6XZV17x77GmVVEAmhe13ifBZGjCPtRheYYVsczoxLB1L/XfP3u/VE3IZkY11L4vWC1vX8p8LmTSsxvodAQJ/Ades/7fDLm66xRG2geRxA8JR/kR8oYJ5WkmtGbLhWSmFvYEARTKLgyHe2nttbJqilT95QEOWPsO65+1VxuGcJVbPbkJjNhuwPvf5UtFfGti8HkGir5a+HOB99ofwr90D69ffKqKIJGvYYS5CjMBidHhW8rS6O/xCg4Eeo5vvbBaSd9Hbvy8uRxnCf3i8FfQymZoh1BLpoRJyJSKcvWlWP4+Ln9huQ5zjdoVFJA7nR6/Tjnj7x3zwM4UjLB+2E6zUh4y8VVqrl0YaXLYS13aMDWPjzaSm3v/nf+nG6GmZQAGm22iGw8824cQnknkuZ0G+QgmzswV8Sm8fqbj5ln/NXMXOiBMr8FhcUpw/l8LUeGFKaTjWIQ0TziiidRYoMf8r0Phwy1weRHZCCfzTt6Ay8Uo1uXKT/s71+KE+4cQnknldABFtF+FvCuMFTjQv5p/RJfC+qTl2kUoQy5u0nxRFa5JrkKQ1G3HfkB4F65/RMr3tvF8K7JhNYt57IDkK494l4577nOEGOi4LW1YCRaydyM5DzNEH9l/4Ksv3FYEfJUunRsT4MCvHbrbEQkIiZu06FiPNb9tpVLkNBMriw34VeDWmavC9KZS2pOy7qvKLDDAdJjMWYU3Ymj58m3mL+lyybAnfVuyXfwu0OvN/avqAXAaP+ykA2GouMyc1OFL4suYllJtoAAAAAAA==",
+  zh: "data:image/webp;base64,UklGRsgFAABXRUJQVlA4ILwFAAAwIACdASqAAIAAPlEmkUWjoiGTityQOAUEsQBqnvb/GPxN2N3mf468uNtz3h/IDldES9UnkfqAfbB7gH6Q/5D7ZO4B5gP5R/Y/2V9lX9QPcB6AH63//PsAPQA/Zj1Tf+R+2HwS/tp+4nwGfr3/4esA///EidjX+M5RY9c/P8IO1luhEIHm26gSpZH5532c/6X9gv9X+sB6Hn7YksUDGeqC/UuFsu7pX67Pbazf93VpUs8r2DUoEPOVCws/0XX7hZoNUa5vNNoW39YTs6CUFq1yWMgf+ZwuBgZgGH+qvmBT67tiCpB8sYtGup75nJhYQigLhiGUmfF0qPSnCzMN4aJqAiIiIiIiIiIgIAD+8DgyYdRw0RxsfN/fm/vMUWeCM1axpFQHYInX/fDA9AaOY5evRCWWqKD1sSNou3S42/obbeZpX/rXlxc5Dk+PCHn3NI/x+TaOCZV+VQIPsduYVye3NblBLvpOy7Eo+yQMA6FJQDyLBAdQ2KQNpl3TEynqEoqcmjTIUGw3Zvx/RSheTM/OnHRzPdoci/jzBKzOZ5UEHyc2V8ZE7di6gmKiqa15WVXzn9HvNIyHD0lC+KeVlYlKj81MTOisDv1v+uYoVCjHlAEOEpz5Loa6IhKM9EWp3/UpEbxWKk8ixMxoijC/i/X/8NZVKiL0BtDGt9qyb15Ydqh2EUIUBHRSpWRA3e6tAtrT2YwgTt5EZ0rF35lgeKe3l+vnriK0aOgh9jeZS+gl/BpczWt3qKIvsaESjgXur15JcIuzIz3qOzcM/Woq1eqmnJF2Y9GHpDoXyk1LTfxTkpH2TA6M7X0iPdRiMkU1k4yLtSaG2VuTmGAzZyRXfsOZ2Lx3Y398rKSeFnWUSk+QrbWyjlM3BD0pKGo0AieaP7bSsemmYVwLrOC50+SbRRawDVKiRMEavZmo3TaouXyHTbMasF+iX99OQYrTkmrJigGJLDWD38Iz9jN6dIPbDSQiHOyTbmw1v9IBODPjtSd+w2yn0R+1SjeDM3iN3s+zrLn47GR9L/H/1NwJyw82mtYoz5qqz9cj9ed4yJi7x2IWZSHjVFpLJLwXXF1ue/1fHVp/3G2MKIJhYamh15psxr+QqqYUBeHHF4X+izl634d/D/pTKP94NIYPUGgW2p7GTaF9zDOfiIw3R/4cHmFcNj9VnXIQxlDvD7//nCpW2SiHcTW0P1z22786r1zE0HWvU5kgBS20FrARwalvH2w+dBu9PX0pnTMjA6f6Iq25OfayCeGnVH7Y6kDBQJ75QPUL4EideymFpguhmRKfJuLNcXfkFoYRc6DQH20NdwA6H4DMjZLlxPRQkeLA+26yXBkE+Fwpr5/FPuX96shNLZChvSStbFNEKdSrZafJZsEZQdazdfbYvYYZXTXpy9sw6bjwhCqFojqEZOZ9DdZ0Mh6iRWWQHZLBqAl/Yf/ipsIiovOQ7mYZxnt4IyeMJBTPv+tHFtuU2R/WodwLP78ZH/dDl2SMw9dr6anlLYPJ0q+Zs+lDhBd5vy9e5YvzvkD73Bmw2csVCqMKAyNprL+QS74Sn1xtTkcRx3HPzZze8QaDD3Z11Ubz78u4GomZvNfwHSt8Ie+L9P8EXVr4unA55N3uWnp70qEOwJaPXZPMcb0QNzJtoThf0r+tINPee0p2FSK3aseM0nyWb2sn9tDA5Lm5/yWGfLuaeMqD3i1LJtgn5orzKlhE+u4Bv0Vp7+tZ3OSWiPBLxJTY+G2fKUujEAQPGCrzB06IBoH8+8s/mYgT0J44W3GfahpiPJCAVqfzwfbSXkioD1k9Wef+fe9cpSGw/8E9ecHMeq6CE8+ksX/oXkA1++qThGKwrsJakh9JYv1OqQFTQ1RWIb2FdgYbWlogSrkvfEc3uE8gSTVz0oTSdfCEHyBijHz6NoEOG1xXk3rlr86qQAAvpCohuBTEmrWDtZIDcbSCU5rgAAAAAAAA",
   en: "data:image/webp;base64,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",
 };
 function LangFlag({ code = "km", size = 32 }) {
@@ -13259,7 +14116,9 @@ function LangFlag({ code = "km", size = 32 }) {
       src={FLAG_SRC[code] || FLAG_SRC.en}
       width={size}
       height={size}
-      alt={code === "km" ? "Cambodia" : "United Kingdom"}
+      alt={
+        code === "km" ? "Cambodia" : code === "zh" ? "China" : "United Kingdom"
+      }
       draggable={false}
       className="shrink-0 rounded-full object-cover shadow-sm ring-1 ring-black/5"
       style={{ width: size, height: size }}
@@ -13275,6 +14134,7 @@ function AdminPrefsModal({ kind, onClose }) {
     ? [
         ["en", "English", "en"],
         ["km", "ភាសាខ្មែរ", "km"],
+        ["zh", "中文", "zh"],
       ]
     : [
         ["light", t("Light theme"), Icons.Sun],
@@ -13356,9 +14216,9 @@ function AdminLoginPrefs() {
         type="button"
         className={`${btn} text-lg`}
         aria-label={t("Language")}
-        onClick={() => setLang(lang === "km" ? "en" : "km")}
+        onClick={() => setLang(nextAdminLang(lang))}
       >
-        <LangFlag code={lang === "km" ? "km" : "en"} size={26} />
+        <LangFlag code={lang} size={26} />
       </button>
       <button
         type="button"
@@ -13543,6 +14403,82 @@ function UserAvatar({ url, initials }) {
     );
   }
   return <>{initials}</>;
+}
+
+// Language dropdown in the top bar (English / ខ្មែរ / 中文)
+function AdminLangDropdown() {
+  const { lang, setLang, t } = useAdminPrefs();
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  const opts = [
+    ["en", "English"],
+    ["km", "ភាសាខ្មែរ"],
+    ["zh", "中文"],
+  ];
+  return (
+    <div ref={ref} className="relative hidden sm:block" data-no-tr>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="cbx-lang-btn inline-flex"
+        aria-label={t("Language")}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={t("Language")}
+      >
+        <LangFlag code={lang} size={24} />
+        <span>{adminLangName(lang)}</span>
+        <ChevronDown
+          size={15}
+          strokeWidth={2.2}
+          className={`transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          className="absolute right-0 top-full mt-2 w-48 rounded-xl border border-mist-200 bg-white p-1.5 shadow-lg z-[120]"
+        >
+          {opts.map(([k, name]) => (
+            <button
+              key={k}
+              type="button"
+              role="option"
+              aria-selected={lang === k}
+              onClick={() => {
+                setLang(k);
+                setOpen(false);
+              }}
+              className={`w-full flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm font-semibold text-left transition-colors ${
+                lang === k
+                  ? "bg-blue-50 text-signal-blue"
+                  : "text-ink-800 hover:bg-mist-50"
+              }`}
+            >
+              <LangFlag code={k} size={22} />
+              <span className="flex-1">{name}</span>
+              {lang === k && <Check size={15} strokeWidth={2.6} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Topbar({ title, onMenuClick }) {
@@ -13808,16 +14744,7 @@ function Topbar({ title, onMenuClick }) {
           </span>
         )}
 
-        <button
-          type="button"
-          onClick={() => setLang(lang === "km" ? "en" : "km")}
-          className="cbx-lang-btn hidden sm:inline-flex"
-          aria-label={t("Language")}
-          title={t("Language")}
-        >
-          <LangFlag code={lang === "km" ? "km" : "en"} size={24} />
-          <span>{lang === "km" ? "ខ្មែរ" : "English"}</span>
-        </button>
+        <AdminLangDropdown />
 
         <button
           type="button"
@@ -13909,9 +14836,7 @@ function Topbar({ title, onMenuClick }) {
               >
                 <Icons.Languages size={15} />
                 <span className="flex-1">{t("Language")}</span>
-                <span className="cbx-menu-meta">
-                  {lang === "km" ? "ខ្មែរ" : "English"}
-                </span>
+                <span className="cbx-menu-meta">{adminLangName(lang)}</span>
               </button>
               <button
                 onClick={() => {
@@ -29685,6 +30610,10 @@ const CustomerApp = (() => {
   // old `style={FONT}` props are now empty and simply inherit.
   const FONT = {};
   const FONTS = {
+    zh: {
+      fontFamily:
+        "'PingFang SC','Microsoft YaHei','Noto Sans SC','Noto Sans CJK SC','Hiragino Sans GB','Poppins',system-ui,sans-serif",
+    },
     en: { fontFamily: "'Poppins','Inter',system-ui,sans-serif" },
     km: {
       fontFamily: "'Kantumruy Pro','Noto Sans Khmer',system-ui,sans-serif",
@@ -29754,7 +30683,7 @@ const CustomerApp = (() => {
   const readLang = () => {
     try {
       const v = localStorage.getItem(LANG_KEY);
-      return v === "en" || v === "km" ? v : "km";
+      return v === "en" || v === "km" || v === "zh" ? v : "km";
     } catch {
       return "km";
     }
@@ -29774,7 +30703,546 @@ const CustomerApp = (() => {
       ? window.matchMedia("(prefers-color-scheme: dark)").matches
       : false;
   let CUR_LANG = readLang(); // read by fmtDate / fmtDateTime
-  const dateLoc = () => (CUR_LANG === "km" ? "km-KH-u-nu-latn" : "en-GB");
+  const dateLoc = () =>
+    CUR_LANG === "km"
+      ? "km-KH-u-nu-latn"
+      : CUR_LANG === "zh"
+        ? "zh-CN"
+        : "en-GB";
+
+  // ---------- Chinese (Simplified) ----------
+  // Looked up by the English text, so every tr("English", "ខ្មែរ") call and
+  // every [English, Khmer] pair gets a Chinese version automatically.
+  // Anything missing falls back to English.
+  const CUST_ZH = {
+    "Unable to load account": "无法加载账户",
+    "Your wallet balance is not enough.": "您的钱包余额不足。",
+    "Payment failed.": "支付失败。",
+    "Payment service is unavailable.": "支付服务暂不可用。",
+    "Wallet payment is not enabled yet. Please contact staff to finish setup.":
+      "钱包支付尚未开通，请联系工作人员完成设置。",
+    "Your wallet balance is not enough. Please contact staff to top up.":
+      "您的钱包余额不足，请联系工作人员充值。",
+    "This order is no longer awaiting payment. Refresh the page and try again.":
+      "此订单已无需支付，请刷新页面后重试。",
+    "The service is not connected yet.": "服务尚未连接。",
+    "Please enter your phone number and password.": "请输入手机号码和密码。",
+    "Incorrect phone number or password.": "手机号码或密码错误。",
+    "This account is inactive. Please contact our team to recover it.":
+      "此账户已停用，请联系我们的团队恢复。",
+    "Password is too short or too weak (min 6 characters).":
+      "密码太短或太弱（至少6个字符）。",
+    "This phone number can't be used to sign up. If you already have an account, please log in; otherwise contact our team.":
+      "此手机号码无法用于注册。如已有账户，请直接登录；否则请联系我们的团队。",
+    "Unable to create account: ": "无法创建账户：",
+    "Unable to save account: ": "无法保存账户：",
+    "Session expired. Please log in again.": "登录已过期，请重新登录。",
+    "Current password is incorrect.": "当前密码不正确。",
+    "New password must be different from the current one.":
+      "新密码不能与当前密码相同。",
+    "Unable to change password.": "无法修改密码。",
+    "Please enter your name": "请输入您的姓名",
+    "Invalid email address": "邮箱地址无效",
+    "Please choose an image": "请选择图片",
+    "Image is larger than 2MB": "图片大于2MB",
+    "Address updated": "地址已更新",
+    "Address added": "地址已添加",
+    "Could not save": "无法保存",
+    "Please try again": "请重试",
+    "Could not delete": "无法删除",
+    "Address deleted": "地址已删除",
+    "Could not set as default": "无法设为默认",
+    "Default address updated": "默认地址已更新",
+    "Choose Your Language": "选择语言",
+    Cancel: "取消",
+    "Light theme": "浅色主题",
+    "Dark theme": "深色主题",
+    "Use device theme": "跟随设备主题",
+    Appearance: "外观",
+    Language: "语言",
+    "Please contact support to reset your password.": "请联系客服重置密码。",
+    "Please enter your name, phone number and a password (at least 6 characters).":
+      "请输入姓名、手机号码和密码（至少6个字符）。",
+    "Account created. Please log in again.": "账户已创建，请重新登录。",
+    "Welcome back": "欢迎回来",
+    "Create your account": "创建账户",
+    "Forgot password": "忘记密码",
+    "Log in to track your packages": "登录以跟踪您的包裹",
+    "It only takes a minute": "只需一分钟",
+    "We'll point you to our support team": "我们将为您联系客服团队",
+    "Welcome!": "欢迎！",
+    "Creating your account…": "正在创建账户…",
+    "Signing you in…": "正在登录…",
+    "Taking you to your portal": "正在进入您的门户",
+    "Just a moment": "请稍候",
+    "Preparing your portal": "正在准备您的门户",
+    "Global to Your Door": "全球直达您家门口",
+    "Customer Portal": "客户门户",
+    "Track your shipments anytime, anywhere": "随时随地跟踪您的货件",
+    "Back to log in": "返回登录",
+    "Log In": "登录",
+    "Sign Up": "注册",
+    "Full name": "姓名",
+    "Your full name": "您的姓名",
+    "Phone number": "手机号码",
+    "Email (optional)": "邮箱（选填）",
+    Password: "密码",
+    "At least 6 characters": "至少6个字符",
+    "Forgot password?": "忘记密码？",
+    "Please wait...": "请稍候...",
+    "Create Account": "创建账户",
+    "Send reset link": "发送重置链接",
+    Home: "首页",
+    "CN Orders": "中国订单",
+    Shipments: "货件",
+    Shop: "商城",
+    AIR: "空运",
+    Address: "地址",
+    Profile: "我的",
+    "Customer permissions could not be loaded": "无法加载客户权限",
+    Retry: "重试",
+    "Loading account permissions…": "正在加载账户权限…",
+    Shipment: "货件",
+    Created: "创建时间",
+    "CN Order": "中国订单",
+    "Order ID": "订单号",
+    Shipped: "已发货",
+    Notifications: "通知",
+    "Welcome back!": "欢迎回来！",
+    "Search tracking number": "搜索运单号",
+    "No matching tracking number found in your account.":
+      "您的账户中未找到匹配的运单号。",
+    "Total Shipments": "货件总数",
+    "My Wallet": "我的钱包",
+    "My Points": "我的积分",
+    "My China Warehouse": "我的中国仓库",
+    "Copy your China warehouse address and send it to your seller":
+      "复制您的中国仓库地址并发送给卖家",
+    "Recent Shipments": "最近货件",
+    "View all": "查看全部",
+    "No shipments yet": "暂无货件",
+    "My Shipments": "我的货件",
+    "No shipments in this status.": "此状态下暂无货件。",
+    "AIR Shipments": "空运货件",
+    "Independent AIR tracking with a dedicated Indonesia → Cambodia workflow.":
+      "独立的空运跟踪，专属印度尼西亚 → 柬埔寨流程。",
+    "No AIR shipments in this status.": "此状态下暂无空运货件。",
+    "No AIR shipments yet.": "暂无空运货件。",
+    "Please enter your current password.": "请输入当前密码。",
+    "New password must be at least 6 characters.": "新密码至少需要6个字符。",
+    "New passwords do not match.": "两次输入的新密码不一致。",
+    "Password changed successfully": "密码修改成功",
+    "Set your password": "设置密码",
+    "Change Password": "修改密码",
+    "For your security, please choose your own new password before continuing.":
+      "为了您的安全，请先设置您自己的新密码再继续。",
+    "Temporary password (from staff)": "临时密码（由工作人员提供）",
+    "Current password": "当前密码",
+    "New password": "新密码",
+    "Confirm new password": "确认新密码",
+    "At least 6 characters.": "至少6个字符。",
+    "Saving…": "保存中…",
+    "Log out": "退出登录",
+    "Mark all read": "全部已读",
+    Reason: "原因",
+    "AIR · ": "空运 · ",
+    "CN Order · ": "中国订单 · ",
+    "China · ": "中国 · ",
+    "No notifications yet": "暂无通知",
+    "Shipment Detail": "货件详情",
+    "No shipment found": "未找到货件",
+    "Shipping Information": "运输信息",
+    "Shipping Method": "运输方式",
+    "By Land": "陆运",
+    "By Sea": "海运",
+    "By Air": "空运",
+    "Order Information": "订单信息",
+    "Tracking Number": "运单号",
+    Product: "商品",
+    Weight: "重量",
+    "Shipping Fee (Cambodia)": "运费（柬埔寨）",
+    "Shipping fee is shown once your goods arrive at the branch warehouse.":
+      "货物到达分店仓库后将显示运费。",
+    "Tracking Status": "物流状态",
+    Pending: "待处理",
+    "Shipping Payment": "运费支付",
+    "Shipping fee": "运费",
+    "Paid — ready for pickup": "已支付 — 可取货",
+    "Amount due": "应付金额",
+    "My wallet": "我的钱包",
+    "Payment successful": "支付成功",
+    "Paying…": "支付中…",
+    Confirm: "确认",
+    "Detailed staff and internal information is not visible to customers.":
+      "员工及内部详细信息对客户不可见。",
+    "AIR Shipment": "空运货件",
+    "AIR shipment not found": "未找到空运货件",
+    "TK pending": "TK 待处理",
+    "Shipment AIR Tracking": "空运货件跟踪",
+    "Shop Order ID": "商城订单号",
+    "AIR tracking uses a separate status flow and does not expose staff/scanner information.":
+      "空运跟踪使用独立的状态流程，不显示员工/扫描信息。",
+    "Available points": "可用积分",
+    Rewards: "奖励",
+    "Points History": "积分记录",
+    "Top up": "充值",
+    "Shipping payment": "运费支付",
+    "Shipping paid (cash)": "运费已付（现金）",
+    "CN order payment": "中国订单付款",
+    "CN order payment from Wallet": "中国订单钱包付款",
+    "CN order refund": "中国订单退款",
+    "CN order paid (cash)": "中国订单已付（现金）",
+    "Shop order payment": "商城订单付款",
+    "Shop order refund": "商城订单退款",
+    "Available balance": "可用余额",
+    "Transaction History": "交易记录",
+    Bal: "余额",
+    "No transactions yet": "暂无交易",
+    "Points earned": "获得积分",
+    "Refund adjustment": "退款调整",
+    Redeemed: "已兑换",
+    "Redemption cancelled": "兑换已取消",
+    "Bonus / adjustment": "奖励 / 调整",
+    "Ready for pickup": "可取货",
+    Collected: "已领取",
+    Cancelled: "已取消",
+    "You don't have enough points.": "您的积分不足。",
+    "This reward is out of stock.": "此奖励已无库存。",
+    "This reward is no longer available.": "此奖励已不可用。",
+    "Something went wrong.": "出错了。",
+    "No rewards available yet. Please check back soon.":
+      "暂无可用奖励，请稍后再来看看。",
+    pts: "积分",
+    "Out of stock": "缺货",
+    Redeem: "兑换",
+    "My Redemptions": "我的兑换",
+    "No points yet": "暂无积分",
+    "Redeem this reward?": "兑换此奖励？",
+    "Redeemed successfully!": "兑换成功！",
+    "Show this code to our staff to collect your reward.":
+      "请向我们的工作人员出示此代码以领取奖励。",
+    Done: "完成",
+    "Loading...": "加载中...",
+    "No China warehouse has been assigned yet. Please contact support.":
+      "尚未分配中国仓库，请联系客服。",
+    "Copy this address and send it to your Chinese seller.":
+      "复制此地址并发送给您的中国卖家。",
+    "Address copied": "地址已复制",
+    "Copy Address": "复制地址",
+    "Customer code copied": "客户代码已复制",
+    "Copy Customer Code": "复制客户代码",
+    List: "列表",
+    Select: "选择",
+    "Other (type it in)": "其他（手动输入）",
+    "My Addresses": "我的地址",
+    "Add New": "新增",
+    Default: "默认",
+    Note: "备注",
+    "Set as default": "设为默认",
+    "Set as Default": "设为默认",
+    "Delete this address?": "删除此地址？",
+    "This action cannot be undone.": "此操作无法撤销。",
+    Delete: "删除",
+    "No addresses yet — tap Add New": "暂无地址 — 点击“新增”",
+    "Edit Address": "编辑地址",
+    "Add Address": "添加地址",
+    Label: "标签",
+    "Home / Office": "家 / 公司",
+    "Full Name": "姓名",
+    "Phone Number": "手机号码",
+    Province: "省份",
+    District: "区县",
+    Commune: "乡镇",
+    "Detailed Address": "详细地址",
+    "Nearby Receiving Warehouse": "附近收货仓库",
+    "Select Nearby Warehouse": "选择附近仓库",
+    "Branch selected automatically for your area":
+      "已根据您所在区域自动选择分店",
+    "Delivery Note": "配送备注",
+    Saved: "已保存",
+    "Save Address": "保存地址",
+    "Search warehouse": "搜索仓库",
+    "No active receiving branches available.": "暂无可用的收货分店。",
+    "Choose from gallery": "从相册选择",
+    "Remove current photo": "移除当前头像",
+    "Profile Photo": "头像",
+    "Profile updated": "资料已更新",
+    "Edit Profile": "编辑资料",
+    "Your name": "您的姓名",
+    Email: "邮箱",
+    "Contact email only — you still sign in with Phone + Password.":
+      "仅作为联系邮箱 — 登录仍使用手机号码 + 密码。",
+    Save: "保存",
+    "Photo updated": "头像已更新",
+    "Default Address": "默认地址",
+    "Customer Role": "客户等级",
+    "My Points & Rewards": "我的积分与奖励",
+    "Help & Support": "帮助与支持",
+    Settings: "设置",
+    "Change photo": "更换头像",
+    "Customer ID": "客户ID",
+    Support: "客服",
+    Dark: "深色",
+    Device: "跟随设备",
+    Light: "浅色",
+    Security: "安全",
+    "Proudly built in Cambodia": "柬埔寨自豪打造",
+    "Customer Service": "客户服务",
+    "Chat or call to our customer support.": "通过聊天或电话联系我们的客服。",
+    "Contact By Phone Number": "电话联系",
+    "Call us": "致电我们",
+    "Official Social Media": "官方社交媒体",
+    "Contact details are not available yet.": "暂无联系方式。",
+    Back: "返回",
+    "CN Purchase Orders": "中国采购订单",
+    "active order(s)": "个进行中订单",
+    "No Data Available": "暂无数据",
+    "Your China purchase orders will appear here.":
+      "您的中国采购订单将显示在这里。",
+    "No orders in this status.": "此状态下暂无订单。",
+    "Refreshing…": "刷新中…",
+    Refresh: "刷新",
+    "CN Purchase": "中国采购",
+    "CN Purchase Order not found": "未找到中国采购订单",
+    "Back to CN Orders": "返回中国订单",
+    "CN Purchase Order": "中国采购订单",
+    "China Tracking / Parcels": "中国运单 / 包裹",
+    "Order Price Information": "订单价格信息",
+    Quantity: "数量",
+    Items: "商品",
+    "Product price": "商品价格",
+    "China shipping": "中国运费",
+    "Additional services": "附加服务",
+    "Service fee": "服务费",
+    "Grand Total": "总计",
+    Paid: "已支付",
+    Remaining: "剩余",
+    "Order status": "订单状态",
+    "Order Payment": "订单支付",
+    "Order total": "订单总额",
+    "Paid on": "支付时间",
+    Method: "方式",
+    "Payment failed. Please try again.": "支付失败，请重试。",
+    "Wallet payment for CN orders is currently disabled. Please contact staff for assistance.":
+      "中国订单的钱包支付目前已停用，请联系工作人员协助。",
+    "Paid — payment completed": "已支付 — 付款完成",
+    "This order has been refunded.": "此订单已退款。",
+    "This item is already in your cart.": "此商品已在您的购物车中。",
+    "The shop is not available right now.": "商城暂时不可用。",
+    "Not enough stock available.": "库存不足。",
+    "A product is no longer available.": "有商品已不可用。",
+    "Your wallet balance is not enough. Please top up first.":
+      "您的钱包余额不足，请先充值。",
+    "Prices changed. Please review your cart.":
+      "价格已变动，请查看您的购物车。",
+    "This option is not available yet. Please contact us.":
+      "此选项暂不可用，请联系我们。",
+    "This order can no longer be changed.": "此订单已无法修改。",
+    "Your cart is empty.": "您的购物车是空的。",
+    "Please choose a delivery address.": "请选择配送地址。",
+    "Recipient name and phone are required.": "必须填写收件人姓名和电话。",
+    "Something went wrong. Please try again.": "出错了，请重试。",
+    "Search products": "搜索商品",
+    "Clear search": "清除搜索",
+    "My Orders": "我的订单",
+    All: "全部",
+    Sort: "排序",
+    Newest: "最新",
+    Featured: "精选",
+    "Price: low to high": "价格：从低到高",
+    "Price: high to low": "价格：从高到低",
+    Name: "名称",
+    "No products found.": "未找到商品。",
+    SALE: "特价",
+    from: "起",
+    "Load more": "加载更多",
+    "This product is not available.": "此商品不可用。",
+    "Added to cart": "已加入购物车",
+    Color: "颜色",
+    Size: "尺寸",
+    Option: "选项",
+    "This combination is not available.": "此组合不可用。",
+    "In stock": "有货",
+    Total: "合计",
+    "Add to cart": "加入购物车",
+    "Buy now": "立即购买",
+    "My Cart": "我的购物车",
+    "Start shopping": "开始购物",
+    "Some prices changed since you added these items. Please check the new prices below.":
+      "自您添加这些商品后部分价格已变动，请查看下方新价格。",
+    was: "原价",
+    "No longer available": "已不可用",
+    Remove: "移除",
+    Subtotal: "小计",
+    Discount: "优惠",
+    "Delivery fee is added at checkout.": "配送费将在结算时加上。",
+    "Fix the items marked in red to continue.": "请处理标红的商品后继续。",
+    "Accept new prices & checkout": "接受新价格并结算",
+    Checkout: "结算",
+    "Checkout is not available yet. Please contact us.":
+      "结算暂不可用，请联系我们。",
+    "How do you want to receive it?": "您希望如何收货？",
+    Pickup: "自提",
+    Free: "免费",
+    Delivery: "配送",
+    "Get directions": "获取路线",
+    "You have no saved address.": "您还没有保存的地址。",
+    "Add one": "去添加",
+    "Delivery address": "配送地址",
+    "Recipient name": "收件人姓名",
+    "Recipient phone": "收件人电话",
+    "Note (optional)": "备注（选填）",
+    "Delivery fee": "配送费",
+    "Wallet balance": "钱包余额",
+    "Your balance is lower than the total. You can still place the order and pay after topping up.":
+      "您的余额低于订单合计，您仍可下单，充值后再支付。",
+    "Nothing is charged now. You pay from your wallet on the next screen.":
+      "现在不会扣款，您将在下一页使用钱包支付。",
+    "Back to cart": "返回购物车",
+    "Place order": "提交订单",
+    "My Shop Orders": "我的商城订单",
+    "No orders yet.": "暂无订单。",
+    "Tap to pay": "点击支付",
+    "Order not found.": "未找到订单。",
+    "Pay with Wallet?": "使用钱包支付？",
+    Pay: "支付",
+    "Cancel this order?": "取消此订单？",
+    "You have not paid yet, nothing will be charged.":
+      "您尚未付款，不会产生任何扣款。",
+    "Cancel order": "取消订单",
+    "Keep order": "保留订单",
+    Order: "订单",
+    "Order placed. Pay with your wallet to confirm it.":
+      "订单已提交，请使用钱包支付以确认。",
+    "Your balance is not enough. Please top up with our staff, then pay.":
+      "您的余额不足，请联系工作人员充值后再支付。",
+    "Payment received. We are reviewing your order.":
+      "已收到付款，我们正在审核您的订单。",
+    "Your order is ready. Please come to collect it.":
+      "您的订单已准备好，请前来领取。",
+    "Order rejected": "订单已被拒绝",
+    Refund: "退款",
+    "credited to your wallet": "已退回您的钱包",
+    Canceled: "已取消",
+    "Pickup location": "自提地点",
+    "Delivery details": "配送详情",
+    "Pay with Wallet": "使用钱包支付",
+    "AIR shipment tracking": "空运货件跟踪",
+    Completed: "已完成",
+    "Current status": "当前状态",
+    Refunded: "已退款",
+    "Refund Reason": "退款原因",
+    "Product Information": "商品信息",
+    "View All": "查看全部",
+    "Product Photos": "商品图片",
+    items: "件",
+    Item: "商品",
+    Qty: "数量",
+    "View all photos": "查看全部图片",
+    Processing: "处理中",
+    "In Transit": "运输中",
+    Arrived: "已到达",
+    "Ready for Pickup": "可取货",
+    "Pending Shipping Payment": "待付运费",
+    Ready: "可取货",
+    "To Pay": "待付款",
+    "Inbound Origin": "始发地入库",
+    "Outbound Origin": "始发地出库",
+    "Arrive Destination": "到达目的地",
+    "Receiver Name": "收件人姓名",
+    Phone: "电话",
+    City: "城市",
+    "Customer Code": "客户代码",
+    "Order Processing": "订单处理中",
+    "Received at Indonesia Warehouse": "已入印尼仓库",
+    "Departed Indonesia Warehouse": "已离开印尼仓库",
+    "Received at Cambodia Warehouse": "已入柬埔寨仓库",
+    "Complete Order": "订单完成",
+    "Refund Order": "订单退款",
+    Purchased: "已采购",
+    "Shipping to China WH": "运往中国仓库",
+    Inbound: "中国仓入库",
+    Outbound: "中国仓出库",
+    "Shipping to Branch": "运往分店",
+    "Inbound Warehouse": "分店入库",
+    Unpaid: "未支付",
+    Partial: "部分支付",
+    "Waiting Payment": "待付款",
+    "Preparing Order": "备货中",
+    "Ready for Delivery": "待配送",
+    "Out for Delivery": "配送中",
+    "Rejected & Refunded": "已拒绝并退款",
+    "Accepted / Preparing Order": "已接受 / 备货中",
+    Earn: "赚取",
+    Points: "积分",
+  };
+  const CUST_ZH_PATTERNS = [
+    [new RegExp("^Hello, (.+)$"), "你好，$1"],
+    [new RegExp("^(\\d+) shipments? waiting for payment$"), "$1 个货件待付款"],
+    [new RegExp("^Total due (.+) · tap to pay$"), "应付合计 $1 · 点击支付"],
+    [
+      new RegExp(
+        "^Your wallet balance is not enough\\. You need (.+) more — please top up your wallet with our staff, then come back to pay\\.$",
+      ),
+      "您的钱包余额不足，还需 $1，请联系工作人员充值后再来支付。",
+    ],
+    [
+      new RegExp("^(.+) will be deducted from your wallet\\.$"),
+      "将从您的钱包中扣除 $1。",
+    ],
+    [new RegExp("^Pay (.+) from Wallet$"), "使用钱包支付 $1"],
+    [
+      new RegExp(
+        "^Your balance is negative\\. Please top up (.+) or more with our staff to cover it before your next payment\\.$",
+      ),
+      "您的余额为负数，请在下次付款前联系工作人员至少充值 $1。",
+    ],
+    [
+      new RegExp(
+        "^Earn (\\d+) points? for every (.+) you pay on CN Orders\\.$",
+      ),
+      "在中国订单中每支付 $2，可获得 $1 积分。",
+    ],
+    [new RegExp("^Need (.+) more$"), "还差 $1"],
+    [new RegExp("^Only (\\d+) left$"), "仅剩 $1 件"],
+    [new RegExp("^Only (\\d+) left in stock\\.$"), "库存仅剩 $1 件。"],
+    [
+      new RegExp(
+        "^(.+) points will be deducted\\. You will have (.+) left\\.$",
+      ),
+      "将扣除 $1 积分，您将剩余 $2 积分。",
+    ],
+    [
+      new RegExp(
+        "^Copy this address and send it to your Chinese supplier so they can ship your goods to our China warehouse\\. Please use your Customer Code \\((.+)\\) when shipping\\.$",
+      ),
+      "请复制此地址并发送给您的中国供应商，让他们将货物寄到我们的中国仓库。发货时请使用您的客户代码（$1）。",
+    ],
+    [
+      new RegExp("^(\\d+) branches serve this area — please pick one$"),
+      "该区域有 $1 个分店可服务，请选择一个",
+    ],
+    [
+      new RegExp(
+        "^Unable to load the branch list\\. Please contact support\\. \\((.*)\\)$",
+      ),
+      "无法加载分店列表，请联系客服。（$1）",
+    ],
+    [new RegExp("^The minimum order is (.+)\\.$"), "最低订单金额为 $1。"],
+    [new RegExp("^(\\d+) products$"), "$1 件商品"],
+    [new RegExp("^Total · (\\d+) items$"), "合计 · $1 件"],
+  ];
+  const zhOf = (en) => {
+    if (typeof en !== "string") return en;
+    if (Object.prototype.hasOwnProperty.call(CUST_ZH, en)) return CUST_ZH[en];
+    for (const [re, out] of CUST_ZH_PATTERNS) {
+      if (re.test(en)) return en.replace(re, out);
+    }
+    return en;
+  };
+  // pick one of an [English, Khmer] pair for the active language
+  const pickTx = (lang, pair) =>
+    lang === "km" ? pair[1] : lang === "zh" ? zhOf(pair[0]) : pair[0];
 
   // [English, Khmer] — one language is shown at a time (never mixed).
   const STATUS_TX = {
@@ -29799,7 +31267,7 @@ const CustomerApp = (() => {
   };
   const airTx = (lang, st) => {
     const c = canonicalAirStatus(st);
-    return lang === "km" ? AIR_KM[c] || c : c;
+    return lang === "km" ? AIR_KM[c] || c : lang === "zh" ? zhOf(c) : c;
   };
   const TAB_TX = {
     All: ["All", "ទាំងអស់"],
@@ -30070,7 +31538,8 @@ const CustomerApp = (() => {
       };
     }, [dark]);
     // tr(english, khmer) → the text for the active language (never mixed)
-    const tr = (en, km) => (lang === "km" ? km : en);
+    const tr = (en, km, zh) =>
+      lang === "km" ? km : lang === "zh" ? (zh ?? zhOf(en)) : en;
     const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
     const [me, setMe] = useState(null);
     const meIdRef = useRef(null);
@@ -30856,7 +32325,7 @@ const CustomerApp = (() => {
         const newest = list[0] ? new Date(list[0].at).getTime() : 0;
         // A new status arrived while the app is open → small heads-up toast.
         if (latestNotifRef.current && newest > latestNotifRef.current)
-          say(`🔔 ${list[0].title[langRef.current === "km" ? 1 : 0]}`);
+          say(`🔔 ${pickTx(langRef.current, list[0].title)}`);
         if (newest) latestNotifRef.current = newest;
         setNotifs(list);
       })();
@@ -30948,7 +32417,7 @@ const CustomerApp = (() => {
       <Ctx.Provider value={v}>
         <div
           lang={lang}
-          className={`jz-customer ${lang === "km" ? "cb-km" : "cb-en"}${dark ? " cb-cust-dark" : ""}`}
+          className={`jz-customer ${lang === "km" ? "cb-km" : lang === "zh" ? "cb-zh cb-en" : "cb-en"}${dark ? " cb-cust-dark" : ""}`}
           style={FONTS[lang]}
         >
           <style>{`.cb-km *{line-height:1.6 !important}.cb-km input,.cb-km select{line-height:normal !important}`}</style>
@@ -30982,7 +32451,7 @@ const CustomerApp = (() => {
       <span
         className={`text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap shrink-0 ${c}`}
       >
-        {(STATUS_TX[l] || [l, l])[lang === "km" ? 1 : 0]}
+        {pickTx(lang, STATUS_TX[l] || [l, l])}
       </span>
     );
   };
@@ -31096,6 +32565,7 @@ const CustomerApp = (() => {
     const opts = [
       ["km", "ភាសាខ្មែរ"],
       ["en", "English"],
+      ["zh", "中文"],
     ];
     return (
       <div
@@ -31200,8 +32670,8 @@ const CustomerApp = (() => {
             onClick={() => setOpen(true)}
             className="h-10 pl-3 pr-2.5 flex items-center gap-1.5 rounded-full bg-[#eef2fa] text-[#14284b] font-semibold text-[15px] active:bg-[#e2e8f5]"
           >
-            <LangFlag code={lang === "km" ? "km" : "en"} size={22} />
-            {lang === "km" ? "KH" : "EN"}
+            <LangFlag code={lang} size={22} />
+            {lang === "km" ? "KH" : lang === "zh" ? "中文" : "EN"}
             <ChevronDown size={16} strokeWidth={2.2} />
           </button>
         ) : (
@@ -31211,7 +32681,7 @@ const CustomerApp = (() => {
             onClick={() => setOpen(true)}
             className="w-10 h-10 grid place-items-center rounded-full bg-white/15"
           >
-            <LangFlag code={lang === "km" ? "km" : "en"} size={26} />
+            <LangFlag code={lang} size={26} />
           </button>
         )}
         {open && <LangSheet onClose={() => setOpen(false)} />}
@@ -34764,7 +36234,9 @@ const CustomerApp = (() => {
               icon={Icons.Languages}
               tone="rose"
               label={tr("Language", "ភាសា")}
-              value={lang === "km" ? "ភាសាខ្មែរ" : "English"}
+              value={
+                lang === "km" ? "ភាសាខ្មែរ" : lang === "zh" ? "中文" : "English"
+              }
               onClick={() => setLangOpen(true)}
             />
             <MenuRow
