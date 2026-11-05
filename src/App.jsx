@@ -2532,7 +2532,7 @@ const MODULES = {
     columns: [
       col("tk", "TK Number", {
         strong: true,
-        linkTo: (row) => `/packages/${row.tk}`,
+        linkTo: (row) => pkgRowHref(row),
       }),
       col("customer", "Customer"),
       col("order_no", "Order ID"),
@@ -2600,7 +2600,7 @@ const MODULES = {
     columns: [
       col("tk", "TK Number", {
         strong: true,
-        linkTo: (row) => `/packages/${row.tk}`,
+        linkTo: (row) => pkgRowHref(row),
       }),
       col("customer", "Customer"),
       col("order_no", "Order ID"),
@@ -18664,8 +18664,7 @@ function ListPage({
               : path === "/packages"
                 ? (row) => navigateTo(pkgRowHref(row))
                 : path === "/inbound-origin" || path === "/outbound-origin"
-                  ? (row) =>
-                      navigateTo(`/packages/${encodeURIComponent(row.tk)}`)
+                  ? (row) => navigateTo(pkgRowHref(row))
                   : path === "/customers"
                     ? (row) =>
                         navigateTo(`/customers/${encodeURIComponent(row.id)}`)
@@ -24144,6 +24143,25 @@ function TkNumberChangesCard({ tk }) {
   );
 }
 
+// Shipment detail shares CN detail tokens without changing other modules.
+const SHIPMENT_DETAIL_LAYOUT_CSS = `
+.shipment-detail-page .shipment-header{min-width:0}
+.shipment-detail-page .shipment-actions{flex:1 1 420px;max-width:760px}
+.shipment-detail-page .shipment-actions>a{min-height:38px;border-radius:8px}
+.shipment-detail-page .shipment-order-number{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;margin-top:8px;font-size:18px;font-weight:650;overflow-wrap:anywhere}
+.shipment-detail-page .shipment-customer-chip{display:inline-flex;align-items:center;gap:8px;padding:7px 12px;margin-top:16px;background:var(--cn-soft);border:1px solid var(--cn-border);border-radius:999px;font-size:13px;font-weight:600;max-width:100%;overflow-wrap:anywhere}
+.shipment-detail-page .shipment-tabs{overflow-x:auto}
+.shipment-detail-page .shipment-tabs button{flex-shrink:0}
+.shipment-detail-page .shipment-sidebar>div{border-radius:12px;min-width:0;overflow-wrap:anywhere}
+.shipment-detail-page .shipment-package-info>div>div{border-bottom:1px solid var(--cn-border);padding:11px 0}
+.shipment-detail-page .shipment-package-info dt{width:140px;color:var(--cn-muted);font-size:13px}
+.shipment-detail-page .shipment-card h2{color:var(--cn-text)}
+html.cb-admin-dark .shipment-detail-page .shipment-card,html.cb-admin-dark .shipment-detail-page .shipment-sidebar>div{background:var(--cn-surface);border-color:var(--cn-border);color:var(--cn-text)}
+html.cb-admin-dark .shipment-detail-page .shipment-card .text-slate-900{color:var(--cn-text)}
+html.cb-admin-dark .shipment-detail-page .shipment-card .text-slate-400,html.cb-admin-dark .shipment-detail-page .shipment-card .text-slate-500{color:var(--cn-muted)}
+@media(max-width:639px){.shipment-detail-page .shipment-actions{flex-basis:100%;justify-content:flex-start}.shipment-detail-page .shipment-actions>a,.shipment-detail-page .shipment-actions>button{font-size:12px}.shipment-detail-page .shipment-order-number{font-size:16px}.shipment-detail-page .shipment-package-info dt{width:112px}.shipment-detail-page .shipment-tabs{gap:16px}}
+`;
+
 function PackageDetail() {
   const { tk } = useParams();
   const { user } = useAuth();
@@ -24461,7 +24479,7 @@ function PackageDetail() {
     setTimeout(() => setCopied(false), 1500);
   }
 
-  const CARD = "bg-white border border-mist-200 rounded-md shadow-panel";
+  const CARD = "cb-surface shipment-card";
   const KV = ({ k, v }) => (
     <div className="flex items-start gap-3 py-1.5">
       <dt className="w-28 shrink-0 text-xs text-ink-600/50">{k}</dt>
@@ -24472,7 +24490,8 @@ function PackageDetail() {
   );
 
   return (
-    <div className="space-y-4">
+    <div className="cn-detail-page shipment-detail-page space-y-4">
+      <style>{CN_DETAIL_LAYOUT_CSS + SHIPMENT_DETAIL_LAYOUT_CSS}</style>
       {/* Breadcrumb */}
       <nav className="flex items-center gap-1.5 text-sm text-ink-600/60">
         <Link
@@ -24490,707 +24509,664 @@ function PackageDetail() {
         <span className="text-ink-900 font-medium">{data.tk}</span>
       </nav>
 
-      <div className="grid xl:grid-cols-[minmax(0,1fr)_340px] gap-5 items-start">
-        {/* ============ LEFT / MAIN ============ */}
-        <div className="space-y-5 min-w-0">
-          {/* Header card */}
-          <div className={`${CARD} p-5`}>
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div className="flex items-start gap-4 min-w-0">
-                <div className="w-12 h-12 rounded-lg bg-signal-blue/10 text-signal-blue flex items-center justify-center shrink-0">
-                  <Package size={22} />
-                </div>
-                <div className="min-w-0">
-                  <div className="text-xs text-ink-600/50">
-                    Package · Tracking Number
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <h1 className="font-display font-bold text-2xl text-ink-900 break-all">
-                      {data.tk}
-                    </h1>
-                    <button
-                      type="button"
-                      onClick={copyTk}
-                      title="Copy"
-                      className="text-ink-600/40 hover:text-signal-blue"
-                    >
-                      {copied ? (
-                        <Check size={15} className="text-signal-teal" />
-                      ) : (
-                        <Copy size={15} />
-                      )}
-                    </button>
-                  </div>
-                  <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
-                    <StatusBadge
-                      label={tkUnifiedLabel(
-                        pkgDisplayStatus({
-                          ...data,
-                          status: currentStage,
-                        }),
-                      )}
-                    />
-                    <span
-                      className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${data.cn_order_id ? "bg-violet-50 text-violet-700" : "bg-sky-50 text-sky-700"}`}
-                    >
-                      {pkgType(data)}
-                    </span>
-                  </div>
-                  <div className="text-[11px] text-ink-600/45 mt-1.5">
-                    Last Updated: {lastUpdated}
-                  </div>
-                  {livePackageError && (
-                    <div
-                      className="mt-1 text-[10px] text-signal-red/80"
-                      title={livePackageError}
-                    >
-                      Live database sync unavailable — showing cached data
-                    </div>
-                  )}
-                </div>
+      <h1 className="cn-detail-title">Shipment &amp; Package Information</h1>
+      <div className="cn-detail-shell">
+        {/* Header card */}
+        <div className="shipment-header">
+          <div className="cn-detail-header">
+            <div className="flex items-start gap-4 min-w-0">
+              <div className="w-12 h-12 rounded-lg bg-signal-blue/10 text-signal-blue flex items-center justify-center shrink-0">
+                <Package size={22} />
               </div>
+              <div className="min-w-0">
+                <div className="cn-detail-eyebrow">Tracking Number</div>
+                <div className="flex items-center gap-2">
+                  <h2 className="font-display font-bold text-2xl text-ink-900 break-all">
+                    {data.tk}
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={copyTk}
+                    title="Copy tracking number"
+                    aria-label="Copy tracking number"
+                    className="text-ink-600/40 hover:text-signal-blue"
+                  >
+                    {copied ? (
+                      <Check size={15} className="text-signal-teal" />
+                    ) : (
+                      <Copy size={15} />
+                    )}
+                  </button>
+                </div>
+                <div className="shipment-order-number">
+                  <span className="cn-detail-eyebrow">Order ID</span>
+                  <span>{data.order_no || data.order || "—"}</span>
+                </div>
+                <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                  <StatusBadge
+                    label={tkUnifiedLabel(
+                      pkgDisplayStatus({
+                        ...data,
+                        status: currentStage,
+                      }),
+                    )}
+                  />
+                  <span
+                    className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${data.cn_order_id ? "bg-violet-50 text-violet-700" : "bg-sky-50 text-sky-700"}`}
+                  >
+                    {pkgType(data)}
+                  </span>
+                </div>
+                <div className="text-[11px] text-ink-600/45 mt-1.5">
+                  Last Updated: {lastUpdated}
+                </div>
+                {livePackageError && (
+                  <div
+                    className="mt-1 text-[10px] text-signal-red/80"
+                    title={livePackageError}
+                  >
+                    Live database sync unavailable — showing cached data
+                  </div>
+                )}
+              </div>
+            </div>
 
-              <div className="flex items-center gap-2 flex-wrap justify-end">
-                <Link
-                  to={`/process-tracking?tk=${encodeURIComponent(data.tk)}`}
-                  className="flex items-center gap-1.5 bg-white border border-mist-200 text-sm font-medium text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
-                >
-                  <Icons.Route size={14} />
-                  Process Tracking
-                </Link>
-                <Link
-                  to={`/scan-center?tk=${encodeURIComponent(data.tk)}`}
-                  className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3 py-1.5 rounded-md hover:bg-signal-blue/90"
-                >
-                  <Icons.ScanLine size={14} />
-                  Scan TK
-                </Link>
-                {canPrintLabel && (
-                  <button
-                    type="button"
-                    onClick={() => setShowLabel(true)}
-                    className="flex items-center gap-1.5 bg-white border border-mist-200 text-sm font-medium text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
-                  >
-                    <Icons.Printer size={14} />
-                    Print Label
-                  </button>
-                )}
-                {canChangeInternalWarehouse && data.customer_id && (
-                  <button
-                    type="button"
-                    onClick={() => setShowInternalWarehouse(true)}
-                    className="flex items-center gap-1.5 bg-white border border-mist-200 text-sm font-medium text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
-                  >
-                    <Icons.MapPin size={14} />
-                    Internal Warehouse
-                  </button>
-                )}
+            <div className="cn-detail-actions shipment-actions">
+              <Link
+                to={`/process-tracking?tk=${encodeURIComponent(data.tk)}`}
+                className="flex items-center gap-1.5 bg-white border border-mist-200 text-sm font-medium text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
+              >
+                <Icons.Route size={14} />
+                Process Tracking
+              </Link>
+              <Link
+                to={`/scan-center?tk=${encodeURIComponent(data.tk)}`}
+                className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3 py-1.5 rounded-md hover:bg-signal-blue/90"
+              >
+                <Icons.ScanLine size={14} />
+                Scan TK
+              </Link>
+              {canPrintLabel && (
                 <button
                   type="button"
-                  onClick={() => setShowTrackingHistory(true)}
+                  onClick={() => setShowLabel(true)}
                   className="flex items-center gap-1.5 bg-white border border-mist-200 text-sm font-medium text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
                 >
-                  <Icons.History size={14} />
-                  Tracking History
+                  <Icons.Printer size={14} />
+                  Print Label
                 </button>
-                <div className="relative" ref={actionMenuRef}>
-                  <button
-                    type="button"
-                    onClick={() => setActionMenuOpen((v) => !v)}
-                    className="flex items-center gap-1.5 bg-white border border-mist-200 text-sm font-medium text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
-                  >
-                    Action
-                    <ChevronDown size={14} className="text-ink-600/50" />
-                  </button>
-                  {actionMenuOpen && (
-                    <div className="absolute right-0 mt-2 w-64 bg-white border border-mist-200 rounded-md shadow-lg py-1.5 z-50">
+              )}
+              {canChangeInternalWarehouse && data.customer_id && (
+                <button
+                  type="button"
+                  onClick={() => setShowInternalWarehouse(true)}
+                  className="flex items-center gap-1.5 bg-white border border-mist-200 text-sm font-medium text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
+                >
+                  <Icons.MapPin size={14} />
+                  Internal Warehouse
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowTrackingHistory(true)}
+                className="flex items-center gap-1.5 bg-white border border-mist-200 text-sm font-medium text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
+              >
+                <Icons.History size={14} />
+                Tracking History
+              </button>
+              <div className="relative" ref={actionMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setActionMenuOpen((v) => !v)}
+                  className="flex items-center gap-1.5 bg-white border border-mist-200 text-sm font-medium text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
+                >
+                  Actions
+                  <ChevronDown size={14} className="text-ink-600/50" />
+                </button>
+                {actionMenuOpen && (
+                  <div className="absolute right-0 mt-2 w-64 bg-white border border-mist-200 rounded-md shadow-lg py-1.5 z-50">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        setShowTransfer(true);
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
+                    >
+                      <Icons.ArrowLeftRight size={15} />
+                      Customer ID Transfer
+                    </button>
+                    {canChangeTk && (
                       <button
                         type="button"
                         onClick={() => {
                           setActionMenuOpen(false);
-                          setShowTransfer(true);
+                          setShowChangeTk(true);
                         }}
-                        className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
+                        className="w-full flex items-center gap-2.5 whitespace-nowrap px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
                       >
-                        <Icons.ArrowLeftRight size={15} />
-                        Customer ID Transfer
+                        <Icons.ScanLine size={15} />
+                        Change Tracking Number
                       </button>
-                      {canChangeTk && (
+                    )}
+                    {canProcessStatus && (
+                      <>
                         <button
                           type="button"
                           onClick={() => {
                             setActionMenuOpen(false);
-                            setShowChangeTk(true);
+                            setShowEdit(true);
                           }}
-                          className="w-full flex items-center gap-2.5 whitespace-nowrap px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
+                          className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
                         >
-                          <Icons.ScanLine size={15} />
-                          Change Tracking Number
+                          <Icons.Pencil size={15} />
+                          Edit Package
                         </button>
-                      )}
-                      {canProcessStatus && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActionMenuOpen(false);
-                              setShowEdit(true);
-                            }}
-                            className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
-                          >
-                            <Icons.Pencil size={15} />
-                            Edit Package
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActionMenuOpen(false);
-                              setShowDelete(true);
-                            }}
-                            className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-signal-red hover:bg-signal-red/5 text-left border-t border-mist-100"
-                          >
-                            <Icons.Trash2 size={15} />
-                            Delete Package
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <div
-              className={`grid ${isParseLinkPkg(data) ? "sm:grid-cols-4" : "sm:grid-cols-3"} gap-4 mt-5 pt-4 border-t border-mist-100`}
-            >
-              {[
-                [Icons.User, "Customer", custName || "—", custId],
-                [
-                  Icons.FileText,
-                  "Order",
-                  data.order_no || data.order || "—",
-                  null,
-                ],
-                // Purchase Order only belongs to Parse Link; a Shipment (direct)
-                // has no CN order, so the card is hidden instead of "Direct".
-                ...(isParseLinkPkg(data)
-                  ? [
-                      [
-                        Icons.ShoppingCart,
-                        "Purchase Order",
-                        CN_ORDER_NO_BY_ID[data.cn_order_id] || "CN Order",
-                        "Assisted Purchase",
-                      ],
-                    ]
-                  : []),
-                [Icons.Truck, "Shipment", data.shipment || "—", null],
-              ].map(([I, label, value, sub]) => (
-                <div key={label} className="flex items-start gap-2.5 min-w-0">
-                  <I size={16} className="text-ink-600/45 mt-0.5 shrink-0" />
-                  <div className="min-w-0">
-                    <div className="text-xs text-ink-600/50">{label}</div>
-                    <div className="text-sm font-semibold text-ink-900 truncate">
-                      {label === "Purchase Order" &&
-                      data.cn_order_id &&
-                      CN_ORDER_NO_BY_ID[data.cn_order_id] ? (
-                        <Link
-                          to={`/cn-orders/${encodeURIComponent(CN_ORDER_NO_BY_ID[data.cn_order_id])}`}
-                          className="text-signal-blue hover:underline"
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActionMenuOpen(false);
+                            setShowDelete(true);
+                          }}
+                          className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-signal-red hover:bg-signal-red/5 text-left border-t border-mist-100"
                         >
-                          {value}
-                        </Link>
-                      ) : (
-                        value
-                      )}
-                    </div>
-                    {sub && (
-                      <div className="text-xs text-ink-600/45">{sub}</div>
+                          <Icons.Trash2 size={15} />
+                          Delete Package
+                        </button>
+                      </>
                     )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Operational summary — compact facts operators need most often. */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            {[
-              {
-                label: "Weight",
-                value: weightValue,
-                icon: Icons.Scale,
-                tone: "blue",
-              },
-              { label: "CBM", value: cbmValue, icon: Icons.Box, tone: "teal" },
-              {
-                label: "Container",
-                value: containerNo || "Not Assigned",
-                icon: ContainerIcon,
-                tone: "ink",
-              },
-              {
-                label: "Destination",
-                value: destinationValue,
-                icon: Icons.MapPin,
-                tone: "amber",
-              },
-            ].map(({ label, value, icon: I, tone }) => {
-              const toneClass =
-                tone === "blue"
-                  ? "bg-signal-blue/10 text-signal-blue"
-                  : tone === "teal"
-                    ? "bg-signal-teal/10 text-signal-teal"
-                    : tone === "amber"
-                      ? "bg-signal-amber/10 text-signal-amber"
-                      : "bg-mist-100 text-ink-700";
-              return (
-                <div
-                  key={label}
-                  className="bg-white border border-mist-200 rounded-md shadow-panel p-4 min-w-0"
-                >
-                  <div className="flex items-center gap-2">
-                    <div
-                      className={`w-8 h-8 rounded-md flex items-center justify-center shrink-0 ${toneClass}`}
-                    >
-                      <I size={15} />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-[11px] uppercase tracking-wide font-semibold text-ink-600/45">
-                        {label}
-                      </div>
-                      <div
-                        className="text-sm font-bold text-ink-900 mt-0.5 truncate"
-                        title={String(value)}
-                      >
-                        {value}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Parse Link TK opened directly: point to its CN Order detail */}
-          {isParseLinkPkg(data) && CN_ORDER_NO_BY_ID[data.cn_order_id] && (
-            <div className="flex items-center justify-between gap-3 rounded-md border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-800">
-              <span>
-                This TK is a <b>Parse Link</b> of order{" "}
-                {CN_ORDER_NO_BY_ID[data.cn_order_id]}
-              </span>
-              <Link
-                to={`/cn-orders/${encodeURIComponent(CN_ORDER_NO_BY_ID[data.cn_order_id])}`}
-                className="font-semibold text-violet-700 hover:underline whitespace-nowrap"
-              >
-                Open CN Order detail →
-              </Link>
-            </div>
-          )}
-
-          {/* Package Detail tabs — UI only; all existing data/functions stay intact. */}
-          <div className="sticky top-0 z-20 bg-mist-50/95 backdrop-blur-sm border-b border-mist-200 -mx-1 px-1 py-2">
-            <div className="bg-white border border-mist-200 rounded-lg p-1.5 shadow-panel flex items-center gap-1 overflow-x-auto">
-              {[
-                {
-                  id: "overview",
-                  label: "Overview",
-                  icon: Icons.LayoutDashboard,
-                },
-                { id: "details", label: "Package Details", icon: Package },
-                {
-                  id: "tracking",
-                  label: "Tracking & Activity",
-                  icon: Icons.History,
-                },
-              ].map(({ id, label, icon: I }) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setDetailTab(id)}
-                  className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md whitespace-nowrap transition ${
-                    detailTab === id
-                      ? "bg-signal-blue text-white shadow-sm"
-                      : "text-ink-600/65 hover:bg-mist-50 hover:text-ink-900"
-                  }`}
-                >
-                  <I size={15} />
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {detailTab === "overview" && (
-            <>
-              {data.exception && (
-                <div className="flex items-start gap-2.5 bg-signal-red/10 text-signal-red text-sm rounded-md px-4 py-3">
-                  <TriangleAlert size={16} className="shrink-0 mt-0.5" />
-                  <div>
-                    <div className="font-medium">{data.exception.type}</div>
-                    <div className="text-signal-red/80 mt-0.5">
-                      {data.exception.detail}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Vertical timeline - same look as the CN Order timeline */}
-              <div className={`${CARD} p-5`}>
-                <h2 className="font-bold text-sm mb-5 text-ink-900">
-                  Package Timeline
-                </h2>
-                <div>
-                  {timeline.map((step, i) => {
-                    const done = step.state === "done";
-                    const active = step.state === "active";
-                    const isLast = i === timeline.length - 1;
-                    return (
-                      <div key={step.label} className="flex gap-3">
-                        <div className="flex flex-col items-center">
-                          <span
-                            className={`w-6 h-6 rounded-full grid place-items-center shrink-0 ${
-                              done
-                                ? "bg-emerald-500 text-white"
-                                : active
-                                  ? "bg-blue-600 text-white animate-pulse"
-                                  : "bg-white border-2 border-slate-200 text-transparent"
-                            }`}
-                          >
-                            {done ? (
-                              <Check size={13} />
-                            ) : active ? (
-                              <span className="w-1.5 h-1.5 rounded-full bg-white" />
-                            ) : null}
-                          </span>
-                          {!isLast && (
-                            <span
-                              className={`w-0.5 flex-1 min-h-6 ${done ? "bg-emerald-300" : "bg-slate-200"}`}
-                            />
-                          )}
-                        </div>
-                        <div className="pb-5">
-                          <p
-                            className={`text-sm font-semibold ${done || active ? "text-slate-900" : "text-slate-400"}`}
-                          >
-                            {tkUnifiedLabel(step.label)}
-                          </p>
-                          {(done || active) && step.time && (
-                            <p className="text-xs text-slate-500 mt-0.5">
-                              {step.time}
-                            </p>
-                          )}
-                          {(done || active) && step.proceedBy && (
-                            <p className="text-xs text-slate-400 mt-0.5">
-                              Proceed By: {step.proceedBy}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="mt-4 pt-3 border-t border-mist-100 flex items-center justify-between gap-3 flex-wrap">
-                  <span className="text-xs text-ink-600/45">
-                    Proceed By: {currentStep.proceedBy || "NA"}
-                  </span>
-                  <div className="flex items-center gap-3 flex-wrap">
-                    {statusAction}
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
-
-          {detailTab === "details" && (
-            <>
-              {/* Package information + product images */}
-              <div className="grid md:grid-cols-5 gap-5">
-                <div className={`${CARD} p-5 md:col-span-3`}>
-                  <h2 className="flex items-center gap-2 font-display font-bold text-sm text-signal-blue mb-3">
-                    <Package size={16} />
-                    Package Information
-                  </h2>
-                  <dl className="grid sm:grid-cols-2 gap-x-6">
-                    <div>
-                      <KV k="Tracking Number" v={data.tk} />
-                      <KV k="Order Number" v={data.order_no || data.order} />
-                      <KV
-                        k="Customer"
-                        v={
-                          custId && custId !== "—"
-                            ? `${custName} (${custId})`
-                            : custName
-                        }
-                      />
-                      <KV k="Created At" v={createdAt} />
-                      <KV
-                        k="Current Status"
-                        v={
-                          <StatusBadge
-                            label={pkgDisplayStatus({
-                              ...data,
-                              status: currentStage,
-                            })}
-                          />
-                        }
-                      />
-                    </div>
-                    <div>
-                      <KV k="Product Name" v={data.product_name} />
-                      <KV k="Category" v={data.cargo_type} />
-                      <KV k="Weight" v={data.weight} />
-                      <KV k="Size" v={sizeLabel(data.size_class)} />
-                      <KV k="CBM" v={data.cbm} />
-                      <KV k="Dimensions" v={dimensionText} />
-                      <KV k="Supplier" v={data.supplier} />
-                      <KV k="Packages" v={packageCountValue} />
-                      <KV k="Container" v={containerNo || "Not Assigned"} />
-                      <KV k="Destination" v={destinationValue} />
-                    </div>
-                  </dl>
-                </div>
-                <div className="md:col-span-2">
-                  <PhotoGallery tk={data.tk} />
-                </div>
-              </div>
-            </>
-          )}
-
-          {detailTab === "tracking" && (
-            <>
-              {/* Tracking history (vertical list) */}
-              <div className={`${CARD} p-5`}>
-                <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900 mb-4">
-                  <Icons.Clock size={16} className="text-ink-600/60" />
-                  Tracking History
-                </h2>
-                <ol>
-                  {historyRows.map((s, i) => {
-                    const isActive = s.state === "active";
-                    return (
-                      <li key={s.label} className="flex gap-3">
-                        <div className="flex flex-col items-center">
-                          <span
-                            className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
-                              isActive
-                                ? "bg-signal-blue/15 border-2 border-signal-blue animate-pulse"
-                                : "bg-signal-teal text-white"
-                            }`}
-                          >
-                            {isActive ? (
-                              <span className="w-1.5 h-1.5 rounded-full bg-signal-blue" />
-                            ) : (
-                              <Check size={11} strokeWidth={3} />
-                            )}
-                          </span>
-                          {i < historyRows.length - 1 && (
-                            <span className="w-px flex-1 bg-mist-200 min-h-[22px]" />
-                          )}
-                        </div>
-                        <div className="flex-1 flex items-start justify-between gap-3 pb-4 min-w-0">
-                          <div>
-                            <div className="text-sm font-medium text-ink-900">
-                              {tkUnifiedLabel(s.label)}
-                            </div>
-                            <div className="text-xs text-ink-600/45">
-                              Proceed By: {s.proceedBy || "NA"}
-                            </div>
-                          </div>
-                          <div className="text-xs text-ink-600/50 whitespace-nowrap">
-                            {s.time || "—"}
-                          </div>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ol>
-              </div>
-
-              <SlaPackageCard pkg={data} tk={tk} />
-
-              <StatusHistoryCard pkg={data} timeline={timeline} />
-
-              <TkNumberChangesCard tk={tk} />
-
-              <div className={`${CARD} p-5`}>
-                <div className="flex items-center justify-between gap-3 mb-4">
-                  <div>
-                    <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900">
-                      <Icons.History size={16} className="text-ink-600/60" />
-                      Recent Activity
-                    </h2>
-                    <p className="text-xs text-ink-600/45 mt-0.5">
-                      Latest actions recorded for this package.
-                    </p>
-                  </div>
-                  <span className="text-[11px] font-semibold px-2 py-1 rounded-full bg-mist-100 text-ink-600/55">
-                    {activityRows.length} events
-                  </span>
-                </div>
-                {activityRows.length ? (
-                  <div className="divide-y divide-mist-100">
-                    {activityRows.map((item, i) => (
-                      <div
-                        key={`${item.at || "event"}-${i}`}
-                        className="py-3 first:pt-0 last:pb-0 flex items-start gap-3"
-                      >
-                        <div className="w-7 h-7 rounded-full bg-signal-blue/10 text-signal-blue flex items-center justify-center shrink-0">
-                          <Check size={13} />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-sm font-semibold text-ink-900">
-                              {item.status || "Package Updated"}
-                            </span>
-                            <span className="text-xs text-ink-600/40">
-                              {item.user || "System"}
-                            </span>
-                          </div>
-                          <div className="text-xs text-ink-600/45 mt-0.5">
-                            {item.at ? formatIso(item.at) : "—"}
-                            {item.remark ? ` · ${item.remark}` : ""}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="py-6 text-center text-sm text-ink-600/45">
-                    No activity history yet.
                   </div>
                 )}
               </div>
-            </>
-          )}
+            </div>
+          </div>
+
+          <div className="shipment-customer-chip">
+            <Icons.User size={15} />
+            <span>
+              {custId} · {custName || "Unknown Customer"}
+            </span>
+          </div>
         </div>
 
-        {/* ============ RIGHT / SIDEBAR ============ */}
-        <div className="space-y-5">
-          <CustomerDetailsCard customerId={data.customer_id} />
-          <PayShippingCard pkg={data} stage={currentStage} />
+        {/* Parse Link TK opened directly: point to its CN Order detail */}
+        {isParseLinkPkg(data) && CN_ORDER_NO_BY_ID[data.cn_order_id] && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-violet-200 bg-violet-50 px-4 py-3 text-sm text-violet-800">
+            <span>
+              This TK is a <b>Parse Link</b> of order{" "}
+              {CN_ORDER_NO_BY_ID[data.cn_order_id]}
+            </span>
+            <Link
+              to={`/cn-orders/${encodeURIComponent(CN_ORDER_NO_BY_ID[data.cn_order_id])}`}
+              className="font-semibold text-violet-700 hover:underline whitespace-nowrap"
+            >
+              Open CN Order detail →
+            </Link>
+          </div>
+        )}
 
-          <div className={`${CARD} p-5`}>
-            <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900 mb-3">
-              <Icons.MapPin size={16} className="text-ink-600/60" />
-              Warehouse
-            </h2>
-            <InfoGrid
-              items={[
-                {
-                  label: "Origin Warehouse (China)",
-                  value: (
-                    <WhLabel code={data.origin_wh_code || data.warehouse} />
-                  ),
-                  span: true,
-                },
-                {
-                  label: "Internal Warehouse (Cambodia Branch)",
-                  value: (
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <WhLabel code={data.dest_branch_code} />
-                      {canChangeInternalWarehouse && data.customer_id && (
+        <div
+          className="cn-detail-tabs shipment-tabs"
+          role="tablist"
+          aria-label="Shipment details"
+        >
+          {[
+            {
+              id: "overview",
+              label: "Shipment Details",
+              icon: Icons.LayoutDashboard,
+            },
+            { id: "details", label: "Package & Photos", icon: Package },
+            {
+              id: "tracking",
+              label: "Tracking & Activity",
+              icon: Icons.History,
+            },
+          ].map(({ id, label, icon: I }, index, tabs) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              id={`shipment-tab-${id}`}
+              aria-controls="shipment-detail-panel"
+              aria-selected={detailTab === id}
+              tabIndex={detailTab === id ? 0 : -1}
+              onClick={() => setDetailTab(id)}
+              onKeyDown={(event) => {
+                let next = index;
+                if (event.key === "ArrowRight")
+                  next = (index + 1) % tabs.length;
+                else if (event.key === "ArrowLeft")
+                  next = (index + tabs.length - 1) % tabs.length;
+                else if (event.key === "Home") next = 0;
+                else if (event.key === "End") next = tabs.length - 1;
+                else return;
+                event.preventDefault();
+                setDetailTab(tabs[next].id);
+                document
+                  .getElementById(`shipment-tab-${tabs[next].id}`)
+                  ?.focus();
+              }}
+              className="cn-detail-tab whitespace-nowrap"
+            >
+              <I size={16} />
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="cn-detail-top">
+          <div
+            className="cn-detail-stack"
+            id="shipment-detail-panel"
+            role="tabpanel"
+            aria-labelledby={`shipment-tab-${detailTab}`}
+            tabIndex={0}
+          >
+            {detailTab === "overview" && (
+              <>
+                {data.exception && (
+                  <div className="flex items-start gap-2.5 bg-signal-red/10 text-signal-red text-sm rounded-md px-4 py-3">
+                    <TriangleAlert size={16} className="shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-medium">{data.exception.type}</div>
+                      <div className="text-signal-red/80 mt-0.5">
+                        {data.exception.detail}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <section className={`${CARD} cn-detail-block`}>
+                  <h2 className="cn-detail-block-title">Shipment details</h2>
+                  <dl className="cn-detail-info">
+                    <div>
+                      <dt>Tracking number</dt>
+                      <dd className="flex items-center gap-2">
+                        <span className="break-all">{data.tk}</span>
                         <button
                           type="button"
-                          onClick={() => setShowInternalWarehouse(true)}
-                          className="text-[11px] text-signal-blue hover:underline"
+                          onClick={copyTk}
+                          className="cn-detail-copy"
+                          aria-label="Copy tracking number"
                         >
-                          Change
+                          {copied ? <Check size={16} /> : <Copy size={16} />}
                         </button>
-                      )}
+                      </dd>
                     </div>
-                  ),
-                  span: true,
-                },
-                {
-                  label: "Shipping Method",
-                  value: (
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="inline-flex items-center gap-1.5 font-semibold">
-                        <ShipMethodIcon
-                          m={pkgShippingMethod(data)}
-                          size={15}
-                          className="text-blue-600"
+                    <div>
+                      <dt>Order ID</dt>
+                      <dd>{data.order_no || data.order || "—"}</dd>
+                    </div>
+                    <div>
+                      <dt>Shipment</dt>
+                      <dd>{data.shipment || "—"}</dd>
+                    </div>
+                    <div>
+                      <dt>Type</dt>
+                      <dd>{pkgType(data)}</dd>
+                    </div>
+                    <div>
+                      <dt>Status</dt>
+                      <dd>
+                        <StatusBadge
+                          label={tkUnifiedLabel(
+                            pkgDisplayStatus({ ...data, status: currentStage }),
+                          )}
                         />
-                        {pkgShippingMethod(data)}
-                      </span>
-                      {data.cn_order_id ? (
-                        <span className="text-[11px] text-ink-600/50">
-                          from CN Order
-                        </span>
-                      ) : (
-                        canChangeShipMethodBase && (
-                          <button
-                            type="button"
-                            onClick={() => setShowShipMethod(true)}
-                            className="text-[11px] text-signal-blue hover:underline"
-                          >
-                            Change
-                          </button>
-                        )
-                      )}
+                      </dd>
                     </div>
-                  ),
-                  span: true,
-                },
-                { label: "Inbound Date", value: createdAt, span: true },
-                { label: "Created By", value: data.created_by || "—" },
-                { label: "Updated By", value: data.updated_by || "—" },
-                ...(containerNo
-                  ? [
-                      {
-                        label: "Container",
-                        value: (
+                    <div>
+                      <dt>Weight / CBM</dt>
+                      <dd>
+                        {weightValue}{" "}
+                        <span className="text-ink-600/50 mx-2">/</span>{" "}
+                        {cbmValue}
+                        {cbmValue !== "—" ? " m³" : ""}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Dimensions</dt>
+                      <dd>{dimensionText || "—"}</dd>
+                    </div>
+                    <div>
+                      <dt>Container</dt>
+                      <dd>
+                        {containerNo ? (
                           <Link
                             to={`/containers/${containerNo}`}
                             className="text-signal-blue hover:underline"
                           >
                             {containerNo}
                           </Link>
-                        ),
-                        span: true,
-                      },
-                    ]
-                  : []),
-              ]}
-            />
+                        ) : (
+                          "Not Assigned"
+                        )}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Destination</dt>
+                      <dd>{destinationValue}</dd>
+                    </div>
+                    <div>
+                      <dt>Inbound date</dt>
+                      <dd>{createdAt}</dd>
+                    </div>
+                  </dl>
+                </section>
+
+                {/* Vertical timeline - same look as the CN Order timeline */}
+                <div className={`${CARD} p-5`}>
+                  <h2 className="font-bold text-sm mb-5 text-ink-900">
+                    Shipment Timeline
+                  </h2>
+                  <div>
+                    {timeline.map((step, i) => {
+                      const done = step.state === "done";
+                      const active = step.state === "active";
+                      const isLast = i === timeline.length - 1;
+                      return (
+                        <div key={step.label} className="flex gap-3">
+                          <div className="flex flex-col items-center">
+                            <span
+                              className={`w-6 h-6 rounded-full grid place-items-center shrink-0 ${
+                                done
+                                  ? "bg-emerald-500 text-white"
+                                  : active
+                                    ? "bg-blue-600 text-white animate-pulse"
+                                    : "bg-white border-2 border-slate-200 text-transparent"
+                              }`}
+                            >
+                              {done ? (
+                                <Check size={13} />
+                              ) : active ? (
+                                <span className="w-1.5 h-1.5 rounded-full bg-white" />
+                              ) : null}
+                            </span>
+                            {!isLast && (
+                              <span
+                                className={`w-0.5 flex-1 min-h-6 ${done ? "bg-emerald-300" : "bg-slate-200"}`}
+                              />
+                            )}
+                          </div>
+                          <div className="pb-4 min-w-0">
+                            <p
+                              className={`text-sm font-semibold ${done || active ? "text-slate-900" : "text-slate-400"}`}
+                            >
+                              {tkUnifiedLabel(step.label)}
+                            </p>
+                            {(done || active) && step.time && (
+                              <p className="text-xs text-slate-500 mt-0.5">
+                                {step.time}
+                              </p>
+                            )}
+                            {(done || active) && step.proceedBy && (
+                              <p className="text-xs text-slate-400 mt-0.5">
+                                Proceed By: {step.proceedBy}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-4 pt-3 border-t border-mist-100 flex items-center justify-between gap-3 flex-wrap">
+                    <span className="text-xs text-ink-600/45">
+                      Proceed By: {currentStep.proceedBy || "NA"}
+                    </span>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      {statusAction}
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {detailTab === "details" && (
+              <>
+                {/* Package information + product images */}
+                <div className="cn-detail-stack">
+                  <div className={`${CARD} cn-detail-block`}>
+                    <h2 className="flex items-center gap-2 font-display font-bold text-sm text-signal-blue mb-3">
+                      <Package size={16} />
+                      Package Information
+                    </h2>
+                    <dl className="shipment-package-info">
+                      <div>
+                        <KV k="Tracking Number" v={data.tk} />
+                        <KV k="Order Number" v={data.order_no || data.order} />
+                        <KV
+                          k="Customer"
+                          v={
+                            custId && custId !== "—"
+                              ? `${custName} (${custId})`
+                              : custName
+                          }
+                        />
+                        <KV k="Created At" v={createdAt} />
+                        <KV
+                          k="Current Status"
+                          v={
+                            <StatusBadge
+                              label={pkgDisplayStatus({
+                                ...data,
+                                status: currentStage,
+                              })}
+                            />
+                          }
+                        />
+                      </div>
+                      <div>
+                        <KV k="Product Name" v={data.product_name} />
+                        <KV k="Category" v={data.cargo_type} />
+                        <KV k="Weight" v={weightValue} />
+                        <KV k="Size" v={sizeLabel(data.size_class)} />
+                        <KV k="CBM" v={data.cbm} />
+                        <KV k="Dimensions" v={dimensionText} />
+                        <KV k="Supplier" v={data.supplier} />
+                        <KV k="Packages" v={packageCountValue} />
+                        <KV k="Container" v={containerNo || "Not Assigned"} />
+                        <KV k="Destination" v={destinationValue} />
+                      </div>
+                    </dl>
+                  </div>
+                  <div className="min-w-0">
+                    <PhotoGallery tk={data.tk} />
+                  </div>
+                </div>
+              </>
+            )}
+
+            {detailTab === "tracking" && (
+              <>
+                {/* Tracking history (vertical list) */}
+                <div className={`${CARD} p-5`}>
+                  <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900 mb-4">
+                    <Icons.Clock size={16} className="text-ink-600/60" />
+                    Tracking History
+                  </h2>
+                  <ol>
+                    {historyRows.map((s, i) => {
+                      const isActive = s.state === "active";
+                      return (
+                        <li key={s.label} className="flex gap-3">
+                          <div className="flex flex-col items-center">
+                            <span
+                              className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
+                                isActive
+                                  ? "bg-signal-blue/15 border-2 border-signal-blue animate-pulse"
+                                  : "bg-signal-teal text-white"
+                              }`}
+                            >
+                              {isActive ? (
+                                <span className="w-1.5 h-1.5 rounded-full bg-signal-blue" />
+                              ) : (
+                                <Check size={11} strokeWidth={3} />
+                              )}
+                            </span>
+                            {i < historyRows.length - 1 && (
+                              <span className="w-px flex-1 bg-mist-200 min-h-[22px]" />
+                            )}
+                          </div>
+                          <div className="flex-1 flex items-start justify-between gap-3 pb-4 min-w-0">
+                            <div>
+                              <div className="text-sm font-medium text-ink-900">
+                                {tkUnifiedLabel(s.label)}
+                              </div>
+                              <div className="text-xs text-ink-600/45">
+                                Proceed By: {s.proceedBy || "NA"}
+                              </div>
+                            </div>
+                            <div className="text-xs text-ink-600/50 whitespace-nowrap">
+                              {s.time || "—"}
+                            </div>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </div>
+
+                <SlaPackageCard pkg={data} tk={tk} />
+
+                <StatusHistoryCard pkg={data} timeline={timeline} />
+
+                <TkNumberChangesCard tk={tk} />
+
+                <div className={`${CARD} p-5`}>
+                  <div className="flex items-center justify-between gap-3 mb-4">
+                    <div>
+                      <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900">
+                        <Icons.History size={16} className="text-ink-600/60" />
+                        Recent Activity
+                      </h2>
+                      <p className="text-xs text-ink-600/45 mt-0.5">
+                        Latest actions recorded for this package.
+                      </p>
+                    </div>
+                    <span className="text-[11px] font-semibold px-2 py-1 rounded-full bg-mist-100 text-ink-600/55">
+                      {activityRows.length} events
+                    </span>
+                  </div>
+                  {activityRows.length ? (
+                    <div className="divide-y divide-mist-100">
+                      {activityRows.map((item, i) => (
+                        <div
+                          key={`${item.at || "event"}-${i}`}
+                          className="py-3 first:pt-0 last:pb-0 flex items-start gap-3"
+                        >
+                          <div className="w-7 h-7 rounded-full bg-signal-blue/10 text-signal-blue flex items-center justify-center shrink-0">
+                            <Check size={13} />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-semibold text-ink-900">
+                                {item.status || "Package Updated"}
+                              </span>
+                              <span className="text-xs text-ink-600/40">
+                                {item.user || "System"}
+                              </span>
+                            </div>
+                            <div className="text-xs text-ink-600/45 mt-0.5">
+                              {item.at ? formatIso(item.at) : "—"}
+                              {item.remark ? ` · ${item.remark}` : ""}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="py-6 text-center text-sm text-ink-600/45">
+                      No activity history yet.
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
           </div>
 
-          {!isCustomerRole && (
+          {/* ============ RIGHT / SIDEBAR ============ */}
+          <aside className="cn-detail-stack shipment-sidebar">
+            <CustomerDetailsCard customerId={data.customer_id} />
+            <PayShippingCard pkg={data} stage={currentStage} />
+
             <div className={`${CARD} p-5`}>
               <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900 mb-3">
-                <Icons.Receipt size={16} className="text-ink-600/60" />
-                Freight
+                <Icons.MapPin size={16} className="text-ink-600/60" />
+                Warehouse
               </h2>
               <InfoGrid
                 items={[
                   {
-                    label: "Pricing Method",
-                    value:
-                      data.pricing_method === "CBM"
-                        ? "CBM"
-                        : data.pricing_method === "Fixed"
-                          ? "Fixed size (S / M / L)"
-                          : "—",
+                    label: "Origin Warehouse (China)",
+                    value: (
+                      <WhLabel code={data.origin_wh_code || data.warehouse} />
+                    ),
                     span: true,
                   },
-                  { label: "Rate", value: rateLabel(data) },
                   {
-                    label: "Freight Fee",
+                    label: "Internal Warehouse (Cambodia Branch)",
                     value: (
-                      <span className="text-signal-blue font-bold">
-                        {data.freight_fee !== undefined &&
-                        data.freight_fee !== null &&
-                        data.freight_fee !== ""
-                          ? money(data.freight_fee)
-                          : "—"}
-                      </span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <WhLabel code={data.dest_branch_code} />
+                        {canChangeInternalWarehouse && data.customer_id && (
+                          <button
+                            type="button"
+                            onClick={() => setShowInternalWarehouse(true)}
+                            className="text-[11px] text-signal-blue hover:underline"
+                          >
+                            Change
+                          </button>
+                        )}
+                      </div>
                     ),
+                    span: true,
                   },
-                  ...(data.freight_overridden
+                  {
+                    label: "Shipping Method",
+                    value: (
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="inline-flex items-center gap-1.5 font-semibold">
+                          <ShipMethodIcon
+                            m={pkgShippingMethod(data)}
+                            size={15}
+                            className="text-blue-600"
+                          />
+                          {pkgShippingMethod(data)}
+                        </span>
+                        {data.cn_order_id ? (
+                          <span className="text-[11px] text-ink-600/50">
+                            from CN Order
+                          </span>
+                        ) : (
+                          canChangeShipMethodBase && (
+                            <button
+                              type="button"
+                              onClick={() => setShowShipMethod(true)}
+                              className="text-[11px] text-signal-blue hover:underline"
+                            >
+                              Change
+                            </button>
+                          )
+                        )}
+                      </div>
+                    ),
+                    span: true,
+                  },
+                  { label: "Inbound Date", value: createdAt, span: true },
+                  { label: "Created By", value: data.created_by || "—" },
+                  { label: "Updated By", value: data.updated_by || "—" },
+                  ...(containerNo
                     ? [
                         {
-                          label: "Note",
-                          value: "Admin override",
+                          label: "Container",
+                          value: (
+                            <Link
+                              to={`/containers/${containerNo}`}
+                              className="text-signal-blue hover:underline"
+                            >
+                              {containerNo}
+                            </Link>
+                          ),
                           span: true,
                         },
                       ]
@@ -25198,32 +25174,77 @@ function PackageDetail() {
                 ]}
               />
             </div>
-          )}
 
-          <div className={`${CARD} p-5`}>
-            <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900 mb-3">
-              <Icons.Zap size={16} className="text-signal-blue" />
-              Quick Actions
-            </h2>
-            <div className="space-y-2.5">
-              <button
-                type="button"
-                onClick={copyTk}
-                className="w-full flex items-center gap-2 border border-signal-blue/30 bg-signal-blue/5 text-signal-blue text-sm font-medium px-3 py-2 rounded-md hover:bg-signal-blue/10"
-              >
-                <Copy size={14} />
-                Copy Tracking Number
-              </button>
-              <button
-                type="button"
-                onClick={shareTk}
-                className="w-full flex items-center gap-2 border border-signal-blue/30 bg-signal-blue/5 text-signal-blue text-sm font-medium px-3 py-2 rounded-md hover:bg-signal-blue/10"
-              >
-                <Icons.Share2 size={14} />
-                Share Tracking
-              </button>
+            {!isCustomerRole && (
+              <div className={`${CARD} p-5`}>
+                <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900 mb-3">
+                  <Icons.Receipt size={16} className="text-ink-600/60" />
+                  Freight
+                </h2>
+                <InfoGrid
+                  items={[
+                    {
+                      label: "Pricing Method",
+                      value:
+                        data.pricing_method === "CBM"
+                          ? "CBM"
+                          : data.pricing_method === "Fixed"
+                            ? "Fixed size (S / M / L)"
+                            : "—",
+                      span: true,
+                    },
+                    { label: "Rate", value: rateLabel(data) },
+                    {
+                      label: "Freight Fee",
+                      value: (
+                        <span className="text-signal-blue font-bold">
+                          {data.freight_fee !== undefined &&
+                          data.freight_fee !== null &&
+                          data.freight_fee !== ""
+                            ? money(data.freight_fee)
+                            : "—"}
+                        </span>
+                      ),
+                    },
+                    ...(data.freight_overridden
+                      ? [
+                          {
+                            label: "Note",
+                            value: "Admin override",
+                            span: true,
+                          },
+                        ]
+                      : []),
+                  ]}
+                />
+              </div>
+            )}
+
+            <div className={`${CARD} p-5`}>
+              <h2 className="flex items-center gap-2 font-display font-bold text-sm text-ink-900 mb-3">
+                <Icons.Zap size={16} className="text-signal-blue" />
+                Quick Actions
+              </h2>
+              <div className="space-y-2.5">
+                <button
+                  type="button"
+                  onClick={copyTk}
+                  className="w-full flex items-center gap-2 border border-signal-blue/30 bg-signal-blue/5 text-signal-blue text-sm font-medium px-3 py-2 rounded-md hover:bg-signal-blue/10"
+                >
+                  <Copy size={14} />
+                  Copy Tracking Number
+                </button>
+                <button
+                  type="button"
+                  onClick={shareTk}
+                  className="w-full flex items-center gap-2 border border-signal-blue/30 bg-signal-blue/5 text-signal-blue text-sm font-medium px-3 py-2 rounded-md hover:bg-signal-blue/10"
+                >
+                  <Icons.Share2 size={14} />
+                  Share Tracking
+                </button>
+              </div>
             </div>
-          </div>
+          </aside>
         </div>
       </div>
 
@@ -71165,6 +71186,30 @@ function ShopInvoiceModal({ order, items, onClose }) {
   );
 }
 
+// Shop order detail uses the same layout tokens as CN and Shipment details.
+const SHOP_DETAIL_LAYOUT_CSS = `
+.shop-detail-page .shop-detail-actions{flex:1 1 420px}
+.shop-detail-page .shop-detail-customer-chip{display:inline-flex;align-items:center;gap:8px;padding:7px 12px;margin-top:14px;border:1px solid var(--cn-border);border-radius:999px;background:var(--cn-soft);font-size:13px;font-weight:600;max-width:100%;overflow-wrap:anywhere}
+.shop-detail-page .shop-detail-tabs{overflow-x:auto}
+.shop-detail-page .shop-detail-tabs button{white-space:nowrap;flex-shrink:0}
+.shop-detail-page .shop-detail-summary{font-size:14px;margin-top:12px}
+.shop-detail-page .shop-detail-summary>div{display:flex;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid var(--cn-border)}
+.shop-detail-page .shop-detail-summary>div:nth-child(4){background:var(--cn-tint);padding:14px 12px;border:0;border-radius:8px;margin-top:10px;font-size:16px}
+.shop-detail-page .shop-detail-summary>div:last-child{border-bottom:0}
+.shop-detail-page .shop-detail-summary dd{font-weight:650;text-align:right}
+.shop-detail-page .shop-detail-payment-totals{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;padding:16px;border-radius:8px;background:var(--cn-soft)}
+.shop-detail-page .shop-detail-payment-totals dt{font-size:13px;color:var(--cn-muted);margin-bottom:6px}
+.shop-detail-page .shop-detail-payment-totals dd{font-size:20px;font-weight:700;overflow-wrap:anywhere}
+.shop-detail-page .shop-detail-items{min-width:0}
+.shop-detail-page .cn-detail-info dd{overflow-wrap:anywhere}
+html.cb-admin-dark .shop-detail-page .cb-surface .text-slate-800,html.cb-admin-dark .shop-detail-page .cb-surface .text-slate-900{color:var(--cn-text)}
+html.cb-admin-dark .shop-detail-page .text-slate-400,html.cb-admin-dark .shop-detail-page .text-slate-500,html.cb-admin-dark .shop-detail-page .text-slate-600{color:var(--cn-muted)}
+html.cb-admin-dark .shop-detail-page .cb-surface .bg-white{background:var(--cn-surface)}
+html.cb-admin-dark .shop-detail-page .cb-surface .bg-slate-50,html.cb-admin-dark .shop-detail-page .cb-surface .bg-slate-100{background:var(--cn-soft)}
+html.cb-admin-dark .shop-detail-page .cb-surface .border-slate-200{border-color:var(--cn-border)}
+@media(max-width:639px){.shop-detail-page .shop-detail-actions{justify-content:flex-start;flex-basis:100%}.shop-detail-page .shop-detail-actions>button{height:auto;min-height:38px}.shop-detail-page .shop-detail-payment-totals{gap:12px;padding:12px}}
+`;
+
 function ShopOrderDetailPage() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -71180,6 +71225,8 @@ function ShopOrderDetailPage() {
   const [reload, setReload] = useState(0);
   const [itemViewer, setItemViewer] = useState(-1);
   const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const [detailTab, setDetailTab] = useState("details");
+  const [orderCopied, setOrderCopied] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -71391,58 +71438,296 @@ function ShopOrderDetailPage() {
     .filter((i) => i.image_snapshot)
     .map((i) => ({ url: i.image_snapshot }));
 
+  const totalQuantity = items.reduce(
+    (sum, item) => sum + (Number(item.quantity) || 0),
+    0,
+  );
+  async function copyOrderNumber() {
+    try {
+      await navigator.clipboard.writeText(o.order_no);
+      setOrderCopied(true);
+      window.setTimeout(() => setOrderCopied(false), 1500);
+    } catch {
+      emitCBToast(
+        "error",
+        "Copy unavailable",
+        "Please select and copy the order number.",
+      );
+    }
+  }
+
   return (
     <ShopGate perm="shop.order.review" title="this order">
-      <div className="mx-auto max-w-6xl">
-        <Link
-          to="/shop/orders"
-          className="mb-3 inline-flex items-center gap-1 text-sm font-semibold text-blue-700"
+      <div className="cn-detail-page shop-detail-page space-y-4">
+        <style>{CN_DETAIL_LAYOUT_CSS + SHOP_DETAIL_LAYOUT_CSS}</style>
+        <nav
+          aria-label="Breadcrumb"
+          className="flex flex-wrap items-center gap-2 text-sm text-slate-500"
         >
-          <Icons.ArrowLeft size={15} /> Shop Orders
-        </Link>
-        <div className="mb-4 flex flex-wrap items-center gap-3">
-          <h1 className="cb-page-title text-2xl font-extrabold text-slate-900">
-            {o.order_no}
-          </h1>
-          <ShopBadge text={o.status} />
-          <ShopBadge text={o.payment_status} />
-          <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-bold text-slate-600">
-            {o.fulfillment_method}
-          </span>
-          <div className="ml-auto flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => setInvoiceOpen(true)}
-              className={SHOP_BTN_GHOST}
-            >
-              <Icons.Printer size={15} /> Print Invoice
-            </button>
-            {actions.map((a) => (
+          <Link
+            to="/shop/orders"
+            className="inline-flex items-center gap-2 hover:text-blue-600"
+          >
+            <Icons.ArrowLeft size={16} />
+            Shop Orders
+          </Link>
+          <span>/</span>
+          <span>Order details</span>
+        </nav>
+        <h1 className="cn-detail-title">
+          Shop Order &amp; Product Information
+        </h1>
+        <div className="cn-detail-shell">
+          <header className="cn-detail-header">
+            <div className="min-w-0">
+              <div className="cn-detail-eyebrow">Shop order</div>
+              <div className="flex items-center gap-2 mt-2">
+                <h2 className="text-xl font-bold break-all">{o.order_no}</h2>
+                <button
+                  type="button"
+                  className="cn-detail-copy"
+                  onClick={copyOrderNumber}
+                  aria-label="Copy order number"
+                  title={orderCopied ? "Copied" : "Copy order number"}
+                >
+                  {orderCopied ? (
+                    <Icons.Check size={18} />
+                  ) : (
+                    <Icons.Copy size={18} />
+                  )}
+                </button>
+              </div>
+              <p className="mt-2 text-sm text-slate-500">
+                Shop purchase · {o.fulfillment_method}
+              </p>
+              <div className="shop-detail-customer-chip">
+                <Icons.User size={15} />
+                <span>
+                  {o.customers?.customer_code || "—"} ·{" "}
+                  {o.customers?.name || "—"}
+                </span>
+              </div>
+            </div>
+            <div className="cn-detail-actions shop-detail-actions">
+              <ShopBadge text={o.status} />
+              <ShopBadge text={o.payment_status} />
               <button
-                key={a.k}
                 type="button"
-                disabled={busy}
-                onClick={() => setDlg(a.k)}
-                className={
-                  a.tone === "danger"
-                    ? SHOP_BTN_DANGER
-                    : a.tone === "ghost"
-                      ? SHOP_BTN_GHOST
-                      : SHOP_BTN_PRIMARY
-                }
+                onClick={() => setInvoiceOpen(true)}
+                className={SHOP_BTN_GHOST}
               >
-                {a.label}
+                <Icons.Printer size={15} /> Print Invoice
+              </button>
+              {actions.map((a) => (
+                <button
+                  key={a.k}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setDlg(a.k)}
+                  className={
+                    a.tone === "danger"
+                      ? SHOP_BTN_DANGER
+                      : a.tone === "ghost"
+                        ? SHOP_BTN_GHOST
+                        : SHOP_BTN_PRIMARY
+                  }
+                >
+                  {a.label}
+                </button>
+              ))}
+            </div>
+          </header>
+          <div
+            className="cn-detail-tabs shop-detail-tabs"
+            role="tablist"
+            aria-label="Shop order details"
+          >
+            {[
+              { id: "details", label: "Order Details" },
+              { id: "history", label: "History & Activity" },
+            ].map((tab, index, tabs) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                id={`shop-detail-tab-${tab.id}`}
+                aria-selected={detailTab === tab.id}
+                aria-controls={`shop-detail-panel-${tab.id}`}
+                tabIndex={detailTab === tab.id ? 0 : -1}
+                className="cn-detail-tab"
+                onClick={() => setDetailTab(tab.id)}
+                onKeyDown={(event) => {
+                  let next = index;
+                  if (event.key === "ArrowRight")
+                    next = (index + 1) % tabs.length;
+                  else if (event.key === "ArrowLeft")
+                    next = (index + tabs.length - 1) % tabs.length;
+                  else if (event.key === "Home") next = 0;
+                  else if (event.key === "End") next = tabs.length - 1;
+                  else return;
+                  event.preventDefault();
+                  setDetailTab(tabs[next].id);
+                  document
+                    .getElementById(`shop-detail-tab-${tabs[next].id}`)
+                    ?.focus();
+                }}
+              >
+                {tab.label}
+                {tab.id === "history" && (
+                  <span className="cn-detail-count">{hist.length}</span>
+                )}
               </button>
             ))}
           </div>
-        </div>
-
-        <div className="grid gap-4 lg:grid-cols-3">
-          <div className="space-y-4 lg:col-span-2">
-            <div className={SHOP_CARD}>
-              <h2 className="mb-3 text-sm font-extrabold text-slate-800">
-                Items
-              </h2>
+          <div
+            id="shop-detail-panel-details"
+            role="tabpanel"
+            aria-labelledby="shop-detail-tab-details"
+            hidden={detailTab !== "details"}
+            tabIndex={0}
+            className="cn-detail-stack"
+          >
+            <div className="cn-detail-top">
+              <div className="cn-detail-stack">
+                <section className="cb-surface cn-detail-block">
+                  <h2 className="cn-detail-block-title">Order details</h2>
+                  <dl className="cn-detail-info">
+                    <div>
+                      <dt>Order number</dt>
+                      <dd>{o.order_no}</dd>
+                    </div>
+                    <div>
+                      <dt>Order type</dt>
+                      <dd>Shop purchase</dd>
+                    </div>
+                    <div>
+                      <dt>Fulfillment</dt>
+                      <dd>{o.fulfillment_method || "—"}</dd>
+                    </div>
+                    <div>
+                      <dt>Status</dt>
+                      <dd>
+                        <ShopBadge text={o.status} />
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Payment status</dt>
+                      <dd>
+                        <ShopBadge text={o.payment_status} />
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Created</dt>
+                      <dd>{shopDt(o.created_at)}</dd>
+                    </div>
+                    <div>
+                      <dt>Total quantity</dt>
+                      <dd>{totalQuantity} units</dd>
+                    </div>
+                    <div>
+                      <dt>Order items</dt>
+                      <dd>{items.length}</dd>
+                    </div>
+                    {o.accepted_by_name && (
+                      <div>
+                        <dt>Accepted by</dt>
+                        <dd>{o.accepted_by_name}</dd>
+                      </div>
+                    )}
+                  </dl>
+                </section>
+                {o.internal_note && (
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                    <div className="mb-1 text-xs font-bold uppercase">
+                      Internal note
+                    </div>
+                    {o.internal_note}
+                  </div>
+                )}
+              </div>
+              <aside className="cn-detail-stack">
+                <div className="cb-surface cn-detail-block">
+                  <h2 className="cn-detail-block-title">Customer</h2>
+                  <div className="text-sm font-semibold text-slate-800">
+                    {o.customers?.name || "—"}
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    {o.customers?.customer_code}{" "}
+                    {o.customers?.phone ? `· ${o.customers.phone}` : ""}
+                  </div>
+                  {o.customer_note && (
+                    <p className="mt-3 rounded-lg bg-slate-50 p-2 text-sm text-slate-600">
+                      “{o.customer_note}”
+                    </p>
+                  )}
+                </div>
+                <div className="cb-surface cn-detail-block">
+                  <h2 className="cn-detail-block-title">
+                    {isPickup ? "Pickup" : "Delivery"}
+                  </h2>
+                  {isPickup ? (
+                    pk ? (
+                      <div className="text-sm text-slate-600">
+                        <div className="font-semibold text-slate-800">
+                          {pk.name}
+                        </div>
+                        <div>{pk.address}</div>
+                        {pk.hours && (
+                          <div className="text-xs text-slate-400">
+                            {pk.hours}
+                          </div>
+                        )}
+                        <ShopMapLink pk={pk} />
+                      </div>
+                    ) : (
+                      <span className="text-sm text-slate-400">—</span>
+                    )
+                  ) : (
+                    <div className="text-sm text-slate-600">
+                      <div className="font-semibold text-slate-800">
+                        {o.recipient_name}
+                      </div>
+                      <div>{o.recipient_phone}</div>
+                      {addr && (
+                        <div className="mt-1">
+                          {[
+                            addr.address,
+                            addr.commune,
+                            addr.district,
+                            addr.province,
+                          ]
+                            .filter(Boolean)
+                            .join(", ")}
+                          {addr.additional_info && (
+                            <div className="text-xs text-slate-400">
+                              {addr.additional_info}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {o.delivery_person && (
+                        <div className="mt-2 text-xs">
+                          Driver: <b>{o.delivery_person}</b>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {o.handover_note && (
+                    <div className="mt-2 text-xs text-slate-500">
+                      Handover: {o.handover_note}
+                    </div>
+                  )}
+                </div>
+              </aside>
+            </div>
+            <section className="cb-surface cn-detail-block shop-detail-items">
+              <div className="flex flex-wrap items-center gap-2 mb-4">
+                <Icons.Package size={20} />
+                <h2 className="text-lg font-bold">Order items</h2>
+                <span className="cn-detail-count">
+                  {items.length} items · {totalQuantity} units
+                </span>
+              </div>
               <ShopTable
                 heads={["Product", "SKU", "Qty", "Unit", "Line total", "Stock"]}
                 minW={720}
@@ -71498,187 +71783,140 @@ function ShopOrderDetailPage() {
                   </tr>
                 ))}
               </ShopTable>
-              <dl className="ml-auto mt-4 w-full max-w-xs space-y-1 text-sm">
-                <div className="flex justify-between">
-                  <dt className="text-slate-500">Subtotal</dt>
-                  <dd>{money(o.subtotal)}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-slate-500">Discount</dt>
-                  <dd>−{money(o.discount_total)}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-slate-500">Delivery fee</dt>
-                  <dd>{money(o.delivery_fee)}</dd>
-                </div>
-                <div className="flex justify-between border-t border-slate-200 pt-1 font-extrabold">
-                  <dt>Total</dt>
-                  <dd>{money(o.total_amount)}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-slate-500">Paid</dt>
-                  <dd>{money(o.paid_amount)}</dd>
-                </div>
-                {Number(o.refunded_amount) > 0 && (
-                  <div className="flex justify-between text-red-600">
-                    <dt>Refunded</dt>
-                    <dd>{money(o.refunded_amount)}</dd>
-                  </div>
-                )}
-              </dl>
-            </div>
 
-            <div className={SHOP_CARD}>
-              <h2 className="mb-3 text-sm font-extrabold text-slate-800">
-                History
-              </h2>
-              <ol className="space-y-3">
-                {hist.map((h) => (
-                  <li key={h.id} className="border-l-2 border-slate-200 pl-3">
-                    <div className="flex flex-wrap items-center gap-2 text-sm">
-                      <b className="text-slate-800">
-                        {h.new_status || h.event}
-                      </b>
-                      {h.new_payment_status &&
-                        h.new_payment_status !== h.previous_payment_status && (
-                          <ShopBadge text={h.new_payment_status} />
-                        )}
-                      <span className="text-xs text-slate-400">
-                        {shopDt(h.created_at)} · {h.actor_name || h.actor_type}
-                      </span>
+              {items.length === 0 && (
+                <p className="cn-detail-empty">No order items found.</p>
+              )}
+            </section>
+            <div className="cn-detail-finance">
+              <section className="cb-surface cn-detail-block">
+                <h2 className="cn-detail-block-title">Order summary</h2>
+                <dl className="shop-detail-summary">
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">Subtotal</dt>
+                    <dd>{money(o.subtotal)}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">Discount</dt>
+                    <dd>−{money(o.discount_total)}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">Delivery fee</dt>
+                    <dd>{money(o.delivery_fee)}</dd>
+                  </div>
+                  <div className="flex justify-between border-t border-slate-200 pt-1 font-extrabold">
+                    <dt>Total</dt>
+                    <dd>{money(o.total_amount)}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-slate-500">Paid</dt>
+                    <dd>{money(o.paid_amount)}</dd>
+                  </div>
+                  {Number(o.refunded_amount) > 0 && (
+                    <div className="flex justify-between text-red-600">
+                      <dt>Refunded</dt>
+                      <dd>{money(o.refunded_amount)}</dd>
                     </div>
-                    {h.note && (
-                      <div className="text-sm text-slate-600">{h.note}</div>
-                    )}
-                    {h.internal_note && (
-                      <div className="text-xs text-amber-700">
-                        Internal: {h.internal_note}
+                  )}
+                </dl>
+              </section>
+              <div className="cb-surface cn-detail-block">
+                <h2 className="cn-detail-block-title">Payment & refund</h2>
+                <div className="flex flex-wrap items-center gap-2 my-4">
+                  <ShopBadge text={o.payment_status} />
+                </div>
+                <dl className="shop-detail-payment-totals">
+                  <div>
+                    <dt>Paid</dt>
+                    <dd>{money(o.paid_amount)}</dd>
+                  </div>
+                  <div>
+                    <dt>Refunded</dt>
+                    <dd>{money(o.refunded_amount || 0)}</dd>
+                  </div>
+                </dl>
+                <div className="space-y-2 text-sm text-slate-600 mt-4">
+                  <div>Paid at: {shopDt(o.paid_at)}</div>
+                  {o.accepted_by_name && (
+                    <div>
+                      Accepted by <b>{o.accepted_by_name}</b> ·{" "}
+                      {shopDt(o.accepted_at)}
+                    </div>
+                  )}
+                  {o.rejected_by_name && (
+                    <div>
+                      Rejected by <b>{o.rejected_by_name}</b> ·{" "}
+                      {shopDt(o.rejected_at)}
+                    </div>
+                  )}
+                  {o.reject_reason && (
+                    <div className="text-red-600">
+                      Reason: {o.reject_reason}
+                    </div>
+                  )}
+                  {o.cancel_reason && (
+                    <div>Cancel reason: {o.cancel_reason}</div>
+                  )}
+                  {refunds.map((r) => (
+                    <div
+                      key={r.id}
+                      className="rounded-lg bg-red-50 p-2 text-xs text-red-700"
+                    >
+                      Refund {money(r.amount)} · {r.status} ·{" "}
+                      {shopDt(r.processed_at)} · by {r.processed_by_name || "—"}
+                      <div className="text-red-500">
+                        Credited to wallet:{" "}
+                        {r.wallet_transaction_id ? "yes" : "no"}
                       </div>
-                    )}
-                  </li>
-                ))}
-              </ol>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
-
-          <div className="space-y-4">
-            <div className={SHOP_CARD}>
-              <h2 className="mb-2 text-sm font-extrabold text-slate-800">
-                Customer
-              </h2>
-              <div className="text-sm font-semibold text-slate-800">
-                {o.customers?.name || "—"}
-              </div>
-              <div className="text-xs text-slate-500">
-                {o.customers?.customer_code}{" "}
-                {o.customers?.phone ? `· ${o.customers.phone}` : ""}
-              </div>
-              {o.customer_note && (
-                <p className="mt-3 rounded-lg bg-slate-50 p-2 text-sm text-slate-600">
-                  “{o.customer_note}”
-                </p>
-              )}
-            </div>
-            <div className={SHOP_CARD}>
-              <h2 className="mb-2 text-sm font-extrabold text-slate-800">
-                {isPickup ? "Pickup" : "Delivery"}
-              </h2>
-              {isPickup ? (
-                pk ? (
-                  <div className="text-sm text-slate-600">
-                    <div className="font-semibold text-slate-800">
-                      {pk.name}
-                    </div>
-                    <div>{pk.address}</div>
-                    {pk.hours && (
-                      <div className="text-xs text-slate-400">{pk.hours}</div>
-                    )}
-                    <ShopMapLink pk={pk} />
-                  </div>
-                ) : (
-                  <span className="text-sm text-slate-400">—</span>
-                )
-              ) : (
-                <div className="text-sm text-slate-600">
-                  <div className="font-semibold text-slate-800">
-                    {o.recipient_name}
-                  </div>
-                  <div>{o.recipient_phone}</div>
-                  {addr && (
-                    <div className="mt-1">
-                      {[
-                        addr.address,
-                        addr.commune,
-                        addr.district,
-                        addr.province,
-                      ]
-                        .filter(Boolean)
-                        .join(", ")}
-                      {addr.additional_info && (
-                        <div className="text-xs text-slate-400">
-                          {addr.additional_info}
+          <div
+            id="shop-detail-panel-history"
+            role="tabpanel"
+            aria-labelledby="shop-detail-tab-history"
+            hidden={detailTab !== "history"}
+            tabIndex={0}
+          >
+            <section className="cb-surface cn-detail-block">
+              <h2 className="cn-detail-block-title">History &amp; activity</h2>
+              <div className="pt-4">
+                <ol className="space-y-3">
+                  {hist.map((h) => (
+                    <li key={h.id} className="border-l-2 border-slate-200 pl-3">
+                      <div className="flex flex-wrap items-center gap-2 text-sm">
+                        <b className="text-slate-800">
+                          {h.new_status || h.event}
+                        </b>
+                        {h.new_payment_status &&
+                          h.new_payment_status !==
+                            h.previous_payment_status && (
+                            <ShopBadge text={h.new_payment_status} />
+                          )}
+                        <span className="text-xs text-slate-400">
+                          {shopDt(h.created_at)} ·{" "}
+                          {h.actor_name || h.actor_type}
+                        </span>
+                      </div>
+                      {h.note && (
+                        <div className="text-sm text-slate-600">{h.note}</div>
+                      )}
+                      {h.internal_note && (
+                        <div className="text-xs text-amber-700">
+                          Internal: {h.internal_note}
                         </div>
                       )}
-                    </div>
-                  )}
-                  {o.delivery_person && (
-                    <div className="mt-2 text-xs">
-                      Driver: <b>{o.delivery_person}</b>
-                    </div>
-                  )}
-                </div>
-              )}
-              {o.handover_note && (
-                <div className="mt-2 text-xs text-slate-500">
-                  Handover: {o.handover_note}
-                </div>
-              )}
-            </div>
-            <div className={SHOP_CARD}>
-              <h2 className="mb-2 text-sm font-extrabold text-slate-800">
-                Payment & refund
-              </h2>
-              <div className="space-y-1 text-sm text-slate-600">
-                <div>Paid at: {shopDt(o.paid_at)}</div>
-                {o.accepted_by_name && (
-                  <div>
-                    Accepted by <b>{o.accepted_by_name}</b> ·{" "}
-                    {shopDt(o.accepted_at)}
-                  </div>
+                    </li>
+                  ))}
+                </ol>
+                {hist.length === 0 && (
+                  <p className="cn-detail-empty">No activity recorded yet.</p>
                 )}
-                {o.rejected_by_name && (
-                  <div>
-                    Rejected by <b>{o.rejected_by_name}</b> ·{" "}
-                    {shopDt(o.rejected_at)}
-                  </div>
-                )}
-                {o.reject_reason && (
-                  <div className="text-red-600">Reason: {o.reject_reason}</div>
-                )}
-                {o.cancel_reason && <div>Cancel reason: {o.cancel_reason}</div>}
-                {refunds.map((r) => (
-                  <div
-                    key={r.id}
-                    className="rounded-lg bg-red-50 p-2 text-xs text-red-700"
-                  >
-                    Refund {money(r.amount)} · {r.status} ·{" "}
-                    {shopDt(r.processed_at)} · by {r.processed_by_name || "—"}
-                    <div className="text-red-500">
-                      Credited to wallet:{" "}
-                      {r.wallet_transaction_id ? "yes" : "no"}
-                    </div>
-                  </div>
-                ))}
               </div>
-            </div>
-            {o.internal_note && (
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-                <div className="mb-1 text-xs font-bold uppercase">
-                  Internal note
-                </div>
-                {o.internal_note}
-              </div>
-            )}
+            </section>
           </div>
         </div>
         {d && (
