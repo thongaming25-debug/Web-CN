@@ -72322,88 +72322,814 @@ function ShopKpi({ label, value, hint, tone, sub, to }) {
   );
 }
 
+// Shop dashboard: all reporting dates use Phnom Penh calendar days.
+const SHOP_DASH_TZ = "Asia/Phnom_Penh";
+function shopDashToday(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: SHOP_DASH_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const get = (type) => parts.find((p) => p.type === type)?.value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+function shopDashAddDay(day, n) {
+  const date = new Date(`${day}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + n);
+  return date.toISOString().slice(0, 10);
+}
+function shopDashValidDay(day) {
+  return (
+    /^\d{4}-\d{2}-\d{2}$/.test(day) &&
+    Number.isFinite(Date.parse(`${day}T00:00:00Z`)) &&
+    new Date(`${day}T00:00:00Z`).toISOString().slice(0, 10) === day
+  );
+}
+function shopDashPreset(key, today = shopDashToday()) {
+  return {
+    from:
+      key === "today"
+        ? today
+        : key === "month"
+          ? `${today.slice(0, 7)}-01`
+          : shopDashAddDay(today, key === "7d" ? -6 : -29),
+    to: today,
+  };
+}
+function shopDashRange(dates) {
+  if (
+    !shopDashValidDay(dates.from) ||
+    !shopDashValidDay(dates.to) ||
+    dates.from > dates.to
+  )
+    return null;
+  return {
+    from: new Date(`${dates.from}T00:00:00+07:00`).toISOString(),
+    to: new Date(`${shopDashAddDay(dates.to, 1)}T00:00:00+07:00`).toISOString(),
+    todayFrom: new Date(`${shopDashToday()}T00:00:00+07:00`).toISOString(),
+  };
+}
+function ShopDashboardDatePicker({ dates, onApply }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(dates);
+  const root = useRef(null);
+  const trigger = useRef(null);
+  const firstInput = useRef(null);
+  const valid =
+    shopDashValidDay(draft.from) &&
+    shopDashValidDay(draft.to) &&
+    draft.from <= draft.to;
+  useEffect(() => {
+    if (!open) return;
+    firstInput.current?.focus();
+    const close = (event) => {
+      if (!root.current?.contains(event.target)) setOpen(false);
+    };
+    const escape = (event) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        trigger.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+  function apply(value) {
+    onApply(value);
+    setOpen(false);
+    trigger.current?.focus();
+  }
+  return (
+    <div className="sd-date" ref={root}>
+      <span className="sd-control-label">Select date</span>
+      <button
+        ref={trigger}
+        type="button"
+        className="sd-date-trigger"
+        aria-expanded={open}
+        aria-haspopup="dialog"
+        onClick={() => {
+          setDraft(dates);
+          setOpen((v) => !v);
+        }}
+      >
+        <Icons.CalendarDays size={17} />
+        <span>{dates.from}</span>
+        <span className="sd-muted">—</span>
+        <span>{dates.to}</span>
+        <Icons.ChevronDown size={15} />
+      </button>
+      {open && (
+        <div
+          className="sd-date-popover"
+          role="dialog"
+          aria-label="Select reporting date range"
+        >
+          <div className="sd-popover-title">
+            <strong>Date range</strong>
+            <button
+              type="button"
+              aria-label="Close date picker"
+              onClick={() => {
+                setOpen(false);
+                trigger.current?.focus();
+              }}
+            >
+              <Icons.X size={17} />
+            </button>
+          </div>
+          <div className="sd-presets">
+            {SHOP_PRESETS.filter(([key]) => key !== "custom").map(
+              ([key, label]) => (
+                <button
+                  type="button"
+                  key={key}
+                  onClick={() => setDraft(shopDashPreset(key))}
+                >
+                  {label}
+                </button>
+              ),
+            )}
+          </div>
+          <div className="sd-date-fields">
+            <label>
+              Start date
+              <input
+                ref={firstInput}
+                type="date"
+                value={draft.from}
+                max={draft.to || undefined}
+                onChange={(event) =>
+                  setDraft((v) => ({ ...v, from: event.target.value }))
+                }
+              />
+            </label>
+            <label>
+              End date
+              <input
+                type="date"
+                value={draft.to}
+                min={draft.from || undefined}
+                onChange={(event) =>
+                  setDraft((v) => ({ ...v, to: event.target.value }))
+                }
+              />
+            </label>
+          </div>
+          {!valid && (
+            <p className="sd-date-error" role="alert">
+              Choose valid dates. The end date must be on or after the start
+              date.
+            </p>
+          )}
+          <p className="sd-muted sd-small">
+            Both dates included · Phnom Penh (UTC+7)
+          </p>
+          <div className="sd-date-footer">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                trigger.current?.focus();
+              }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="sd-primary"
+              disabled={!valid}
+              onClick={() => apply(draft)}
+            >
+              Apply dates
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+// Preserve the report's order-created cohort. Refunds are not grouped by refund date.
+function shopDashPoints(rows, dates) {
+  const dayCount =
+    Math.round(
+      (Date.parse(`${dates.to}T00:00:00Z`) -
+        Date.parse(`${dates.from}T00:00:00Z`)) /
+        86400000,
+    ) + 1;
+  const monthly = dayCount > 366;
+  const weekly = !monthly && dayCount > 62;
+  const buckets = new Map();
+  function keyOf(day) {
+    if (monthly) return day.slice(0, 7) + "-01";
+    if (weekly) {
+      const offset = Math.floor(
+        (Date.parse(`${day}T00:00:00Z`) -
+          Date.parse(`${dates.from}T00:00:00Z`)) /
+          86400000,
+      );
+      return shopDashAddDay(dates.from, Math.floor(offset / 7) * 7);
+    }
+    return day;
+  }
+  if (monthly) {
+    for (let day = dates.from.slice(0, 7) + "-01"; day <= dates.to; ) {
+      buckets.set(day, {
+        key: day,
+        from: day < dates.from ? dates.from : day,
+        to: dates.to,
+        collected: 0,
+        refunded: 0,
+        net: 0,
+        orders: 0,
+      });
+      const next = new Date(`${day}T00:00:00Z`);
+      next.setUTCMonth(next.getUTCMonth() + 1);
+      const nextDay = next.toISOString().slice(0, 10);
+      buckets.get(day).to =
+        shopDashAddDay(nextDay, -1) < dates.to
+          ? shopDashAddDay(nextDay, -1)
+          : dates.to;
+      day = nextDay;
+    }
+  } else {
+    for (
+      let day = dates.from;
+      day <= dates.to;
+      day = shopDashAddDay(day, weekly ? 7 : 1)
+    )
+      buckets.set(day, {
+        key: day,
+        from: day,
+        to:
+          weekly && shopDashAddDay(day, 6) < dates.to
+            ? shopDashAddDay(day, 6)
+            : weekly
+              ? dates.to
+              : day,
+        collected: 0,
+        refunded: 0,
+        net: 0,
+        orders: 0,
+      });
+  }
+  const numeric = (value) =>
+    Number.isFinite(Number(value)) ? Number(value) : 0;
+  rows.forEach((row) => {
+    const day = String(row.key || row.label || "").slice(0, 10);
+    if (!shopDashValidDay(day) || day < dates.from || day > dates.to) return;
+    const bucket = buckets.get(keyOf(day));
+    if (!bucket) return;
+    bucket.collected += numeric(row.collected);
+    bucket.refunded += numeric(row.refunded);
+    bucket.net +=
+      row.net_collected == null
+        ? numeric(row.collected) - numeric(row.refunded)
+        : numeric(row.net_collected);
+    bucket.orders += numeric(row.orders);
+  });
+  return {
+    points: [...buckets.values()],
+    grouping: monthly ? "Monthly" : weekly ? "Weekly" : "Daily",
+  };
+}
+function ShopDashboardChart({ rows, dates, loading, error, onDates }) {
+  const [view, setView] = useState("chart");
+  const [hovered, setHovered] = useState(null);
+  const [pinned, setPinned] = useState(null);
+  const activeIndex = hovered ?? pinned;
+  const { points, grouping } = useMemo(
+    () => shopDashPoints(rows, dates),
+    [rows, dates],
+  );
+  useEffect(() => {
+    setHovered(null);
+    setPinned(null);
+  }, [rows, dates]);
+  const W = Math.max(860, points.length * 24),
+    H = 340,
+    left = 76,
+    right = 20,
+    top = 25,
+    bottom = 42;
+  const positive = Math.max(0, ...points.map((p) => p.collected));
+  const negative = Math.max(0, ...points.map((p) => p.refunded));
+  const niceStep = (value) => {
+    const power = 10 ** Math.floor(Math.log10(value || 1));
+    const n = value / power;
+    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * power;
+  };
+  const step = niceStep(Math.max(positive, negative, 1) / 4);
+  const hi = Math.max(step, Math.ceil(positive / step) * step);
+  const lo = negative > 0 ? -Math.ceil(negative / step) * step : 0;
+  const y = (value) => top + ((hi - value) / (hi - lo)) * (H - top - bottom);
+  const zero = y(0),
+    slot = (W - left - right) / Math.max(points.length, 1),
+    barWidth = Math.max(4, Math.min(30, slot * 0.64));
+  const ticks = [];
+  for (let value = lo; value <= hi + step / 10; value += step)
+    ticks.push(value);
+  const active = activeIndex == null ? null : points[activeIndex];
+  const shortDate = (date) =>
+    new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "2-digit",
+      timeZone: "UTC",
+    }).format(new Date(`${date}T00:00:00Z`));
+  const tableTotals = points.reduce(
+    (t, p) => ({
+      collected: t.collected + p.collected,
+      refunded: t.refunded + p.refunded,
+      net: t.net + p.net,
+      orders: t.orders + p.orders,
+    }),
+    { collected: 0, refunded: 0, net: 0, orders: 0 },
+  );
+  return (
+    <section className="sd-panel sd-activity" aria-label="Shop sales activity">
+      <div className="sd-chart-header">
+        <div>
+          <h2>Sales activity</h2>
+          <p>
+            Collected amounts and refunds for orders placed in the selected
+            dates.
+          </p>
+        </div>
+        <div className="sd-chart-controls">
+          <div
+            className="sd-view-switch"
+            role="group"
+            aria-label="Activity view"
+          >
+            {["chart", "table"].map((value) => (
+              <button
+                type="button"
+                key={value}
+                aria-pressed={view === value}
+                onClick={() => setView(value)}
+              >
+                {value === "chart" ? (
+                  <Icons.ChartColumn size={15} />
+                ) : (
+                  <Icons.Table2 size={15} />
+                )}
+                {value === "chart" ? "Chart View" : "Table View"}
+              </button>
+            ))}
+          </div>
+          <ShopDashboardDatePicker dates={dates} onApply={onDates} />
+        </div>
+      </div>
+      <div className="sd-chart-meta">
+        <span>{grouping} · Phnom Penh time (UTC+7)</span>
+        <div className="sd-legend">
+          <span>
+            <i className="sd-blue-dot" />
+            Collected
+          </span>
+          <span>
+            <i className="sd-orange-dot" />
+            Refunded
+          </span>
+        </div>
+      </div>
+      {error ? (
+        <div role="alert" className="sd-empty">
+          {error}
+        </div>
+      ) : loading ? (
+        <div className="sd-chart-loading" role="status">
+          Loading sales activity…
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="sd-empty">
+          <Icons.ChartNoAxesColumn size={32} />
+          <strong>No orders in this period</strong>
+          <span>Choose another date range to see sales activity.</span>
+        </div>
+      ) : view === "table" ? (
+        <div
+          className="sd-table-scroll"
+          tabIndex={0}
+          role="region"
+          aria-label="Sales activity table"
+        >
+          <table>
+            <thead>
+              <tr>
+                {[
+                  "Order date",
+                  "Collected",
+                  "Refunded",
+                  "Net collected",
+                  "Orders",
+                ].map((label) => (
+                  <th key={label} scope="col">
+                    {label}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {points.map((p) => (
+                <tr key={p.key}>
+                  <th scope="row">
+                    {p.from === p.to ? p.from : `${p.from} – ${p.to}`}
+                  </th>
+                  <td>{money(p.collected)}</td>
+                  <td>{money(p.refunded)}</td>
+                  <td>{money(p.net)}</td>
+                  <td>{p.orders.toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <th scope="row">Total</th>
+                <td>{money(tableTotals.collected)}</td>
+                <td>{money(tableTotals.refunded)}</td>
+                <td>{money(tableTotals.net)}</td>
+                <td>{tableTotals.orders.toLocaleString()}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      ) : (
+        <>
+          <div className="sd-chart-wrap" onMouseLeave={() => setHovered(null)}>
+            <div
+              className="sd-chart-scroll"
+              tabIndex={0}
+              role="region"
+              aria-label="Sales activity chart, scroll horizontally if needed"
+            >
+              <div className="sd-chart-canvas" style={{ minWidth: W }}>
+                <svg
+                  viewBox={`0 0 ${W} ${H}`}
+                  role="group"
+                  aria-label="Collected above zero, refunds below zero. Focus or tap a date to inspect its totals."
+                >
+                  <text x={left} y={14} className="sd-axis">
+                    Amount (USD)
+                  </text>
+                  {ticks.map((value) => (
+                    <g key={value}>
+                      <line
+                        x1={left}
+                        x2={W - right}
+                        y1={y(value)}
+                        y2={y(value)}
+                        className={value === 0 ? "sd-zero" : "sd-grid-line"}
+                      />
+                      <text
+                        x={left - 12}
+                        y={y(value) + 4}
+                        textAnchor="end"
+                        className="sd-axis"
+                      >
+                        {new Intl.NumberFormat("en-US", {
+                          style: "currency",
+                          currency: "USD",
+                          maximumFractionDigits: step < 1 ? 2 : 0,
+                        }).format(value)}
+                      </text>
+                    </g>
+                  ))}
+                  {points.map((p, index) => {
+                    const cx = left + slot * (index + 0.5);
+                    return (
+                      <g
+                        key={p.key}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`${p.from}${p.to !== p.from ? ` to ${p.to}` : ""}: collected ${money(p.collected)}, refunded ${money(p.refunded)}, net ${money(p.net)}, ${p.orders} orders`}
+                        onMouseEnter={() => setHovered(index)}
+                        onFocus={() => setHovered(index)}
+                        onBlur={() => setHovered(null)}
+                        onClick={() => {
+                          setPinned(index);
+                          setHovered(index);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") {
+                            setHovered(null);
+                            setPinned(null);
+                          }
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            setPinned(index);
+                            setHovered(index);
+                          }
+                          if (
+                            event.key === "ArrowRight" ||
+                            event.key === "ArrowLeft"
+                          ) {
+                            event.preventDefault();
+                            const next =
+                              event.key === "ArrowRight"
+                                ? event.currentTarget.nextElementSibling
+                                : event.currentTarget.previousElementSibling;
+                            if (next?.getAttribute("role") === "button")
+                              next.focus();
+                          }
+                        }}
+                      >
+                        <rect
+                          x={cx - slot / 2}
+                          y={top}
+                          width={slot}
+                          height={H - top - bottom}
+                          fill={
+                            activeIndex === index
+                              ? "var(--sd-hover)"
+                              : "transparent"
+                          }
+                        />
+                        {p.collected > 0 && (
+                          <rect
+                            x={cx - barWidth / 2}
+                            y={y(p.collected)}
+                            width={barWidth}
+                            height={zero - y(p.collected)}
+                            rx={4}
+                            fill={activeIndex === index ? "#60a5fa" : "#3b82f6"}
+                          />
+                        )}
+                        {p.refunded > 0 && (
+                          <rect
+                            x={cx - barWidth / 2}
+                            y={zero}
+                            width={barWidth}
+                            height={y(-p.refunded) - zero}
+                            rx={4}
+                            fill="#f59e0b"
+                          />
+                        )}
+                        {(index % Math.max(1, Math.ceil(points.length / 12)) ===
+                          0 ||
+                          index === points.length - 1) && (
+                          <text
+                            x={cx}
+                            y={H - 14}
+                            textAnchor="middle"
+                            className="sd-axis"
+                          >
+                            {shortDate(p.from)}
+                          </text>
+                        )}
+                      </g>
+                    );
+                  })}
+                </svg>
+              </div>
+            </div>
+            {active && (
+              <div
+                className="sd-chart-tooltip"
+                role="status"
+                aria-live="polite"
+                style={{
+                  left: `clamp(12px, ${((left + slot * (activeIndex + 0.5)) / W) * 100}%, calc(100% - 242px))`,
+                  top: "36px",
+                }}
+              >
+                <strong>
+                  {active.from === active.to
+                    ? `${shortDate(active.from)}, ${active.from.slice(0, 4)}`
+                    : `${active.from} – ${active.to}`}
+                </strong>
+                <dl>
+                  <div>
+                    <dt>
+                      <i className="sd-blue-dot" />
+                      Collected
+                    </dt>
+                    <dd>{money(active.collected)}</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <i className="sd-orange-dot" />
+                      Refunded
+                    </dt>
+                    <dd>{money(active.refunded)}</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <i className="sd-ink-dot" />
+                      Net collected
+                    </dt>
+                    <dd>{money(active.net)}</dd>
+                  </div>
+                  <div>
+                    <dt>
+                      <i className="sd-purple-dot" />
+                      Orders
+                    </dt>
+                    <dd>{active.orders.toLocaleString()}</dd>
+                  </div>
+                </dl>
+              </div>
+            )}
+          </div>
+          <p className="sd-chart-help">
+            Hover, tap or focus a bar to view details. Refunds appear below
+            zero.
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+const SHOP_DASHBOARD_CSS = `
+.shop-dashboard{--sd-bg:#fff;--sd-soft:#f8fafc;--sd-border:#e2e8f0;--sd-text:#17243b;--sd-muted:#64748b;--sd-hover:#f1f5f9;min-width:0;color:var(--sd-text);font-family:Inter,"Noto Sans Khmer",system-ui,sans-serif}
+html.cb-admin-dark .shop-dashboard{--sd-bg:#151c2c;--sd-soft:#101827;--sd-border:#2a3549;--sd-text:#f1f5f9;--sd-muted:#94a3b8;--sd-hover:#24334d;color-scheme:dark}
+.shop-dashboard .sd-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:24px}.shop-dashboard .sd-header h1{font-size:28px;font-weight:750;letter-spacing:-.03em}.shop-dashboard .sd-header p{font-size:13px;color:var(--sd-muted);margin-top:6px}
+.shop-dashboard .sd-panel{background:var(--sd-bg);border:1px solid var(--sd-border);border-radius:16px;padding:24px;min-width:0}.shop-dashboard .sd-activity{margin-top:20px}.shop-dashboard .sd-section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:26px 0 12px}.shop-dashboard .sd-section-heading h2{font-size:16px;font-weight:700}.shop-dashboard .sd-section-heading span,.shop-dashboard .sd-muted{color:var(--sd-muted);font-size:12px}
+.shop-dashboard .sd-featured{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}.shop-dashboard .sd-feature{padding:20px;background:var(--sd-bg);border:1px solid var(--sd-border);border-radius:14px;transition:transform .18s ease,box-shadow .18s ease}.shop-dashboard .sd-feature:hover{transform:translateY(-3px);box-shadow:0 8px 24px #0f172a0c}.shop-dashboard .sd-feature-top{display:flex;justify-content:space-between;gap:12px;color:var(--sd-muted);font-size:13px;font-weight:600}.shop-dashboard .sd-feature-icon{display:grid;place-items:center;width:34px;height:34px;background:#eff6ff;color:#2563eb;border-radius:10px;flex-shrink:0}.shop-dashboard .sd-feature strong{font-size:28px;font-weight:750;letter-spacing:-.03em;display:block;margin:6px 0;overflow-wrap:anywhere}.shop-dashboard .sd-feature p{font-size:12px;color:var(--sd-muted)}
+.shop-dashboard .sd-kpi-grid>*,.shop-dashboard .sd-kpi-grid>*>div{min-width:0}.shop-dashboard .sd-kpi-grid>div,.shop-dashboard .sd-kpi-grid>a>div{background:var(--sd-bg);box-shadow:none;border-radius:12px;transition:transform .18s ease,box-shadow .18s ease}.shop-dashboard .sd-kpi-grid>a:hover>div{transform:translateY(-2px);box-shadow:0 5px 18px #0f172a0b}.shop-dashboard .sd-kpi-grid .text-slate-900{color:var(--sd-text)}.shop-dashboard .sd-kpi-grid .text-slate-500{color:var(--sd-muted)}.shop-dashboard .sd-kpi-grid .border-slate-200{border-color:var(--sd-border)}
+.shop-dashboard .sd-chart-header{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;flex-wrap:wrap}.shop-dashboard .sd-chart-header h2{font-size:20px;font-weight:700}.shop-dashboard .sd-chart-header p{color:var(--sd-muted);font-size:13px;margin-top:6px}.shop-dashboard .sd-chart-controls{display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap}.shop-dashboard .sd-view-switch{display:flex;border:1px solid var(--sd-border);border-radius:9px;overflow:hidden;height:42px}.shop-dashboard .sd-view-switch button{display:flex;align-items:center;gap:6px;padding:0 12px;color:var(--sd-muted);font-size:13px;font-weight:600}.shop-dashboard .sd-view-switch button+button{border-left:1px solid var(--sd-border)}.shop-dashboard .sd-view-switch button[aria-pressed=true]{color:#3b82f6;background:var(--sd-soft)}
+.shop-dashboard .sd-date{position:relative;max-width:100%}.shop-dashboard .sd-control-label{display:block;font-size:12px;font-weight:650;margin-bottom:6px}.shop-dashboard .sd-date-trigger{display:flex;align-items:center;gap:12px;padding:10px 12px;height:42px;border:1px solid var(--sd-border);border-radius:9px;font-size:13px;font-weight:600;background:var(--sd-bg)}.shop-dashboard .sd-date-trigger svg{color:var(--sd-muted);flex-shrink:0}.shop-dashboard .sd-date-popover{position:absolute;right:0;top:100%;margin-top:8px;padding:18px;width:360px;max-width:calc(100vw - 48px);background:var(--sd-bg);border:1px solid var(--sd-border);box-shadow:0 16px 45px #0f172a24;border-radius:14px;z-index:45}.shop-dashboard .sd-popover-title{display:flex;align-items:center;justify-content:space-between;font-size:14px}.shop-dashboard .sd-presets{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0}.shop-dashboard .sd-presets button{border:1px solid var(--sd-border);background:var(--sd-soft);padding:6px 9px;border-radius:6px;font-size:12px}.shop-dashboard .sd-presets button:hover{color:#3b82f6;border-color:#93c5fd}.shop-dashboard .sd-date-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px}.shop-dashboard .sd-date-fields label{font-size:12px;color:var(--sd-muted)}.shop-dashboard .sd-date-fields input{display:block;width:100%;min-width:0;padding:9px 6px;border:1px solid var(--sd-border);border-radius:7px;background:var(--sd-bg);color:var(--sd-text);margin:6px 0 12px;font-size:12px}.shop-dashboard .sd-date-footer{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}.shop-dashboard .sd-date-footer button{padding:8px 12px;border:1px solid var(--sd-border);border-radius:7px;font-size:12px;font-weight:600}.shop-dashboard .sd-date-footer .sd-primary{background:#2563eb;color:white;border-color:#2563eb}.shop-dashboard button:disabled{opacity:.45;cursor:not-allowed}.shop-dashboard .sd-date-error{font-size:12px;color:#dc2626;margin:0 0 12px}
+.shop-dashboard .sd-chart-meta{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:28px 0 12px;font-size:12px;color:var(--sd-muted)}.shop-dashboard .sd-legend{display:flex;gap:16px}.shop-dashboard .sd-legend span,.shop-dashboard .sd-chart-tooltip dt{display:flex;align-items:center;gap:7px}.shop-dashboard i.sd-blue-dot,.shop-dashboard i.sd-orange-dot,.shop-dashboard i.sd-ink-dot,.shop-dashboard i.sd-purple-dot{display:inline-block;width:9px;height:9px;flex-shrink:0;border-radius:3px;background:#3b82f6}.shop-dashboard i.sd-orange-dot{background:#f59e0b}.shop-dashboard i.sd-ink-dot{background:var(--sd-text)}.shop-dashboard i.sd-purple-dot{background:#8b5cf6}.shop-dashboard .sd-chart-wrap{position:relative}.shop-dashboard .sd-refresh{background:var(--sd-bg);color:var(--sd-text);border-color:var(--sd-border);flex-shrink:0}.shop-dashboard .sd-chart-scroll{overflow-x:auto;max-width:100%}.shop-dashboard .sd-chart-canvas{position:relative}.shop-dashboard .sd-chart-canvas svg{display:block;width:100%;height:auto}.shop-dashboard .sd-axis{fill:var(--sd-muted);font-size:11px}.shop-dashboard .sd-grid-line{stroke:var(--sd-border);stroke-width:.6}.shop-dashboard .sd-zero{stroke:var(--sd-border);stroke-width:1.4}.shop-dashboard .sd-chart-tooltip{position:absolute;pointer-events:none;width:230px;border:1px solid var(--sd-border);border-radius:10px;background:var(--sd-bg);box-shadow:0 5px 20px #0f172a28;padding:16px;font-size:13px;z-index:2}.shop-dashboard .sd-chart-tooltip strong{display:block;margin-bottom:12px}.shop-dashboard .sd-chart-tooltip dl{display:grid;gap:8px}.shop-dashboard .sd-chart-tooltip dl>div{display:flex;justify-content:space-between;gap:18px}.shop-dashboard .sd-chart-tooltip dt{color:var(--sd-muted)}.shop-dashboard .sd-chart-tooltip dd{font-weight:700;font-variant-numeric:tabular-nums}.shop-dashboard .sd-chart-help{font-size:11px;color:var(--sd-muted);margin-top:10px}.shop-dashboard .sd-empty,.shop-dashboard .sd-chart-loading{min-height:280px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center;color:var(--sd-muted);font-size:13px}.shop-dashboard .sd-chart-loading{background:var(--sd-soft);border-radius:12px}.shop-dashboard .sd-table-scroll{overflow:auto;max-height:380px}.shop-dashboard .sd-table-scroll table{width:100%;min-width:650px;border-collapse:collapse;font-size:13px}.shop-dashboard .sd-table-scroll th,.shop-dashboard .sd-table-scroll td{padding:12px 16px;text-align:right;border-bottom:1px solid var(--sd-border);font-variant-numeric:tabular-nums}.shop-dashboard .sd-table-scroll th:first-child{text-align:left}.shop-dashboard .sd-table-scroll thead,.shop-dashboard .sd-table-scroll tfoot{background:var(--sd-soft)}.shop-dashboard .sd-table-scroll thead{position:sticky;top:0}.shop-dashboard .sd-table-scroll tfoot{font-weight:700}.shop-dashboard .sd-definitions{margin-top:20px;color:var(--sd-muted);font-size:13px}.shop-dashboard .sd-definitions summary{color:var(--sd-text);font-weight:650;cursor:pointer}
+.shop-dashboard button:focus-visible,.shop-dashboard a:focus-visible,.shop-dashboard input:focus-visible,.shop-dashboard [tabindex]:focus-visible{outline:2px solid #3b82f6;outline-offset:3px}.shop-dashboard svg [role=button]:focus-visible{outline:none}.shop-dashboard svg [role=button]:focus-visible>rect:first-child{stroke:#3b82f6;stroke-width:1.5}.shop-dashboard .sd-error{border:1px solid #fecaca;background:#fef2f2;color:#b91c1c;border-radius:10px;padding:14px;font-size:13px;margin-bottom:16px}
+html.cb-admin-dark .shop-dashboard .sd-feature-icon{background:#1e3a5f;color:#93c5fd}
+@media(max-width:1023px){.shop-dashboard .sd-featured{grid-template-columns:repeat(2,minmax(0,1fr))}.shop-dashboard .sd-chart-controls{justify-content:space-between;width:100%}}
+@media(max-width:639px){.shop-dashboard .sd-panel{padding:16px;border-radius:12px}.shop-dashboard .sd-featured{gap:10px}.shop-dashboard .sd-feature{padding:14px}.shop-dashboard .sd-feature strong{font-size:23px}.shop-dashboard .sd-feature-top{font-size:12px}.shop-dashboard .sd-feature-icon{width:28px;height:28px}.shop-dashboard .sd-header h1{font-size:24px}.shop-dashboard .sd-chart-controls{gap:12px}.shop-dashboard .sd-date,.shop-dashboard .sd-date-trigger{width:100%}.shop-dashboard .sd-date-trigger{justify-content:space-between;gap:6px;font-size:12px}.shop-dashboard .sd-section-heading{align-items:flex-start;flex-direction:column;gap:4px}.shop-dashboard .sd-date-popover{width:100%;max-width:none}.shop-dashboard .sd-chart-meta{margin-top:20px}}
+@media(prefers-reduced-motion:reduce){.shop-dashboard .sd-feature,.shop-dashboard .sd-kpi-grid>a>div{transition:none;transform:none!important}}
+`;
+
 function ShopDashboardPage() {
-  const rg = useShopRange("30d");
+  const [dates, setDates] = useState(() => shopDashPreset("30d"));
+  const range = useMemo(() => shopDashRange(dates), [dates]);
   const [k, setK] = useState(null);
   const [days, setDays] = useState([]);
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
   const [reload, setReload] = useState(0);
   useEffect(() => {
-    if (!rg.range) return;
     let alive = true;
+    if (!range) {
+      setErr("Choose a valid date range.");
+      setK(null);
+      setDays([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    setErr("");
+    setK(null);
+    setDays([]);
     (async () => {
-      const [a, b] = await Promise.all([
-        supabase.rpc("shop_dashboard_kpis", {
-          p_from: rg.range.from,
-          p_to: rg.range.to,
-          p_today_from: rg.range.todayFrom,
-        }),
-        supabase.rpc("shop_sales_report", {
-          p_from: rg.range.from,
-          p_to: rg.range.to,
-          p_group: "day",
-          p_tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        }),
-      ]);
-      if (!alive) return;
-      if (a.error) setErr(shopErr(a.error));
-      else {
-        setErr("");
+      try {
+        const [a, b] = await Promise.all([
+          supabase.rpc("shop_dashboard_kpis", {
+            p_from: range.from,
+            p_to: range.to,
+            p_today_from: new Date(
+              `${shopDashToday()}T00:00:00+07:00`,
+            ).toISOString(),
+          }),
+          supabase.rpc("shop_sales_report", {
+            p_from: range.from,
+            p_to: range.to,
+            p_group: "day",
+            p_tz: SHOP_DASH_TZ,
+          }),
+        ]);
+        if (!alive) return;
+        if (a.error || b.error) throw new Error(shopErr(a.error || b.error));
+        if (!a.data)
+          throw new Error("Dashboard data is unavailable. Please refresh.");
         setK(a.data);
         setDays(b.data?.rows || []);
+      } catch (error) {
+        if (alive) {
+          setErr(
+            error?.message ||
+              "Unable to load dashboard data. Please try again.",
+          );
+          setK(null);
+          setDays([]);
+        }
+      } finally {
+        if (alive) setLoading(false);
       }
-      setLoading(false);
     })();
     return () => {
       alive = false;
     };
-  }, [rg.range, reload]);
-  const maxBar = Math.max(
-    1,
-    ...days.map((d) => Math.max(Number(d.net_collected), 0)),
-  );
+  }, [range, reload]);
   const profitEst = k && !k.profit_complete;
+  const featured = k
+    ? [
+        {
+          label: "Net collected",
+          value: money(k.net_collected),
+          note: "Collected minus refunds",
+          icon: Icons.Wallet,
+        },
+        {
+          label: "Orders placed",
+          value: Number(k.orders_placed || 0).toLocaleString(),
+          note: "Orders created in this period",
+          icon: Icons.ShoppingBag,
+        },
+        {
+          label: "Total collected",
+          value: money(k.collected),
+          note: "Before refunds",
+          icon: Icons.CreditCard,
+        },
+        {
+          label: profitEst ? "Gross profit · estimate" : "Gross profit",
+          value: k.gross_profit == null ? "—" : money(k.gross_profit),
+          note: profitEst
+            ? `${k.cost_missing_items} completed item(s) have no cost — profit is overstated`
+            : "Completed product sales minus COGS",
+          icon: Icons.TrendingUp,
+        },
+      ]
+    : [];
   return (
     <ShopGate perm="shop.report" title="the Shop dashboard">
-      <div className="mx-auto max-w-7xl">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h1 className="cb-page-title text-2xl font-extrabold text-slate-900">
-            Shop Dashboard
-          </h1>
+      <div className="shop-dashboard">
+        <style>{SHOP_DASHBOARD_CSS}</style>
+        <header className="sd-header">
+          <div>
+            <h1>Shop Dashboard</h1>
+            <p>
+              Sales performance, order operations and inventory at a glance.
+            </p>
+          </div>
           <button
             type="button"
-            className={SHOP_BTN_GHOST}
+            className={`${SHOP_BTN_GHOST} sd-refresh`}
+            disabled={loading}
             onClick={() => setReload((n) => n + 1)}
           >
             <Icons.RefreshCw
               size={15}
               className={loading ? "animate-spin" : ""}
-            />{" "}
+            />
             Refresh
           </button>
-        </div>
-        <ShopRangePicker {...rg} />
-        {!rg.range && (
-          <p className="mt-3 text-sm font-semibold text-red-600">
-            Choose a valid From / To date.
-          </p>
-        )}
+        </header>
         {err && (
-          <p
-            role="alert"
-            className="mt-3 rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-700"
-          >
+          <div className="sd-error" role="alert">
             {err}
-          </p>
+          </div>
         )}
+        <div className="sd-section-heading">
+          <h2>Performance overview</h2>
+          <span>
+            {dates.from} — {dates.to} · Selected period
+          </span>
+        </div>
+        <div className="sd-featured" aria-busy={loading}>
+          {featured.map(({ label, value, note, icon: Icon }) => (
+            <article key={label} className="sd-feature">
+              <div className="sd-feature-top">
+                <span>{label}</span>
+                <span className="sd-feature-icon">
+                  <Icon size={18} />
+                </span>
+              </div>
+              <strong>{value}</strong>
+              <p>{note}</p>
+            </article>
+          ))}
+          {!k &&
+            [
+              "Net collected",
+              "Orders placed",
+              "Total collected",
+              "Gross profit",
+            ].map((label) => (
+              <article key={label} className="sd-feature">
+                <div className="sd-feature-top">{label}</div>
+                <strong>—</strong>
+                <p>{loading ? "Loading…" : "Unavailable"}</p>
+              </article>
+            ))}
+        </div>
+        <ShopDashboardChart
+          rows={days}
+          dates={dates}
+          loading={loading}
+          error={err}
+          onDates={setDates}
+        />
         {k && (
           <>
-            <h2 className="mb-2 mt-5 text-sm font-extrabold text-slate-700">
-              Needs attention now
-            </h2>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="sd-section-heading">
+              <h2>Order operations</h2>
+              <span>Live status · Not limited to selected dates</span>
+            </div>
+            <div className="sd-kpi-grid grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <ShopKpi
                 label="Today's orders"
                 value={k.today_orders}
@@ -72447,10 +73173,12 @@ function ShopDashboardPage() {
                 tone={k.refund_pending ? "bad" : ""}
               />
             </div>
-            <h2 className="mb-2 mt-5 text-sm font-extrabold text-slate-700">
-              Stock alerts
-            </h2>
-            <div className="grid gap-3 sm:grid-cols-3">
+
+            <div className="sd-section-heading">
+              <h2>Inventory health</h2>
+              <span>Current stock levels</span>
+            </div>
+            <div className="sd-kpi-grid grid gap-3 sm:grid-cols-3">
               <ShopKpi
                 label="Low-stock variants"
                 value={k.low_stock_variants}
@@ -72470,18 +73198,15 @@ function ShopDashboardPage() {
               />
               <ShopKpi label="Active variants" value={k.variants_total} />
             </div>
-            <h2 className="mb-1 mt-5 text-sm font-extrabold text-slate-700">
-              Money — orders placed in the selected dates
-            </h2>
-            <p className="mb-2 text-xs text-slate-400">
-              Each order is counted once. Hover a card for its definition.
-            </p>
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <ShopKpi
-                label="Orders placed"
-                value={k.orders_placed}
-                hint="Every order created in the period, any status"
-              />
+
+            <div className="sd-section-heading">
+              <h2>Sales &amp; payment breakdown</h2>
+              <span>
+                Orders placed in the selected period · Hover cards for
+                definitions
+              </span>
+            </div>
+            <div className="sd-kpi-grid grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <ShopKpi
                 label="Completed orders"
                 value={k.completed_orders}
@@ -72504,19 +73229,9 @@ function ShopDashboardPage() {
                 hint="Orders still waiting for payment. NOT revenue"
               />
               <ShopKpi
-                label="Total collected"
-                value={money(k.collected)}
-                hint="Money received from customer wallets (before refunds)"
-              />
-              <ShopKpi
                 label="Refunds"
                 value={money(k.refunded)}
                 hint="Money returned to customer wallets"
-              />
-              <ShopKpi
-                label="Net collected"
-                value={money(k.net_collected)}
-                hint="Collected − Refunds"
               />
               <ShopKpi
                 label="Product sales"
@@ -72533,62 +73248,15 @@ function ShopDashboardPage() {
                 value={money(k.cogs)}
                 hint="Completed items: cost snapshot × quantity (items with a known cost only)"
               />
-              <ShopKpi
-                label={profitEst ? "Gross profit (estimate)" : "Gross profit"}
-                value={k.gross_profit == null ? "—" : money(k.gross_profit)}
-                tone={profitEst ? "warn" : ""}
-                sub={
-                  profitEst
-                    ? `${k.cost_missing_items} completed item(s) have no cost — profit is overstated`
-                    : ""
-                }
-                hint="Product sales − COGS"
-              />
             </div>
-            <h2 className="mb-2 mt-5 text-sm font-extrabold text-slate-700">
-              Net collected per day
-            </h2>
-            <div className={`${SHOP_CARD}`}>
-              {days.length === 0 ? (
-                <p className="text-sm text-slate-400">
-                  No orders in this period.
-                </p>
-              ) : days.length > 62 ? (
-                <p className="text-sm text-slate-400">
-                  Pick a shorter period (up to 62 days) to see the daily chart.
-                  Use Sales Reports for the full table.
-                </p>
-              ) : (
-                <div
-                  className="flex h-36 items-end gap-1"
-                  role="img"
-                  aria-label="Net collected per day"
-                >
-                  {days.map((d) => (
-                    <div
-                      key={d.key}
-                      className="group flex min-w-[6px] flex-1 flex-col items-center justify-end"
-                      title={`${d.key}: ${money(d.net_collected)} (${d.orders} orders)`}
-                    >
-                      <div
-                        className="w-full rounded-t bg-blue-500"
-                        style={{
-                          height: `${Math.max(2, (Math.max(Number(d.net_collected), 0) / maxBar) * 100)}%`,
-                        }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <details className="mt-5 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
-              <summary className="cursor-pointer font-bold text-slate-800">
+            <details className="sd-panel sd-definitions">
+              <summary className="cursor-pointer font-bold">
                 How are these numbers calculated?
               </summary>
               <ul className="mt-2 list-disc space-y-1 pl-5">
                 <li>
-                  Every figure covers orders <b>created</b> inside the chosen
-                  dates, so an order is never counted twice.
+                  Performance and sales figures cover orders <b>created</b>{" "}
+                  inside the chosen dates, so an order is never counted twice.
                 </li>
                 <li>
                   <b>Collected</b> is money actually received from a paid order.
@@ -72610,15 +73278,12 @@ function ShopDashboardPage() {
                   deducted.
                 </li>
                 <li>
-                  "Needs attention" and stock numbers are the situation{" "}
+                  "Order operations" and stock numbers are the situation{" "}
                   <b>right now</b>, not limited to the dates.
                 </li>
               </ul>
             </details>
           </>
-        )}
-        {!k && loading && !err && (
-          <p className="mt-6 text-sm text-slate-400">Loading…</p>
         )}
       </div>
     </ShopGate>
