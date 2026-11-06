@@ -374,13 +374,149 @@ html.cb-admin-dark .text-indigo-700{color:#a5b4fc}
 }
 `;
 
+// ------------------------------------------------------------
+// Design System layer (shared PageHeader / FilterBar / AppModal / FormField)
+// Built ON the existing --cbx-* tokens; adds a few missing ones and the
+// light/dark remaps. UI only - no business logic lives here.
+// ------------------------------------------------------------
+const DESIGN_SYSTEM_CSS = `
+:root{
+  --cbx-overlay:rgba(15,23,42,.45);
+  --cbx-modal-shadow:0 24px 64px rgba(15,23,42,.28);
+  --cbx-primary:#2563EB; --cbx-primary-hover:#1D4ED8;
+  --cbx-input-bg:#FFFFFF; --cbx-input-border:#CBD5E1;
+}
+html.cb-admin-dark{
+  --cbx-overlay:rgba(2,6,23,.62);
+  --cbx-modal-shadow:0 24px 64px rgba(0,0,0,.6);
+  --cbx-primary:#3B82F6; --cbx-primary-hover:#60A5FA;
+  --cbx-input-bg:#0f1626; --cbx-input-border:#3a4763;
+}
+
+/* ---- Buttons (extend .cbx-btn) ---- */
+.cbx-btn-primary{ background:var(--cbx-primary); border-color:var(--cbx-primary); color:#fff; }
+.cbx-btn-primary:hover:not(:disabled){ background:var(--cbx-primary-hover); border-color:var(--cbx-primary-hover); }
+.cbx-btn-danger{ background:var(--cbx-danger); border-color:var(--cbx-danger); color:#fff; }
+.cbx-btn-danger:hover:not(:disabled){ filter:brightness(.92); background:var(--cbx-danger); }
+.cbx-btn-success{ background:var(--cbx-success); border-color:var(--cbx-success); color:#fff; }
+.cbx-btn-success:hover:not(:disabled){ filter:brightness(.92); background:var(--cbx-success); }
+.cbx-btn-ghost{ background:transparent; }
+
+/* ---- Form controls ---- */
+.cbx-field{ display:block; min-width:0; }
+.cbx-label{ display:block; margin-bottom:6px; font-size:13px; font-weight:600; color:var(--cbx-text); }
+.cbx-req{ color:var(--cbx-danger); margin-left:2px; }
+.cbx-input{
+  width:100%; min-height:40px; padding:9px 12px; font-size:14px; line-height:1.5;
+  color:var(--cbx-text); background:var(--cbx-input-bg);
+  border:1px solid var(--cbx-input-border); border-radius:10px; outline:none;
+  transition:border-color .12s ease, box-shadow .12s ease;
+}
+.cbx-input::placeholder{ color:var(--cbx-muted); }
+.cbx-input:focus{ border-color:var(--cbx-blue); box-shadow:0 0 0 3px var(--cbx-blue-soft); }
+.cbx-input:disabled{ opacity:.6; cursor:not-allowed; }
+.cbx-field.has-error .cbx-input{ border-color:var(--cbx-danger); }
+.cbx-field-hint{ margin-top:4px; font-size:12px; color:var(--cbx-muted); }
+.cbx-field-error{ margin-top:4px; font-size:12px; color:var(--cbx-danger-text); }
+.cbx-alert{
+  display:flex; align-items:flex-start; gap:8px; padding:10px 12px; border-radius:10px;
+  font-size:13px; line-height:1.5;
+}
+.cbx-alert.is-error{ background:var(--cbx-danger-soft); color:var(--cbx-danger-text); }
+
+/* ---- Modal ---- */
+.cbx-modal-backdrop{
+  position:fixed; inset:0; z-index:120; min-height:100dvh;
+  display:flex; align-items:center; justify-content:center; padding:16px;
+  background:var(--cbx-overlay);
+  -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px);
+}
+.cbx-modal{
+  width:100%; max-height:90dvh; display:flex; flex-direction:column; overflow:hidden;
+  background:var(--cbx-card); color:var(--cbx-text);
+  border:1px solid var(--cbx-border); border-radius:var(--cbx-radius-lg);
+  box-shadow:var(--cbx-modal-shadow);
+  animation:cbx-modal-in .16s ease-out;
+}
+@keyframes cbx-modal-in{ from{ opacity:0; transform:translateY(6px) scale(.985); } to{ opacity:1; transform:none; } }
+.cbx-modal-head{
+  display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
+  padding:16px 20px; border-bottom:1px solid var(--cbx-border); flex-shrink:0;
+}
+.cbx-modal-title{ margin:0; font-size:17px; font-weight:700; line-height:1.4; color:var(--cbx-text); }
+.cbx-modal-title.is-danger{ color:var(--cbx-danger-text); }
+.cbx-modal-sub{ margin-top:2px; font-size:12.5px; color:var(--cbx-muted); }
+.cbx-modal-x{
+  width:32px; height:32px; flex-shrink:0; display:inline-flex; align-items:center; justify-content:center;
+  border:0; border-radius:8px; background:transparent; color:var(--cbx-muted); cursor:pointer;
+}
+.cbx-modal-x:hover{ background:var(--cbx-hover); color:var(--cbx-text); }
+.cbx-modal-x:focus-visible{ outline:2px solid var(--cbx-blue); outline-offset:1px; }
+.cbx-modal-body{ display:flex; flex-direction:column; gap:14px; padding:20px; overflow-y:auto; min-height:0; }
+.cbx-modal-text{ margin:0; font-size:14px; line-height:1.6; color:var(--cbx-text); }
+.cbx-modal-foot{
+  display:flex; align-items:center; justify-content:flex-end; gap:8px; flex-shrink:0;
+  padding:14px 20px; border-top:1px solid var(--cbx-border); background:var(--cbx-page);
+}
+@media (max-width:640px){
+  .cbx-modal-backdrop{ padding:12px; }
+  .cbx-modal-head,.cbx-modal-body,.cbx-modal-foot{ padding-left:16px; padding-right:16px; }
+  .cbx-modal-foot .cbx-btn{ flex:1; justify-content:center; }
+}
+
+/* ---- Page header + breadcrumb ---- */
+.cbx-pagehead{
+  display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:12px 16px;
+}
+.cbx-pagehead-main{ min-width:0; }
+.cbx-crumbs{ display:flex; flex-wrap:wrap; align-items:center; gap:4px; margin-bottom:6px; font-size:12.5px; color:var(--cbx-muted); }
+.cbx-crumbs a{ color:var(--cbx-muted); text-decoration:none; border-radius:4px; }
+.cbx-crumbs a:hover{ color:var(--cbx-blue); text-decoration:underline; }
+.cbx-crumbs a:focus-visible{ outline:2px solid var(--cbx-blue); outline-offset:2px; }
+.cbx-crumbs [aria-current="page"]{ color:var(--cbx-text); font-weight:600; }
+.cbx-pagehead-titlerow{ display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+.cbx-count{
+  display:inline-flex; align-items:center; height:24px; padding:0 10px; border-radius:9999px;
+  background:var(--cbx-blue-soft); color:var(--cbx-side-active-text);
+  font-size:12px; font-weight:700; font-variant-numeric:tabular-nums;
+}
+.cbx-pagehead-actions{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+
+/* ---- Filter bar ---- */
+.cbx-filterbar{
+  display:flex; flex-wrap:wrap; align-items:center; gap:8px;
+}
+.cbx-searchfield{ position:relative; flex:1 1 240px; max-width:380px; min-width:180px; }
+.cbx-searchfield > svg{ position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--cbx-muted); pointer-events:none; }
+.cbx-searchfield .cbx-input{ padding-left:36px; padding-right:34px; }
+.cbx-searchfield-clear{
+  position:absolute; right:6px; top:50%; transform:translateY(-50%);
+  width:26px; height:26px; display:inline-flex; align-items:center; justify-content:center;
+  border:0; border-radius:6px; background:transparent; color:var(--cbx-muted); cursor:pointer;
+}
+.cbx-searchfield-clear:hover{ background:var(--cbx-hover); color:var(--cbx-text); }
+.cbx-filterbar-spacer{ flex:1 1 auto; }
+.cbx-chips{ display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.cbx-filter-chip{
+  display:inline-flex; align-items:center; gap:4px; height:26px; padding:0 4px 0 10px;
+  border-radius:9999px; border:1px solid var(--cbx-border); background:var(--cbx-blue-soft);
+  color:var(--cbx-side-active-text); font-size:12px; font-weight:600;
+}
+.cbx-filter-chip button{
+  width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center;
+  border:0; border-radius:9999px; background:transparent; color:inherit; cursor:pointer;
+}
+.cbx-filter-chip button:hover{ background:var(--cbx-hover); }
+@media (prefers-reduced-motion:reduce){ .cbx-modal{ animation:none; } }
+`;
+
 if (
   typeof document !== "undefined" &&
   !document.getElementById("cbx-design-tokens")
 ) {
   const el = document.createElement("style");
   el.id = "cbx-design-tokens";
-  el.textContent = DESIGN_TOKENS_CSS;
+  el.textContent = DESIGN_TOKENS_CSS + DESIGN_SYSTEM_CSS;
   document.head.appendChild(el);
 }
 
@@ -12453,6 +12589,281 @@ function DataTable({
           )}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// Design System components (shared) - UI only
+// ------------------------------------------------------------
+// FormField: label + required star + error/hint, one look everywhere.
+// Pass the control as children and give it className="cbx-input".
+function FormField({
+  label,
+  required,
+  error,
+  hint,
+  htmlFor,
+  children,
+  className = "",
+}) {
+  return (
+    <div className={`cbx-field ${error ? "has-error" : ""} ${className}`}>
+      {label && (
+        <label className="cbx-label" htmlFor={htmlFor}>
+          {label}
+          {required && (
+            <span className="cbx-req" aria-hidden="true">
+              *
+            </span>
+          )}
+        </label>
+      )}
+      {children}
+      {error ? (
+        <div className="cbx-field-error" role="alert">
+          {error}
+        </div>
+      ) : hint ? (
+        <div className="cbx-field-hint">{hint}</div>
+      ) : null}
+    </div>
+  );
+}
+
+// AppModal: the ONE modal shell (portal + blur backdrop + Esc to close +
+// Label/Required/Error/Cancel-Save in the same positions + busy state).
+// - onSubmit given  -> renders a <form>, footer = Cancel + Save (type=submit)
+// - footer given    -> custom footer (overrides the default buttons)
+function AppModal({
+  title,
+  subtitle,
+  danger = false,
+  maxW = "max-w-md",
+  onClose,
+  onSubmit,
+  error,
+  busy = false,
+  children,
+  footer,
+  cancelLabel = "Cancel",
+  submitLabel = "Save",
+  busyLabel = "Saving...",
+  submitTone = "primary",
+  submitDisabled = false,
+}) {
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  const titleId = useRef(`cbx-modal-${Math.random().toString(36).slice(2, 8)}`);
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key === "Escape" && !busyRef.current) closeRef.current?.();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+  const Wrapper = onSubmit ? "form" : "div";
+  return createPortal(
+    <div
+      className="cbx-modal-backdrop cb-modal-backdrop"
+      onClick={() => {
+        if (!busy) onClose?.();
+      }}
+    >
+      <Wrapper
+        {...(onSubmit ? { onSubmit } : {})}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId.current}
+        onClick={(e) => e.stopPropagation()}
+        className={`cbx-modal ${maxW}`}
+      >
+        <div className="cbx-modal-head">
+          <div className="min-w-0">
+            <h3
+              id={titleId.current}
+              className={`cbx-modal-title ${danger ? "is-danger" : ""}`}
+            >
+              {title}
+            </h3>
+            {subtitle && <p className="cbx-modal-sub">{subtitle}</p>}
+          </div>
+          <button
+            type="button"
+            className="cbx-modal-x"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <Icons.X size={18} />
+          </button>
+        </div>
+        <div className="cbx-modal-body">
+          {error && (
+            <div className="cbx-alert is-error" role="alert">
+              <Icons.TriangleAlert size={15} className="mt-0.5 shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+          {children}
+        </div>
+        {(footer || onSubmit) && (
+          <div className="cbx-modal-foot">
+            {footer || (
+              <>
+                <button type="button" className="cbx-btn" onClick={onClose}>
+                  {cancelLabel}
+                </button>
+                <button
+                  type="submit"
+                  disabled={busy || submitDisabled}
+                  className={`cbx-btn cbx-btn-${submitTone}`}
+                >
+                  {busy && <Icons.Loader2 size={15} className="animate-spin" />}
+                  {busy ? busyLabel : submitLabel}
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </Wrapper>
+    </div>,
+    document.body,
+  );
+}
+
+// PageHeader: breadcrumb + title + record count on the left, the main
+// action button(s) on the right. crumbs = [{label, to?}] (last = current).
+function PageHeader({ title, subtitle, crumbs, count, countLabel, actions }) {
+  return (
+    <header className="cbx-pagehead">
+      <div className="cbx-pagehead-main">
+        {crumbs && crumbs.length > 0 && (
+          <nav aria-label="Breadcrumb" className="cbx-crumbs">
+            {crumbs.map((c, i) => {
+              const last = i === crumbs.length - 1;
+              return (
+                <React.Fragment key={`${c.label}-${i}`}>
+                  {c.to && !last ? (
+                    <Link to={c.to}>{c.label}</Link>
+                  ) : (
+                    <span aria-current={last ? "page" : undefined}>
+                      {c.label}
+                    </span>
+                  )}
+                  {!last && <Icons.ChevronRight size={13} aria-hidden="true" />}
+                </React.Fragment>
+              );
+            })}
+          </nav>
+        )}
+        <div className="cbx-pagehead-titlerow">
+          <h1 className="cbx-h1 cb-page-title text-2xl font-bold tracking-tight">
+            {title}
+          </h1>
+          {count != null && (
+            <span className="cbx-count">
+              {Number(count).toLocaleString()}
+              {countLabel ? ` ${countLabel}` : ""}
+            </span>
+          )}
+        </div>
+        {subtitle && <p className="cbx-sub mt-1 text-sm">{subtitle}</p>}
+      </div>
+      {actions && <div className="cbx-pagehead-actions">{actions}</div>}
+    </header>
+  );
+}
+
+// FilterBar: Search, extra filters/date picker (children), Reset, Export in
+// the same order on every list page. chips = [{label, onClear}] shows the
+// filters currently applied.
+function FilterBar({
+  search,
+  onSearch,
+  searchPlaceholder = "Search...",
+  children,
+  onReset,
+  resetDisabled = false,
+  onExport,
+  exporting = false,
+  exportLabel = "Export",
+  chips,
+}) {
+  return (
+    <div>
+      <div className="cbx-filterbar">
+        {onSearch && (
+          <div className="cbx-searchfield">
+            <Icons.Search size={16} aria-hidden="true" />
+            <input
+              type="search"
+              className="cbx-input"
+              value={search ?? ""}
+              onChange={(e) => onSearch(e.target.value)}
+              placeholder={searchPlaceholder}
+              aria-label={searchPlaceholder}
+            />
+            {search ? (
+              <button
+                type="button"
+                className="cbx-searchfield-clear"
+                onClick={() => onSearch("")}
+                aria-label="Clear search"
+              >
+                <Icons.X size={14} />
+              </button>
+            ) : null}
+          </div>
+        )}
+        {children}
+        <span className="cbx-filterbar-spacer" />
+        {onReset && (
+          <button
+            type="button"
+            className="cbx-btn"
+            onClick={onReset}
+            disabled={resetDisabled}
+          >
+            <Icons.RotateCcw size={15} />
+            Reset
+          </button>
+        )}
+        {onExport && (
+          <button
+            type="button"
+            className="cbx-btn"
+            onClick={onExport}
+            disabled={exporting}
+          >
+            {exporting ? (
+              <Icons.Loader2 size={15} className="animate-spin" />
+            ) : (
+              <Icons.Download size={15} />
+            )}
+            {exportLabel}
+          </button>
+        )}
+      </div>
+      {chips && chips.length > 0 && (
+        <div className="cbx-chips" aria-label="Active filters">
+          {chips.map((c) => (
+            <span key={c.label} className="cbx-filter-chip">
+              {c.label}
+              {c.onClear && (
+                <button
+                  type="button"
+                  onClick={c.onClear}
+                  aria-label={`Remove filter ${c.label}`}
+                >
+                  <Icons.X size={12} />
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -27235,54 +27646,40 @@ function ConfirmModal({
   }
 
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-md shadow-lg w-full max-w-md"
-      >
-        <div className="px-5 py-4 border-b border-mist-200">
-          <h3 className="font-display font-bold text-base text-ink-900">
-            {title}
-          </h3>
-        </div>
-        <div className="p-5 space-y-3">
-          <p className="text-sm text-ink-700">{message}</p>
-          {askReason && (
-            <div>
-              <label className={LABEL_CLS}>មូលហេតុ *</label>
-              <textarea
-                rows={3}
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                className={INPUT_CLS}
-              />
-            </div>
-          )}
-          {err && (
-            <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2">
-              <TriangleAlert size={14} className="shrink-0" />
-              {err}
-            </div>
-          )}
-        </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
-          <button type="button" onClick={onClose} className={CT_BTN_GHOST}>
+    <AppModal
+      title={title}
+      onClose={onClose}
+      busy={busy}
+      error={err}
+      footer={
+        <>
+          <button type="button" onClick={onClose} className="cbx-btn">
             Cancel
           </button>
           <button
             type="button"
             disabled={busy}
             onClick={go}
-            className={danger ? CT_BTN_DANGER : CT_BTN_PRIMARY}
+            className={`cbx-btn ${danger ? "cbx-btn-danger" : "cbx-btn-primary"}`}
           >
+            {busy && <Icons.Loader2 size={15} className="animate-spin" />}
             {busy ? "Processing..." : confirmLabel}
           </button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <p className="cbx-modal-text">{message}</p>
+      {askReason && (
+        <FormField label="មូលហេតុ" required>
+          <textarea
+            rows={3}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            className="cbx-input"
+          />
+        </FormField>
+      )}
+    </AppModal>
   );
 }
 
@@ -27933,25 +28330,9 @@ function ArrivalProgressCard({ tks }) {
 // ------------------------------------------------------------
 function ContainerModalShell({ title, onClose, children, footer }) {
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-md shadow-lg w-full max-w-lg max-h-[90vh] flex flex-col"
-      >
-        <div className="px-5 py-4 border-b border-mist-200 shrink-0">
-          <h3 className="font-display font-bold text-base text-ink-900">
-            {title}
-          </h3>
-        </div>
-        <div className="p-5 space-y-3 overflow-y-auto">{children}</div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200 shrink-0">
-          {footer}
-        </div>
-      </div>
-    </div>
+    <AppModal title={title} maxW="max-w-lg" onClose={onClose} footer={footer}>
+      {children}
+    </AppModal>
   );
 }
 
@@ -46363,57 +46744,29 @@ function CnModalShell({
   submitDisabled = false,
   children,
 }) {
-  // Render into <body> (portal) so the overlay + blur always cover the WHOLE
-  // viewport, including the topbar. Inside the app shell, parents with
-  // transform/overflow/backdrop-filter clipped the blur and left a strip.
-  return createPortal(
-    <div
-      className="cb-modal-backdrop fixed inset-0 z-[120] bg-slate-950/45 backdrop-blur-md flex items-center justify-center p-4"
-      style={{ top: 0, left: 0, right: 0, bottom: 0, minHeight: "100dvh" }}
-      onClick={onClose}
+  // Same props as before; the look now comes from the shared AppModal.
+  const tone = /red|rose/.test(submitCls)
+    ? "danger"
+    : /emerald|green|teal/.test(submitCls)
+      ? "success"
+      : "primary";
+  return (
+    <AppModal
+      title={title}
+      subtitle={subtitle}
+      danger={/red/.test(titleCls)}
+      maxW={maxW}
+      onClose={onClose}
+      onSubmit={onSubmit}
+      error={error}
+      busy={!!busy}
+      submitLabel={submitLabel}
+      busyLabel={busyLabel}
+      submitTone={tone}
+      submitDisabled={submitDisabled}
     >
-      <form
-        onSubmit={onSubmit}
-        onClick={(e) => e.stopPropagation()}
-        className={`w-full ${maxW} rounded-2xl bg-white shadow-2xl overflow-hidden`}
-      >
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-          <div>
-            <h3 className={`font-bold text-lg ${titleCls}`}>{title}</h3>
-            {subtitle && (
-              <p className="text-xs text-slate-500 mt-1">{subtitle}</p>
-            )}
-          </div>
-          <button type="button" onClick={onClose}>
-            <Icons.X size={18} />
-          </button>
-        </div>
-        <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
-          {error && (
-            <div className="rounded-xl bg-red-50 text-red-700 px-3 py-2 text-sm">
-              {error}
-            </div>
-          )}
-          {children}
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-10 px-4 rounded-xl border border-slate-200 text-sm font-semibold"
-          >
-            Cancel
-          </button>
-          <button
-            disabled={busy || submitDisabled}
-            className={`h-10 px-5 rounded-xl text-white text-sm font-bold disabled:opacity-50 ${submitCls}`}
-          >
-            {busy ? busyLabel : submitLabel}
-          </button>
-        </div>
-      </form>
-    </div>,
-    document.body,
+      {children}
+    </AppModal>
   );
 }
 
@@ -70189,6 +70542,29 @@ const SHOP_MOVE_TYPES = [
   ["lost", "Lost stock"],
 ];
 
+function useShopUrlFilter(key, allowed) {
+  const [params, setParams] = useSearchParams();
+  const raw = params.get(key) || "";
+  const value = allowed && !allowed.includes(raw) ? "" : raw;
+  const setValue = (next) =>
+    setParams(
+      (previous) => {
+        const copy = new URLSearchParams(previous);
+        if (next) copy.set(key, next);
+        else copy.delete(key);
+        return copy;
+      },
+      { replace: true },
+    );
+  return [value, setValue];
+}
+function shopDashLink(path, filters = {}) {
+  const query = new URLSearchParams(
+    Object.entries(filters).filter(([, v]) => v !== "" && v != null),
+  );
+  return path + (query.size ? `?${query}` : "");
+}
+
 function ShopInventoryPage() {
   const { user } = useAuth();
   const canStock = hasPermission(user, "shop.stock.manage");
@@ -70197,9 +70573,15 @@ function ShopInventoryPage() {
   const [defaultThr, setDefaultThr] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useShopUrlFilter("q");
   const [cat, setCat] = useState("");
-  const [stockF, setStockF] = useState("");
+  const [stockF, setStockF] = useShopUrlFilter("stock", [
+    "",
+    "low",
+    "out",
+    "ok",
+  ]);
+  const [activeOnly, setActiveOnly] = useShopUrlFilter("active", ["", "1"]);
   const [page, setPage] = useState(0);
   const [move, setMove] = useState(null); // { row, type }
   const [hist, setHist] = useState(null);
@@ -70212,12 +70594,9 @@ function ShopInventoryPage() {
     (async () => {
       setLoading(true);
       const [inv, c, st] = await Promise.all([
-        supabase
-          .from("shop_inventory")
-          .select(
-            "variant_id,on_hand,reserved,low_stock_threshold,shop_product_variants!inner(id,sku,option_color,option_size,is_active,shop_products!inner(id,name,product_code,status,category_id,shop_categories(name)))",
-          )
-          .limit(2000),
+        shopDashInventory()
+          .then((data) => ({ data }))
+          .catch((error) => ({ error })),
         supabase.from("shop_categories").select("id,name").order("name"),
         supabase
           .from("shop_settings")
@@ -70276,6 +70655,7 @@ function ShopInventoryPage() {
   const shown = useMemo(() => {
     const s = search.trim().toLowerCase();
     return rows.filter((r) => {
+      if (activeOnly && (!r.vActive || r.pStatus !== "Active")) return false;
       if (cat && r.category_id !== cat) return false;
       if (stockF && stateOf(r) !== stockF) return false;
       if (!s) return true;
@@ -70283,8 +70663,8 @@ function ShopInventoryPage() {
         String(x).toLowerCase().includes(s),
       );
     });
-  }, [rows, search, cat, stockF, defaultThr]);
-  useEffect(() => setPage(0), [search, cat, stockF]);
+  }, [rows, search, cat, stockF, defaultThr, activeOnly]);
+  useEffect(() => setPage(0), [search, cat, stockF, activeOnly]);
   const pageRows = shown.slice(page * PAGE, page * PAGE + PAGE);
   const lowN = rows.filter((r) => stateOf(r) === "low").length;
   const outN = rows.filter((r) => stateOf(r) === "out").length;
@@ -70352,6 +70732,14 @@ function ShopInventoryPage() {
               <option value="out">Out of stock</option>
               <option value="ok">In stock</option>
             </select>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={activeOnly === "1"}
+                onChange={(e) => setActiveOnly(e.target.checked ? "1" : "")}
+              />
+              Active products &amp; variants only
+            </label>
             <button
               type="button"
               className={SHOP_BTN_GHOST}
@@ -70732,15 +71120,27 @@ function ShopMovementsModal({ row, onClose }) {
 // ------------------------------------------------------------
 function ShopOrdersPage() {
   const navigate = useNavigate();
+  const [refundFilter, setRefundFilter] = useShopUrlFilter("refund", [
+    "",
+    "pending",
+  ]);
+  const [reviewBefore, setReviewBefore] = useShopUrlFilter("review_before");
+  const reviewCutoff = Number.isFinite(Date.parse(reviewBefore))
+    ? reviewBefore
+    : "";
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("");
-  const [pay, setPay] = useState("");
+  const [search, setSearch] = useShopUrlFilter("q");
+  const [status, setStatus] = useShopUrlFilter("status", SHOP_ORDER_STATUSES);
+  const [pay, setPay] = useShopUrlFilter("payment", [
+    "Unpaid",
+    "Paid",
+    "Refunded",
+  ]);
   const [method, setMethod] = useState("");
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const [from, setFrom] = useShopUrlFilter("from");
+  const [to, setTo] = useShopUrlFilter("to");
   const [staff, setStaff] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -70750,7 +71150,21 @@ function ShopOrdersPage() {
   const PAGE = pageSize;
   const s = useShopDebounced(search);
   const st = useShopDebounced(staff);
-  useEffect(() => setPage(0), [s, status, pay, method, from, to, st, pageSize]);
+  useEffect(
+    () => setPage(0),
+    [
+      s,
+      status,
+      pay,
+      method,
+      from,
+      to,
+      st,
+      pageSize,
+      refundFilter,
+      reviewCutoff,
+    ],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -70811,18 +71225,53 @@ function ShopOrdersPage() {
       let q = supabase
         .from("shop_orders")
         .select(
-          "id,order_no,status,payment_status,fulfillment_method,total_amount,created_at,accepted_by_name,customers(customer_code,name),shop_order_items(quantity)",
+          "id,order_no,status,payment_status,fulfillment_method,total_amount,created_at,accepted_by_name,customers(customer_code,name),shop_order_items(quantity)" +
+            (refundFilter ? ",shop_refunds!inner(status)" : ""),
           { count: "exact" },
         )
         .order("created_at", { ascending: false })
         .range(page * PAGE, page * PAGE + PAGE - 1);
+      if (refundFilter) {
+        try {
+          const pending = await shopDashPendingRefunds();
+          const states = [...new Set(pending.map((r) => r.status))];
+          if (!states.length) {
+            if (alive) {
+              setRows([]);
+              setTotal(0);
+              setError("");
+              setLoading(false);
+            }
+            return;
+          }
+          q = q.in("shop_refunds.status", states);
+        } catch (e) {
+          if (alive) {
+            setError(shopErr(e));
+            setLoading(false);
+          }
+          return;
+        }
+      }
+      if (reviewCutoff)
+        q = q
+          .eq("status", "Processing")
+          .eq("payment_status", "Paid")
+          .lt("paid_at", reviewCutoff);
       if (ors.length) q = q.or(ors.join(","));
       if (status) q = q.eq("status", status);
       if (pay) q = q.eq("payment_status", pay);
       if (method) q = q.eq("fulfillment_method", method);
-      if (from)
-        q = q.gte("created_at", new Date(`${from}T00:00:00`).toISOString());
-      if (to) q = q.lte("created_at", new Date(`${to}T23:59:59`).toISOString());
+      if (shopDashValidDay(from))
+        q = q.gte(
+          "created_at",
+          new Date(`${from}T00:00:00+07:00`).toISOString(),
+        );
+      if (shopDashValidDay(to))
+        q = q.lt(
+          "created_at",
+          new Date(`${shopDashAddDay(to, 1)}T00:00:00+07:00`).toISOString(),
+        );
       const sf = shopSearchSafe(st);
       if (sf) q = q.ilike("accepted_by_name", `%${sf}%`);
       const { data, error: e, count } = await q;
@@ -70838,7 +71287,20 @@ function ShopOrdersPage() {
     return () => {
       alive = false;
     };
-  }, [s, status, pay, method, from, to, st, page, pageSize, reload]);
+  }, [
+    s,
+    status,
+    pay,
+    method,
+    from,
+    to,
+    st,
+    page,
+    pageSize,
+    reload,
+    refundFilter,
+    reviewCutoff,
+  ]);
 
   return (
     <ShopGate perm="shop.order.review" title="Shop orders">
@@ -70862,6 +71324,32 @@ function ShopOrdersPage() {
           ))}
         </div>
         <div className={SHOP_CARD}>
+          {(refundFilter || reviewCutoff) && (
+            <div className="mb-3 flex flex-wrap gap-3 text-sm">
+              {refundFilter && (
+                <button
+                  type="button"
+                  className={SHOP_BTN_GHOST}
+                  onClick={() => setRefundFilter("")}
+                >
+                  Pending refunds <Icons.X size={14} />
+                </button>
+              )}
+              {reviewCutoff && (
+                <button
+                  type="button"
+                  className={SHOP_BTN_GHOST}
+                  onClick={() => setReviewBefore("")}
+                >
+                  Overdue paid reviews · before{" "}
+                  {new Date(reviewCutoff).toLocaleString("en-GB", {
+                    timeZone: "Asia/Phnom_Penh",
+                  })}{" "}
+                  (UTC+7) <Icons.X size={14} />
+                </button>
+              )}
+            </div>
+          )}
           <div className="mb-4 flex flex-wrap gap-2">
             <input
               className={`${SHOP_FILT} w-64`}
@@ -71959,6 +72447,7 @@ function ShopSettingsPage() {
     delivery_fee: "",
     min_order_amount: "",
     default_low_stock_threshold: "",
+    dashboard_review_hours: 24,
     pk_name: "",
     pk_address: "",
     pk_hours: "",
@@ -71981,6 +72470,7 @@ function ShopSettingsPage() {
           delivery_fee: m.delivery_fee ?? "",
           min_order_amount: m.min_order_amount ?? "",
           default_low_stock_threshold: m.default_low_stock_threshold ?? "",
+          dashboard_review_hours: m.dashboard_review_hours ?? 24,
           pk_name: pk.name || "",
           pk_address: pk.address || "",
           pk_hours: pk.hours || "",
@@ -72012,6 +72502,13 @@ function ShopSettingsPage() {
         true,
       );
     if (bad) return setMsg({ ok: false, text: bad });
+    const reviewHours = Number(v.dashboard_review_hours);
+    if (!Number.isInteger(reviewHours) || reviewHours < 1 || reviewHours > 720)
+      return setMsg({
+        ok: false,
+        text: "Review alert must be a whole number between 1 and 720 hours.",
+      });
+    rows.push({ key: "dashboard_review_hours", value: reviewHours });
     if (v.pk_name.trim() || v.pk_address.trim()) {
       if (!v.pk_name.trim() || !v.pk_address.trim())
         return setMsg({
@@ -72112,6 +72609,23 @@ function ShopSettingsPage() {
               />
             </ShopField>
           </div>
+          <ShopField
+            label="Paid order review alert (hours)"
+            hint="Flag paid orders still awaiting review after this many hours. Default: 24 hours."
+          >
+            <input
+              type="number"
+              min="1"
+              max="720"
+              step="1"
+              className={SHOP_INP}
+              disabled={!canEdit}
+              value={v.dashboard_review_hours}
+              onChange={(e) =>
+                setV({ ...v, dashboard_review_hours: e.target.value })
+              }
+            />
+          </ShopField>
           <div className="rounded-xl border border-slate-200 p-3">
             <div className="mb-2 text-sm font-extrabold text-slate-800">
               Pickup location
@@ -72682,7 +73196,6 @@ function ShopDashboardChart({ rows, dates, loading, error, onDates }) {
               </button>
             ))}
           </div>
-          <ShopDashboardDatePicker dates={dates} onApply={onDates} />
         </div>
       </div>
       <div className="sd-chart-meta">
@@ -72960,9 +73473,505 @@ html.cb-admin-dark .shop-dashboard .sd-feature-icon{background:#1e3a5f;color:#93
 @media(max-width:1023px){.shop-dashboard .sd-featured{grid-template-columns:repeat(2,minmax(0,1fr))}.shop-dashboard .sd-chart-controls{justify-content:space-between;width:100%}}
 @media(max-width:639px){.shop-dashboard .sd-panel{padding:16px;border-radius:12px}.shop-dashboard .sd-featured{gap:10px}.shop-dashboard .sd-feature{padding:14px}.shop-dashboard .sd-feature strong{font-size:23px}.shop-dashboard .sd-feature-top{font-size:12px}.shop-dashboard .sd-feature-icon{width:28px;height:28px}.shop-dashboard .sd-header h1{font-size:24px}.shop-dashboard .sd-chart-controls{gap:12px}.shop-dashboard .sd-date,.shop-dashboard .sd-date-trigger{width:100%}.shop-dashboard .sd-date-trigger{justify-content:space-between;gap:6px;font-size:12px}.shop-dashboard .sd-section-heading{align-items:flex-start;flex-direction:column;gap:4px}.shop-dashboard .sd-date-popover{width:100%;max-width:none}.shop-dashboard .sd-chart-meta{margin-top:20px}}
 @media(prefers-reduced-motion:reduce){.shop-dashboard .sd-feature,.shop-dashboard .sd-kpi-grid>a>div{transition:none;transform:none!important}}
+
+.shop-dashboard .sd-header{align-items:flex-start;flex-wrap:wrap}.shop-dashboard .sd-header-actions .sd-date-popover{left:0;right:auto}.shop-dashboard .sd-header-actions{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap}.shop-dashboard .sd-compare{display:flex;gap:7px;align-items:center;font-size:12px;min-height:42px}.shop-dashboard .sd-updated,.shop-dashboard .sd-compare-period{font-size:12px;color:var(--sd-muted);margin:8px 0}.shop-dashboard .sd-delta{margin-top:10px!important;color:var(--sd-text)!important;font-weight:600}.shop-dashboard .sd-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin-top:20px}.shop-dashboard .sd-list-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:18px}.shop-dashboard .sd-list-heading h2{font-weight:700;font-size:16px}.shop-dashboard .sd-list-heading p{font-size:12px;color:var(--sd-muted);margin-top:5px}.shop-dashboard .sd-list-heading>a,.shop-dashboard .sd-all-link{font-size:12px;font-weight:600;color:#3b82f6;flex-shrink:0}.shop-dashboard .sd-list-row{display:flex;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid var(--sd-border);font-size:13px;min-width:0}.shop-dashboard .sd-list-row>div{min-width:0;flex:1}.shop-dashboard .sd-list-row strong{display:block;font-weight:650;overflow-wrap:anywhere}.shop-dashboard .sd-list-row small{display:block;font-size:11px;color:var(--sd-muted);margin-top:4px;overflow-wrap:anywhere}.shop-dashboard .sd-list-row b{white-space:nowrap;font-variant-numeric:tabular-nums}.shop-dashboard a.sd-list-row:hover{background:var(--sd-soft)}.shop-dashboard .sd-thumb{width:38px;height:38px;border-radius:9px;object-fit:cover;flex-shrink:0;display:grid;place-items:center;background:var(--sd-soft);color:var(--sd-muted)}.shop-dashboard .sd-rank{color:var(--sd-muted);font-size:11px}.shop-dashboard .sd-list-message{padding:32px 0;font-size:13px;color:var(--sd-muted)}.shop-dashboard .sd-alert-heading{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;font-size:12px;margin:18px 0 6px}.shop-dashboard .sd-alert-heading span{color:var(--sd-muted)}.shop-dashboard .sd-action{display:flex;align-items:center;gap:5px;color:#3b82f6;font-size:12px}.shop-dashboard .sd-all-link{display:inline-block;margin-top:10px}.shop-dashboard .sd-stock-alert{display:flex;gap:8px;align-items:center;background:var(--sd-soft);padding:12px;border-radius:9px;margin-top:18px;font-size:12px}.shop-dashboard .sd-status{font-size:10px;display:inline-block;padding:3px 7px;background:var(--sd-soft);border:1px solid var(--sd-border);border-radius:5px;margin-top:7px}.shop-dashboard .sd-danger{color:#ef4444;font-weight:650;white-space:nowrap}.shop-dashboard .sd-warning{color:#b45309;font-weight:650;white-space:nowrap}.shop-dashboard .sd-list-foot{margin-top:14px}.shop-dashboard .sd-financial{margin-top:24px}.shop-dashboard .sd-financial>summary{font-size:16px;font-weight:700;cursor:pointer;margin-bottom:16px}.shop-dashboard .sd-financial>summary span{font-size:12px;color:var(--sd-muted);font-weight:400;margin-left:10px}html.cb-admin-dark .shop-dashboard .sd-warning{color:#fbbf24}
+@media(max-width:767px){.shop-dashboard .sd-detail-grid{grid-template-columns:1fr}.shop-dashboard .sd-header-actions{width:100%}.shop-dashboard .sd-header-actions>.sd-date{width:100%}.shop-dashboard .sd-header-actions>.sd-date>.sd-date-trigger{width:100%;justify-content:space-between}.shop-dashboard .sd-compare{width:100%}.shop-dashboard .sd-list-row{gap:8px}}
 `;
 
+async function shopDashPendingRefunds() {
+  const pending = [];
+  for (let offset = 0; ; offset += 500) {
+    const r = await supabase
+      .from("shop_refunds")
+      .select("id,order_id,amount,status")
+      .order("id")
+      .range(offset, offset + 499);
+    if (r.error) throw r.error;
+    pending.push(
+      ...(r.data || []).filter(
+        (row) => String(row.status).toLowerCase() === "pending",
+      ),
+    );
+    if ((r.data || []).length < 500) return pending;
+  }
+}
+function shopDashPrevious(dates) {
+  const count =
+    Math.round((Date.parse(dates.to) - Date.parse(dates.from)) / 86400000) + 1;
+  return {
+    from: shopDashAddDay(dates.from, -count),
+    to: shopDashAddDay(dates.from, -1),
+  };
+}
+function shopDashDelta(current, previous) {
+  if (
+    current == null ||
+    previous == null ||
+    !Number.isFinite(Number(current)) ||
+    !Number.isFinite(Number(previous))
+  )
+    return "Comparison unavailable";
+  const a = Number(current),
+    b = Number(previous);
+  if (b === 0)
+    return a === 0 ? "No change" : "No percentage · previous value was 0";
+  const value = ((a - b) / Math.abs(b)) * 100;
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}% vs previous period`;
+}
+// Fetch every inventory page so low-stock alerts are not silently truncated.
+async function shopDashInventory() {
+  const rows = [];
+  for (let offset = 0; ; offset += 500) {
+    const r = await supabase
+      .from("shop_inventory")
+      .select(
+        "variant_id,on_hand,reserved,low_stock_threshold,shop_product_variants!inner(id,sku,option_color,option_size,is_active,shop_products!inner(id,name,product_code,status,image_urls,category_id,shop_categories(name)))",
+      )
+      .order("variant_id")
+      .range(offset, offset + 499);
+    if (r.error) throw r.error;
+    rows.push(...(r.data || []));
+    if ((r.data || []).length < 500) return rows;
+  }
+}
+function ShopDashboardList({
+  title,
+  note,
+  loading,
+  error,
+  empty,
+  children,
+  action,
+}) {
+  return (
+    <section className="sd-panel sd-list-panel">
+      <div className="sd-list-heading">
+        <div>
+          <h2>{title}</h2>
+          <p>{note}</p>
+        </div>
+        {action}
+      </div>
+      {loading ? (
+        <p className="sd-list-message" role="status">
+          Loading…
+        </p>
+      ) : error ? (
+        <p className="sd-list-message" role="alert">
+          {error}
+        </p>
+      ) : empty ? (
+        <p className="sd-list-message">No items to show.</p>
+      ) : (
+        children
+      )}
+    </section>
+  );
+}
+function ShopDashboardExtras({ dates, reload, k }) {
+  const { user } = useAuth();
+  const canReview = hasPermission(user, "shop.order.review");
+  const canStock = hasPermission(user, "shop.view");
+  const canSettings = hasPermission(user, "shop.settings");
+  const [state, setState] = useState({
+    loading: true,
+    errors: {},
+    products: [],
+    recent: [],
+    reviews: [],
+    refunds: [],
+    stock: [],
+    hours: 24,
+    cutoff: "",
+    reviewCount: 0,
+  });
+  useEffect(() => {
+    let alive = true;
+    const range = shopDashRange(dates);
+    if (!range) return;
+    setState({
+      loading: true,
+      errors: {},
+      products: [],
+      recent: [],
+      reviews: [],
+      refunds: [],
+      stock: [],
+      hours: 24,
+      cutoff: "",
+      reviewCount: 0,
+    });
+    (async () => {
+      const errors = {};
+      const load = async (key, request, fallback) => {
+        try {
+          const r = await request;
+          if (r.error) throw r.error;
+          return r;
+        } catch (e) {
+          errors[key] = shopErr(e);
+          return fallback;
+        }
+      };
+      const [settings, products, recent, refunds, inventory] =
+        await Promise.all([
+          load(
+            "settings",
+            supabase
+              .from("shop_settings")
+              .select("key,value")
+              .in("key", [
+                "dashboard_review_hours",
+                "default_low_stock_threshold",
+              ]),
+            { data: [] },
+          ),
+          load(
+            "products",
+            supabase.rpc("shop_sales_report", {
+              p_from: range.from,
+              p_to: range.to,
+              p_group: "product",
+              p_tz: SHOP_DASH_TZ,
+            }),
+            { data: { rows: [] } },
+          ),
+          canReview
+            ? load(
+                "recent",
+                supabase
+                  .from("shop_orders")
+                  .select(
+                    "id,order_no,status,payment_status,total_amount,created_at,customers(name)",
+                  )
+                  .gte("created_at", range.from)
+                  .lt("created_at", range.to)
+                  .order("created_at", { ascending: false })
+                  .limit(5),
+                { data: [] },
+              )
+            : { data: [] },
+          canReview
+            ? load(
+                "refunds",
+                shopDashPendingRefunds().then((data) => ({
+                  data: data.slice(0, 5),
+                })),
+                { data: [] },
+              )
+            : { data: [] },
+          canStock
+            ? load(
+                "stock",
+                shopDashInventory().then((data) => ({ data })),
+                { data: [] },
+              )
+            : { data: [] },
+        ]);
+      const settingsMap = Object.fromEntries(
+        (settings.data || []).map((r) => [r.key, r.value]),
+      );
+      const h = Number(settingsMap.dashboard_review_hours ?? 24);
+      const hours = Number.isInteger(h) && h >= 1 && h <= 720 ? h : 24;
+      const cutoff = new Date(Date.now() - hours * 3600000).toISOString();
+      const reviews =
+        canReview && !errors.settings
+          ? await load(
+              "reviews",
+              supabase
+                .from("shop_orders")
+                .select("id,order_no,paid_at,total_amount,customers(name)", {
+                  count: "exact",
+                })
+                .eq("status", "Processing")
+                .eq("payment_status", "Paid")
+                .lt("paid_at", cutoff)
+                .order("paid_at")
+                .limit(5),
+              { data: [], count: 0 },
+            )
+          : { data: [], count: 0 };
+      if (errors.settings)
+        errors.reviews = "Unable to load review alert settings.";
+      const top = (products.data?.rows || [])
+        .filter((r) => Number(r.units_sold) > 0)
+        .sort(
+          (a, b) =>
+            Number(b.units_sold) - Number(a.units_sold) ||
+            Number(b.sales) - Number(a.sales),
+        )
+        .slice(0, 5);
+      const ids = top
+        .map((r) => String(r.key))
+        .filter((id) => /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id));
+      const metadata = ids.length
+        ? await load(
+            "images",
+            supabase
+              .from("shop_products")
+              .select("id,name,product_code,image_urls")
+              .in("id", ids),
+            { data: [] },
+          )
+        : { data: [] };
+      const stock = (inventory.data || [])
+        .flatMap((r) => {
+          const v = r.shop_product_variants,
+            p = v?.shop_products;
+          if (!v?.is_active || p?.status !== "Active") return [];
+          const available = Number(r.on_hand) - Number(r.reserved);
+          const threshold =
+            r.low_stock_threshold ?? settingsMap.default_low_stock_threshold;
+          if (
+            available > 0 &&
+            (threshold == null || available > Number(threshold))
+          )
+            return [];
+          return [
+            {
+              id: r.variant_id,
+              name: p.name,
+              sku: v.sku,
+              available,
+              threshold,
+              image: p.image_urls?.[0],
+            },
+          ];
+        })
+        .sort(
+          (a, b) => a.available - b.available || a.sku.localeCompare(b.sku),
+        );
+      if (errors.settings && !errors.stock)
+        errors.stock = "Unable to load stock alert settings.";
+      if (!alive) return;
+      setState({
+        loading: false,
+        errors,
+        products: top.map((r) => ({
+          ...r,
+          product: (metadata.data || []).find((p) => p.id === r.key),
+        })),
+        recent: recent.data || [],
+        reviews: reviews.data || [],
+        refunds: refunds.data || [],
+        stock,
+        hours,
+        cutoff,
+        reviewCount: reviews.count || 0,
+      });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [dates, reload, canReview, canStock]);
+  const link = (filters) => shopDashLink("/shop/orders", filters);
+  const thumb = (src, name) =>
+    src ? (
+      <img
+        className="sd-thumb"
+        src={src}
+        alt=""
+        loading="lazy"
+        onError={(e) => {
+          e.currentTarget.style.visibility = "hidden";
+        }}
+      />
+    ) : (
+      <span className="sd-thumb">
+        <Icons.Package size={20} />
+      </span>
+    );
+  return (
+    <div className="sd-detail-grid">
+      <ShopDashboardList
+        title="Needs attention"
+        note="Live work queue · independent of selected dates"
+        loading={state.loading}
+        error={!canReview ? "Order review permission is required." : null}
+        action={canSettings && <Link to="/shop/settings">Settings</Link>}
+      >
+        {state.errors.reviews ? (
+          <p role="alert">{state.errors.reviews}</p>
+        ) : (
+          <>
+            <div className="sd-alert-heading">
+              <strong>{state.reviewCount} overdue paid reviews</strong>
+              <span>Waiting over {state.hours} hours</span>
+            </div>
+            {state.reviews.map((r) => (
+              <Link
+                key={r.id}
+                className="sd-list-row"
+                to={`/shop/orders/${r.id}`}
+              >
+                <div>
+                  <strong>{r.order_no}</strong>
+                  <small>
+                    {r.customers?.name || "Customer"} · Paid{" "}
+                    {new Date(r.paid_at).toLocaleDateString("en-GB", {
+                      timeZone: SHOP_DASH_TZ,
+                    })}
+                  </small>
+                </div>
+                <span className="sd-action">
+                  Review <Icons.ArrowUpRight size={14} />
+                </span>
+              </Link>
+            ))}
+            {state.reviewCount > 0 && (
+              <Link
+                className="sd-all-link"
+                to={link({ review_before: state.cutoff })}
+              >
+                View all overdue reviews →
+              </Link>
+            )}
+          </>
+        )}
+        <div className="sd-alert-heading">
+          <strong>
+            Pending refunds {k ? `(${k.refund_pending ?? 0})` : ""}
+          </strong>
+        </div>
+        {state.errors.refunds ? (
+          <p role="alert">{state.errors.refunds}</p>
+        ) : state.refunds.length ? (
+          <>
+            {state.refunds.map((r) => (
+              <Link
+                className="sd-list-row"
+                key={r.id}
+                to={`/shop/orders/${r.order_id}`}
+              >
+                <div>
+                  <strong>Refund request</strong>
+                  <small>
+                    {r.status} · {money(r.amount)}
+                  </small>
+                </div>
+                <span className="sd-action">
+                  Open order <Icons.ArrowUpRight size={14} />
+                </span>
+              </Link>
+            ))}
+            <Link className="sd-all-link" to={link({ refund: "pending" })}>
+              View pending refunds →
+            </Link>
+          </>
+        ) : (
+          <p className="sd-muted">No pending refund requests.</p>
+        )}
+        <Link
+          className="sd-stock-alert"
+          to={shopDashLink("/shop/inventory", { stock: "out", active: "1" })}
+        >
+          <Icons.PackageX size={18} />
+          {k?.out_of_stock_variants ?? "—"} out-of-stock variants{" "}
+          <Icons.ArrowUpRight size={15} />
+        </Link>
+      </ShopDashboardList>
+      <ShopDashboardList
+        title="Recent orders"
+        note="Latest 5 orders in the selected period"
+        loading={state.loading}
+        error={
+          !canReview
+            ? "Order review permission is required."
+            : state.errors.recent
+        }
+        empty={!state.recent.length}
+        action={canReview && <Link to={link(dates)}>View all</Link>}
+      >
+        {state.recent.map((r) => (
+          <Link className="sd-list-row" key={r.id} to={`/shop/orders/${r.id}`}>
+            <div>
+              <strong>{r.order_no}</strong>
+              <small>
+                {r.customers?.name || "Customer"} ·{" "}
+                {new Date(r.created_at).toLocaleDateString("en-GB", {
+                  timeZone: SHOP_DASH_TZ,
+                })}
+              </small>
+              <span className="sd-status">
+                {r.status} · {r.payment_status}
+              </span>
+            </div>
+            <b>{money(r.total_amount)}</b>
+          </Link>
+        ))}
+      </ShopDashboardList>
+      <ShopDashboardList
+        title="Top products"
+        note="Top 5 by units sold · completed orders in selected dates"
+        loading={state.loading}
+        error={state.errors.products}
+        empty={!state.products.length}
+        action={<Link to="/shop/reports">Sales reports</Link>}
+      >
+        {state.products.map((r, i) => (
+          <div className="sd-list-row" key={r.key || i}>
+            <span className="sd-rank">{i + 1}</span>
+            {thumb(r.product?.image_urls?.[0])}
+            <div className="sd-row-main">
+              <strong>{r.product?.name || r.label || "Product"}</strong>
+              <small>
+                {r.product?.product_code || "All variants"} ·{" "}
+                {Number(r.units_sold).toLocaleString()} units sold
+              </small>
+            </div>
+            <b>{money(r.sales)}</b>
+          </div>
+        ))}
+      </ShopDashboardList>
+      <ShopDashboardList
+        title="Stock alerts"
+        note="Lowest available stock · active products and variants"
+        loading={state.loading}
+        error={!canStock ? "Shop access is required." : state.errors.stock}
+        empty={!state.stock.length}
+        action={
+          canStock && (
+            <Link to={shopDashLink("/shop/inventory", { active: "1" })}>
+              Inventory
+            </Link>
+          )
+        }
+      >
+        {state.stock.slice(0, 5).map((r) => (
+          <Link
+            className="sd-list-row"
+            key={r.id}
+            to={shopDashLink("/shop/inventory", { q: r.sku, active: "1" })}
+          >
+            {thumb(r.image)}
+            <div className="sd-row-main">
+              <strong>{r.name}</strong>
+              <small>
+                {r.sku} · Alert at {r.threshold ?? "—"}
+              </small>
+            </div>
+            <span className={r.available <= 0 ? "sd-danger" : "sd-warning"}>
+              {r.available} left
+            </span>
+          </Link>
+        ))}
+        <p className="sd-muted sd-list-foot">
+          {state.stock.length} variants need attention · Available = on hand −
+          reserved
+        </p>
+      </ShopDashboardList>
+    </div>
+  );
+}
+
 function ShopDashboardPage() {
+  const { user } = useAuth();
+  const canReport = hasPermission(user, "shop.report");
+  const [compare, setCompare] = useState(false);
+  const [previous, setPrevious] = useState(null);
+  const [compareError, setCompareError] = useState("");
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
   const [dates, setDates] = useState(() => shopDashPreset("30d"));
   const range = useMemo(() => shopDashRange(dates), [dates]);
   const [k, setK] = useState(null);
@@ -72972,6 +73981,10 @@ function ShopDashboardPage() {
   const [reload, setReload] = useState(0);
   useEffect(() => {
     let alive = true;
+    if (!canReport) {
+      setLoading(false);
+      return;
+    }
     if (!range) {
       setErr("Choose a valid date range.");
       setK(null);
@@ -72983,6 +73996,7 @@ function ShopDashboardPage() {
     setErr("");
     setK(null);
     setDays([]);
+    setLastUpdated(null);
     (async () => {
       try {
         const [a, b] = await Promise.all([
@@ -73006,6 +74020,7 @@ function ShopDashboardPage() {
           throw new Error("Dashboard data is unavailable. Please refresh.");
         setK(a.data);
         setDays(b.data?.rows || []);
+        setLastUpdated(new Date());
       } catch (error) {
         if (alive) {
           setErr(
@@ -73022,29 +74037,88 @@ function ShopDashboardPage() {
     return () => {
       alive = false;
     };
-  }, [range, reload]);
+  }, [range, reload, canReport]);
+  const previousDates = useMemo(() => shopDashPrevious(dates), [dates]);
+  useEffect(() => {
+    let alive = true;
+    setPrevious(null);
+    setCompareError("");
+    setCompareLoading(false);
+    if (!compare || !canReport) return;
+    setCompareLoading(true);
+    const r = shopDashRange(previousDates);
+    (async () => {
+      try {
+        const result = await supabase.rpc("shop_dashboard_kpis", {
+          p_from: r.from,
+          p_to: r.to,
+          p_today_from: range.todayFrom,
+        });
+        if (result.error || !result.data)
+          throw result.error || new Error("Unavailable");
+        if (alive) setPrevious(result.data);
+      } catch (e) {
+        if (alive)
+          setCompareError("Previous period is unavailable. Refresh to retry.");
+      } finally {
+        if (alive) setCompareLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [compare, previousDates, range, reload, canReport]);
+  const exportCsv = () => {
+    const rows = days.map((r) => [
+      String(r.key || r.label).slice(0, 10),
+      Number(r.orders || 0),
+      Number(r.collected || 0),
+      Number(r.refunded || 0),
+      Number(
+        r.net_collected ?? Number(r.collected || 0) - Number(r.refunded || 0),
+      ),
+    ]);
+    rows.sort((a, b) => a[0].localeCompare(b[0]));
+    shopDownload(
+      `shop-sales-${dates.from}-to-${dates.to}.csv`,
+      shopToCsv(
+        [
+          "Order date (Asia/Phnom_Penh)",
+          "Orders",
+          "Collected (USD)",
+          "Refunded (USD)",
+          "Net collected (USD)",
+        ],
+        rows,
+      ),
+    );
+  };
   const profitEst = k && !k.profit_complete;
   const featured = k
     ? [
         {
+          key: "net_collected",
           label: "Net collected",
           value: money(k.net_collected),
           note: "Collected minus refunds",
           icon: Icons.Wallet,
         },
         {
+          key: "orders_placed",
           label: "Orders placed",
           value: Number(k.orders_placed || 0).toLocaleString(),
           note: "Orders created in this period",
           icon: Icons.ShoppingBag,
         },
         {
+          key: "collected",
           label: "Total collected",
           value: money(k.collected),
           note: "Before refunds",
           icon: Icons.CreditCard,
         },
         {
+          key: "gross_profit",
           label: profitEst ? "Gross profit · estimate" : "Gross profit",
           value: k.gross_profit == null ? "—" : money(k.gross_profit),
           note: profitEst
@@ -73065,19 +74139,57 @@ function ShopDashboardPage() {
               Sales performance, order operations and inventory at a glance.
             </p>
           </div>
-          <button
-            type="button"
-            className={`${SHOP_BTN_GHOST} sd-refresh`}
-            disabled={loading}
-            onClick={() => setReload((n) => n + 1)}
-          >
-            <Icons.RefreshCw
-              size={15}
-              className={loading ? "animate-spin" : ""}
-            />
-            Refresh
-          </button>
+          <div className="sd-header-actions">
+            <ShopDashboardDatePicker dates={dates} onApply={setDates} />
+            <label className="sd-compare">
+              <input
+                type="checkbox"
+                checked={compare}
+                onChange={(e) => setCompare(e.target.checked)}
+              />
+              Compare previous period
+            </label>
+            <button
+              type="button"
+              className={`${SHOP_BTN_GHOST} sd-refresh`}
+              disabled={loading || !!err}
+              onClick={exportCsv}
+            >
+              <Icons.Download size={15} />
+              Export CSV
+            </button>
+            <button
+              type="button"
+              className={`${SHOP_BTN_GHOST} sd-refresh`}
+              disabled={loading}
+              onClick={() => setReload((n) => n + 1)}
+            >
+              <Icons.RefreshCw
+                size={15}
+                className={loading ? "animate-spin" : ""}
+              />
+              Refresh
+            </button>
+          </div>
         </header>
+        <p className="sd-updated">
+          {loading
+            ? "Updating performance…"
+            : lastUpdated
+              ? `Performance updated ${lastUpdated.toLocaleString("en-GB", { timeZone: SHOP_DASH_TZ })} (UTC+7)`
+              : "Performance has not loaded"}
+        </p>
+        {compare && (
+          <p className="sd-compare-period">
+            Compared with {previousDates.from} — {previousDates.to} · Same
+            number of days
+          </p>
+        )}
+        {compareError && (
+          <p role="alert" className="sd-error">
+            {compareError}
+          </p>
+        )}
         {err && (
           <div className="sd-error" role="alert">
             {err}
@@ -73090,7 +74202,7 @@ function ShopDashboardPage() {
           </span>
         </div>
         <div className="sd-featured" aria-busy={loading}>
-          {featured.map(({ label, value, note, icon: Icon }) => (
+          {featured.map(({ key, label, value, note, icon: Icon }) => (
             <article key={label} className="sd-feature">
               <div className="sd-feature-top">
                 <span>{label}</span>
@@ -73100,6 +74212,16 @@ function ShopDashboardPage() {
               </div>
               <strong>{value}</strong>
               <p>{note}</p>
+              {compare && (
+                <p className="sd-delta">
+                  {compareLoading
+                    ? "Comparing…"
+                    : key === "gross_profit" &&
+                        (!k.profit_complete || !previous?.profit_complete)
+                      ? "Comparison unavailable · missing cost data"
+                      : shopDashDelta(k[key], previous?.[key])}
+                </p>
+              )}
             </article>
           ))}
           {!k &&
@@ -73123,6 +74245,9 @@ function ShopDashboardPage() {
           error={err}
           onDates={setDates}
         />
+        {canReport && (
+          <ShopDashboardExtras dates={dates} reload={reload} k={k} />
+        )}
         {k && (
           <>
             <div className="sd-section-heading">
@@ -73133,42 +74258,55 @@ function ShopDashboardPage() {
               <ShopKpi
                 label="Today's orders"
                 value={k.today_orders}
-                to="/shop/orders"
+                to={shopDashLink("/shop/orders", {
+                  from: shopDashToday(),
+                  to: shopDashToday(),
+                })}
               />
               <ShopKpi
                 label="Waiting payment"
                 value={k.waiting_payment}
-                to="/shop/orders"
+                to={shopDashLink("/shop/orders", { status: "Waiting Payment" })}
               />
               <ShopKpi
                 label="Paid — awaiting review"
                 value={k.awaiting_review}
                 tone={k.awaiting_review ? "warn" : ""}
-                to="/shop/orders"
+                to={shopDashLink("/shop/orders", {
+                  status: "Processing",
+                  payment: "Paid",
+                })}
                 hint="Paid orders that staff have not accepted or rejected yet"
               />
               <ShopKpi
                 label="Being prepared"
                 value={k.preparing}
-                to="/shop/orders"
+                to={shopDashLink("/shop/orders", {
+                  status: "Accepted / Preparing Order",
+                })}
               />
               <ShopKpi
                 label="Ready for pickup"
                 value={k.ready_pickup}
-                to="/shop/orders"
+                to={shopDashLink("/shop/orders", {
+                  status: "Ready for Pickup",
+                })}
               />
               <ShopKpi
                 label="Ready for delivery"
                 value={k.ready_delivery}
-                to="/shop/orders"
+                to={shopDashLink("/shop/orders", {
+                  status: "Ready for Delivery",
+                })}
               />
               <ShopKpi
                 label="In delivery"
                 value={k.in_delivery}
-                to="/shop/orders"
+                to={shopDashLink("/shop/orders", { status: "Delivery" })}
               />
               <ShopKpi
                 label="Refund pending"
+                to={shopDashLink("/shop/orders", { refund: "pending" })}
                 value={k.refund_pending}
                 tone={k.refund_pending ? "bad" : ""}
               />
@@ -73183,7 +74321,10 @@ function ShopDashboardPage() {
                 label="Low-stock variants"
                 value={k.low_stock_variants}
                 tone={k.low_stock_variants ? "warn" : ""}
-                to="/shop/inventory"
+                to={shopDashLink("/shop/inventory", {
+                  stock: "low",
+                  active: "1",
+                })}
                 sub={
                   k.default_low_stock_threshold == null
                     ? "No default alert level set"
@@ -73194,94 +74335,99 @@ function ShopDashboardPage() {
                 label="Out-of-stock variants"
                 value={k.out_of_stock_variants}
                 tone={k.out_of_stock_variants ? "bad" : ""}
-                to="/shop/inventory"
+                to={shopDashLink("/shop/inventory", {
+                  stock: "out",
+                  active: "1",
+                })}
               />
-              <ShopKpi label="Active variants" value={k.variants_total} />
+              <ShopKpi
+                label="Active variants"
+                value={k.variants_total}
+                to={shopDashLink("/shop/inventory", { active: "1" })}
+              />
             </div>
 
-            <div className="sd-section-heading">
-              <h2>Sales &amp; payment breakdown</h2>
-              <span>
-                Orders placed in the selected period · Hover cards for
-                definitions
-              </span>
-            </div>
-            <div className="sd-kpi-grid grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <ShopKpi
-                label="Completed orders"
-                value={k.completed_orders}
-                hint="Handed over / delivered. Only these count as sales"
-              />
-              <ShopKpi
-                label="Rejected (refunded)"
-                value={k.rejected_orders}
-                hint="Never counted as sales"
-              />
-              <ShopKpi
-                label="Canceled"
-                value={k.canceled_orders}
-                hint="Unpaid orders canceled — no money moved"
-              />
-              <ShopKpi
-                label="Outstanding unpaid"
-                value={money(k.outstanding_unpaid)}
-                tone={Number(k.outstanding_unpaid) ? "warn" : ""}
-                hint="Orders still waiting for payment. NOT revenue"
-              />
-              <ShopKpi
-                label="Refunds"
-                value={money(k.refunded)}
-                hint="Money returned to customer wallets"
-              />
-              <ShopKpi
-                label="Product sales"
-                value={money(k.product_sales)}
-                hint="Completed orders: subtotal − discounts, excluding delivery fee"
-              />
-              <ShopKpi
-                label="Delivery income"
-                value={money(k.delivery_income)}
-                hint="Delivery fees on completed orders. Delivery expense is not tracked"
-              />
-              <ShopKpi
-                label="Cost of goods sold"
-                value={money(k.cogs)}
-                hint="Completed items: cost snapshot × quantity (items with a known cost only)"
-              />
-            </div>
-            <details className="sd-panel sd-definitions">
-              <summary className="cursor-pointer font-bold">
-                How are these numbers calculated?
+            <details className="sd-panel sd-financial">
+              <summary>
+                Sales &amp; payment breakdown <span>Selected period</span>
               </summary>
-              <ul className="mt-2 list-disc space-y-1 pl-5">
-                <li>
-                  Performance and sales figures cover orders <b>created</b>{" "}
-                  inside the chosen dates, so an order is never counted twice.
-                </li>
-                <li>
-                  <b>Collected</b> is money actually received from a paid order.
-                  An unpaid order adds 0.
-                </li>
-                <li>
-                  <b>Sales</b> are completed orders only (handed over or
-                  delivered). Rejected, refunded and canceled orders are never
-                  sales.
-                </li>
-                <li>
-                  <b>Cost of goods sold</b> uses the cost saved on each order
-                  line when it was placed. Items without a cost are not
-                  included, and the profit is then marked as an estimate.
-                </li>
-                <li>
-                  <b>Gross profit</b> = Product sales − Cost of goods sold.
-                  Delivery expense and tax are not tracked, so they are not
-                  deducted.
-                </li>
-                <li>
-                  "Order operations" and stock numbers are the situation{" "}
-                  <b>right now</b>, not limited to the dates.
-                </li>
-              </ul>
+              <div className="sd-kpi-grid grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <ShopKpi
+                  label="Completed orders"
+                  value={k.completed_orders}
+                  hint="Handed over / delivered. Only these count as sales"
+                />
+                <ShopKpi
+                  label="Rejected (refunded)"
+                  value={k.rejected_orders}
+                  hint="Never counted as sales"
+                />
+                <ShopKpi
+                  label="Canceled"
+                  value={k.canceled_orders}
+                  hint="Unpaid orders canceled — no money moved"
+                />
+                <ShopKpi
+                  label="Outstanding unpaid"
+                  value={money(k.outstanding_unpaid)}
+                  tone={Number(k.outstanding_unpaid) ? "warn" : ""}
+                  hint="Orders still waiting for payment. NOT revenue"
+                />
+                <ShopKpi
+                  label="Refunds"
+                  value={money(k.refunded)}
+                  hint="Money returned to customer wallets"
+                />
+                <ShopKpi
+                  label="Product sales"
+                  value={money(k.product_sales)}
+                  hint="Completed orders: subtotal − discounts, excluding delivery fee"
+                />
+                <ShopKpi
+                  label="Delivery income"
+                  value={money(k.delivery_income)}
+                  hint="Delivery fees on completed orders. Delivery expense is not tracked"
+                />
+                <ShopKpi
+                  label="Cost of goods sold"
+                  value={money(k.cogs)}
+                  hint="Completed items: cost snapshot × quantity (items with a known cost only)"
+                />
+              </div>
+              <details className="sd-panel sd-definitions">
+                <summary className="cursor-pointer font-bold">
+                  How are these numbers calculated?
+                </summary>
+                <ul className="mt-2 list-disc space-y-1 pl-5">
+                  <li>
+                    Performance and sales figures cover orders <b>created</b>{" "}
+                    inside the chosen dates, so an order is never counted twice.
+                  </li>
+                  <li>
+                    <b>Collected</b> is money actually received from a paid
+                    order. An unpaid order adds 0.
+                  </li>
+                  <li>
+                    <b>Sales</b> are completed orders only (handed over or
+                    delivered). Rejected, refunded and canceled orders are never
+                    sales.
+                  </li>
+                  <li>
+                    <b>Cost of goods sold</b> uses the cost saved on each order
+                    line when it was placed. Items without a cost are not
+                    included, and the profit is then marked as an estimate.
+                  </li>
+                  <li>
+                    <b>Gross profit</b> = Product sales − Cost of goods sold.
+                    Delivery expense and tax are not tracked, so they are not
+                    deducted.
+                  </li>
+                  <li>
+                    "Order operations" and stock numbers are the situation{" "}
+                    <b>right now</b>, not limited to the dates.
+                  </li>
+                </ul>
+              </details>
             </details>
           </>
         )}
