@@ -423,6 +423,7 @@ html.cb-admin-dark{
   font-size:13px; line-height:1.5;
 }
 .cbx-alert.is-error{ background:var(--cbx-danger-soft); color:var(--cbx-danger-text); }
+.cbx-alert.is-warn{ background:var(--cbx-warn-soft); color:var(--cbx-warn-text); }
 
 /* ---- Modal ---- */
 .cbx-modal-backdrop{
@@ -6178,9 +6179,9 @@ function PackageTrackingProvider({ children }) {
         });
       }
     }
+    if (!error && data) setPackages(data);
     setLoading(false);
     setReady(true);
-    if (!error && data) setPackages(data);
     // Pull the shared status log too, so lists/timelines on every device
     // show the same stage times and "Proceed By".
     const { data: hist, error: histErr } = await supabase
@@ -15964,82 +15965,53 @@ function CreateRowModal({
   }
 
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
+    <AppModal
+      title={title}
+      maxW="max-w-md"
+      onClose={onClose}
+      onSubmit={handleSubmit}
+      busy={saving}
+      error={error}
+      submitLabel="Save"
+      busyLabel="កំពុងSave..."
     >
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={handleSubmit}
-        className="bg-white rounded-md shadow-lg w-full max-w-md max-h-[85vh] overflow-y-auto"
-      >
-        <div className="px-5 py-4 border-b border-mist-200">
-          <h3 className="font-display font-bold text-base text-ink-900">
-            {title}
-          </h3>
-        </div>
-        <div className="p-5 space-y-3.5">
-          {error && (
-            <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2">
-              <TriangleAlert size={14} className="shrink-0" />
-              {error}
-            </div>
-          )}
-          {editableColumns.map((c) => {
-            const options = c.status ? statusOptions(c.key) : null;
-            return (
-              <div key={c.key}>
-                <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-                  {c.label}
-                </label>
-                {options && options.length > 0 ? (
-                  <select
-                    value={values[c.key] ?? ""}
-                    onChange={(e) =>
-                      setValues((v) => ({ ...v, [c.key]: e.target.value }))
-                    }
-                    className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-                  >
-                    <option value="" disabled>
-                      ជ្រើសរើស...
-                    </option>
-                    {options.map((opt) => (
-                      <option key={opt} value={opt}>
-                        {opt}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    value={values[c.key] ?? ""}
-                    onChange={(e) =>
-                      setValues((v) => ({ ...v, [c.key]: e.target.value }))
-                    }
-                    className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-                  />
-                )}
-              </div>
-            );
-          })}
-        </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={saving}
-            className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
-          >
-            {saving ? "កំពុងSave..." : "Save"}
-          </button>
-        </div>
-      </form>
-    </div>
+      {editableColumns.map((c) => {
+        const options = c.status ? statusOptions(c.key) : null;
+        return (
+          <div key={c.key}>
+            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
+              {c.label}
+            </label>
+            {options && options.length > 0 ? (
+              <select
+                value={values[c.key] ?? ""}
+                onChange={(e) =>
+                  setValues((v) => ({ ...v, [c.key]: e.target.value }))
+                }
+                className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+              >
+                <option value="" disabled>
+                  ជ្រើសរើស...
+                </option>
+                {options.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={values[c.key] ?? ""}
+                onChange={(e) =>
+                  setValues((v) => ({ ...v, [c.key]: e.target.value }))
+                }
+                className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+              />
+            )}
+          </div>
+        );
+      })}
+    </AppModal>
   );
 }
 
@@ -16117,115 +16089,84 @@ function CreateCustomerAccountModal({ open, onClose, onCreated }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
+    <AppModal
+      title="New Customer"
+      subtitle="អតិថិជនអាចចូលប្រើដោយ Phone + Password នេះភ្លាមៗ"
+      maxW="max-w-md"
+      onClose={onClose}
+      onSubmit={handleSubmit}
+      busy={saving}
+      error={error}
+      submitLabel="Create"
+      busyLabel="កំពុងបង្កើត..."
     >
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={handleSubmit}
-        className="bg-white rounded-md shadow-lg w-full max-w-md max-h-[85vh] overflow-y-auto"
-      >
-        <div className="px-5 py-4 border-b border-mist-200">
-          <h3 className="font-display font-bold text-base text-ink-900">
-            New Customer
-          </h3>
-          <p className="text-xs text-ink-600/55 mt-0.5">
-            អតិថិជនអាចចូលប្រើដោយ Phone + Password នេះភ្លាមៗ
-          </p>
-        </div>
-        <div className="p-5 space-y-3.5">
-          {error && (
-            <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2">
-              <TriangleAlert size={14} className="shrink-0" />
-              {error}
-            </div>
-          )}
-          <div>
-            <label className={labelCls}>Name</label>
-            <input
-              required
-              autoFocus
-              value={values.name ?? ""}
-              onChange={(e) => set("name", e.target.value)}
-              className={inputCls}
-            />
-          </div>
-          <div>
-            <label className={labelCls}>Phone (ប្រើសម្រាប់ Login)</label>
-            <input
-              required
-              inputMode="tel"
-              value={values.phone ?? ""}
-              onChange={(e) => set("phone", e.target.value)}
-              className={inputCls}
-            />
-          </div>
-          <div>
-            <label className={labelCls}>Password</label>
-            <div className="flex items-center gap-2">
-              <input
-                required
-                type={show ? "text" : "password"}
-                value={values.password ?? ""}
-                onChange={(e) => set("password", e.target.value)}
-                className={inputCls}
-              />
-              <button
-                type="button"
-                onClick={() => setShow((v) => !v)}
-                className="h-9 w-9 shrink-0 rounded-md border border-mist-200 grid place-items-center text-ink-600/60"
-                aria-label="Show / hide password"
-              >
-                {show ? <Icons.EyeOff size={15} /> : <Icons.Eye size={15} />}
-              </button>
-              <button
-                type="button"
-                onClick={copyPw}
-                className="h-9 px-2.5 shrink-0 rounded-md border border-mist-200 text-xs font-semibold text-ink-700"
-              >
-                {copied ? "Copied" : "Copy"}
-              </button>
-              <button
-                type="button"
-                onClick={() => set("password", generateTempPassword())}
-                className="h-9 px-2.5 shrink-0 rounded-md border border-mist-200 text-xs font-semibold text-ink-700"
-              >
-                Generate
-              </button>
-            </div>
-            <p className="text-xs text-ink-600/45 mt-1">
-              យ៉ាងតិច 6 តួអក្សរ — ចម្លងផ្ញើជូនអតិថិជនមុនបិទ Form នេះ។
-            </p>
-          </div>
-          <div>
-            <label className={labelCls}>Email (មិនចាំបាច់)</label>
-            <input
-              type="email"
-              value={values.email ?? ""}
-              onChange={(e) => set("email", e.target.value)}
-              className={inputCls}
-            />
-          </div>
-        </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
+      <div>
+        <label className={labelCls}>Name</label>
+        <input
+          required
+          autoFocus
+          value={values.name ?? ""}
+          onChange={(e) => set("name", e.target.value)}
+          className={inputCls}
+        />
+      </div>
+      <div>
+        <label className={labelCls}>Phone (ប្រើសម្រាប់ Login)</label>
+        <input
+          required
+          inputMode="tel"
+          value={values.phone ?? ""}
+          onChange={(e) => set("phone", e.target.value)}
+          className={inputCls}
+        />
+      </div>
+      <div>
+        <label className={labelCls}>Password</label>
+        <div className="flex items-center gap-2">
+          <input
+            required
+            type={show ? "text" : "password"}
+            value={values.password ?? ""}
+            onChange={(e) => set("password", e.target.value)}
+            className={inputCls}
+          />
           <button
             type="button"
-            onClick={onClose}
-            className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50"
+            onClick={() => setShow((v) => !v)}
+            className="h-9 w-9 shrink-0 rounded-md border border-mist-200 grid place-items-center text-ink-600/60"
+            aria-label="Show / hide password"
           >
-            Cancel
+            {show ? <Icons.EyeOff size={15} /> : <Icons.Eye size={15} />}
           </button>
           <button
-            type="submit"
-            disabled={saving}
-            className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
+            type="button"
+            onClick={copyPw}
+            className="h-9 px-2.5 shrink-0 rounded-md border border-mist-200 text-xs font-semibold text-ink-700"
           >
-            {saving ? "កំពុងបង្កើត..." : "Create"}
+            {copied ? "Copied" : "Copy"}
+          </button>
+          <button
+            type="button"
+            onClick={() => set("password", generateTempPassword())}
+            className="h-9 px-2.5 shrink-0 rounded-md border border-mist-200 text-xs font-semibold text-ink-700"
+          >
+            Generate
           </button>
         </div>
-      </form>
-    </div>
+        <p className="text-xs text-ink-600/45 mt-1">
+          យ៉ាងតិច 6 តួអក្សរ — ចម្លងផ្ញើជូនអតិថិជនមុនបិទ Form នេះ។
+        </p>
+      </div>
+      <div>
+        <label className={labelCls}>Email (មិនចាំបាច់)</label>
+        <input
+          type="email"
+          value={values.email ?? ""}
+          onChange={(e) => set("email", e.target.value)}
+          className={inputCls}
+        />
+      </div>
+    </AppModal>
   );
 }
 
@@ -16338,201 +16279,167 @@ function CreateStaffUserModal({ open, existingRows, onClose, onCreated }) {
   ];
 
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
+    <AppModal
+      title="New User"
+      maxW="max-w-md"
+      onClose={onClose}
+      onSubmit={handleSubmit}
+      busy={saving}
+      error={error}
+      submitLabel="បង្កើត User"
+      busyLabel="កំពុងបង្កើត..."
     >
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={handleSubmit}
-        className="bg-white rounded-md shadow-lg w-full max-w-md max-h-[85vh] overflow-y-auto"
-      >
-        <div className="px-5 py-4 border-b border-mist-200">
-          <h3 className="font-display font-bold text-base text-ink-900">
-            New User
-          </h3>
-        </div>
-        <div className="p-5 space-y-3.5">
-          {error && (
-            <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2">
-              <TriangleAlert size={14} className="shrink-0" />
-              {error}
-            </div>
-          )}
+      <div>
+        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
+          Name
+        </label>
+        <input
+          required
+          value={values.name ?? ""}
+          onChange={(e) => set("name", e.target.value)}
+          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+        />
+      </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              Name
-            </label>
-            <input
-              required
-              value={values.name ?? ""}
-              onChange={(e) => set("name", e.target.value)}
-              className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-            />
-          </div>
+      <div>
+        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
+          Role
+        </label>
+        <select
+          required
+          value={values.role ?? ""}
+          onChange={(e) => set("role", e.target.value)}
+          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+        >
+          <option value="" disabled>
+            ជ្រើសរើស...
+          </option>
+          {roleOptions.map((r) => (
+            <option key={r.name} value={r.name}>
+              {r.level == null ? r.name : `${r.name} (Level ${r.level})`}
+            </option>
+          ))}
+        </select>
+        {selectedRole && (
+          <p className="text-xs text-ink-600/45 mt-1">
+            Data scope: {selectedRole.scope} — {SCOPE_HINT[selectedRole.scope]}
+          </p>
+        )}
+      </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              Role
-            </label>
-            <select
-              required
-              value={values.role ?? ""}
-              onChange={(e) => set("role", e.target.value)}
-              className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-            >
-              <option value="" disabled>
-                ជ្រើសរើស...
-              </option>
-              {roleOptions.map((r) => (
-                <option key={r.name} value={r.name}>
-                  {r.level == null ? r.name : `${r.name} (Level ${r.level})`}
-                </option>
-              ))}
-            </select>
-            {selectedRole && (
-              <p className="text-xs text-ink-600/45 mt-1">
-                Data scope: {selectedRole.scope} —{" "}
-                {SCOPE_HINT[selectedRole.scope]}
-              </p>
-            )}
-          </div>
+      <div>
+        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
+          Department
+        </label>
+        <select
+          required={!!selectedRole && selectedRole.scope !== "GLOBAL"}
+          value={values.department ?? ""}
+          onChange={(e) => {
+            const d = DEPARTMENTS.find((x) => x.name === e.target.value);
+            setValues((v) => ({
+              ...v,
+              department: e.target.value,
+              // drop a warehouse that no longer matches the department
+              warehouse_code:
+                d?.country &&
+                whRows.find((w) => w.code === v.warehouse_code)?.type !==
+                  d.country
+                  ? ""
+                  : v.warehouse_code,
+            }));
+          }}
+          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+        >
+          <option value="">—</option>
+          {DEPARTMENTS.map((d) => (
+            <option key={d.name} value={d.name}>
+              {d.name}
+            </option>
+          ))}
+        </select>
+      </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              Department
-            </label>
-            <select
-              required={!!selectedRole && selectedRole.scope !== "GLOBAL"}
-              value={values.department ?? ""}
-              onChange={(e) => {
-                const d = DEPARTMENTS.find((x) => x.name === e.target.value);
-                setValues((v) => ({
-                  ...v,
-                  department: e.target.value,
-                  // drop a warehouse that no longer matches the department
-                  warehouse_code:
-                    d?.country &&
-                    whRows.find((w) => w.code === v.warehouse_code)?.type !==
-                      d.country
-                      ? ""
-                      : v.warehouse_code,
-                }));
-              }}
-              className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-            >
-              <option value="">—</option>
-              {DEPARTMENTS.map((d) => (
-                <option key={d.name} value={d.name}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
-          </div>
+      <div>
+        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
+          Warehouse / Branch
+        </label>
+        <select
+          required={
+            !!selectedRole &&
+            ["WAREHOUSE", "BRANCH", "TEAM", "SELF"].includes(selectedRole.scope)
+          }
+          value={values.warehouse_code ?? ""}
+          onChange={(e) => set("warehouse_code", e.target.value)}
+          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+        >
+          <option value="">—</option>
+          {whOptions.map((w) => (
+            <option key={w.code} value={w.code}>
+              {w.code} — {w.name}
+            </option>
+          ))}
+        </select>
+      </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              Warehouse / Branch
-            </label>
-            <select
-              required={
-                !!selectedRole &&
-                ["WAREHOUSE", "BRANCH", "TEAM", "SELF"].includes(
-                  selectedRole.scope,
-                )
-              }
-              value={values.warehouse_code ?? ""}
-              onChange={(e) => set("warehouse_code", e.target.value)}
-              className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-            >
-              <option value="">—</option>
-              {whOptions.map((w) => (
-                <option key={w.code} value={w.code}>
-                  {w.code} — {w.name}
-                </option>
-              ))}
-            </select>
-          </div>
+      <div>
+        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
+          Email
+        </label>
+        <input
+          required
+          type="email"
+          value={values.email ?? ""}
+          onChange={(e) => set("email", e.target.value)}
+          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+        />
+      </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              Email
-            </label>
-            <input
-              required
-              type="email"
-              value={values.email ?? ""}
-              onChange={(e) => set("email", e.target.value)}
-              className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              Password
-            </label>
-            <div className="relative">
-              <input
-                required
-                minLength={8}
-                type={showPassword ? "text" : "password"}
-                value={values.password ?? ""}
-                onChange={(e) => set("password", e.target.value)}
-                className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 pr-9 text-sm outline-none focus:border-signal-blue"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword((v) => !v)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-600/40 hover:text-ink-600"
-              >
-                {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
-              </button>
-            </div>
-            <p className="text-xs text-ink-600/45 mt-1">
-              ផ្តល់ password នេះទៅ staff ដោយផ្ទាល់ (SMS/Telegram) — កុំផ្ញើតាម
-              email ធម្មតា។
-            </p>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              Status
-            </label>
-            <select
-              value={values.status ?? "Active"}
-              onChange={(e) => set("status", e.target.value)}
-              className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-            >
-              {(statusOptions.length
-                ? statusOptions
-                : ["Active", "Suspended"]
-              ).map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
+      <div>
+        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
+          Password
+        </label>
+        <div className="relative">
+          <input
+            required
+            minLength={8}
+            type={showPassword ? "text" : "password"}
+            value={values.password ?? ""}
+            onChange={(e) => set("password", e.target.value)}
+            className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 pr-9 text-sm outline-none focus:border-signal-blue"
+          />
           <button
             type="button"
-            onClick={onClose}
-            className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50"
+            onClick={() => setShowPassword((v) => !v)}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-600/40 hover:text-ink-600"
           >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={saving}
-            className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
-          >
-            {saving ? "កំពុងបង្កើត..." : "បង្កើត User"}
+            {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
           </button>
         </div>
-      </form>
-    </div>
+        <p className="text-xs text-ink-600/45 mt-1">
+          ផ្តល់ password នេះទៅ staff ដោយផ្ទាល់ (SMS/Telegram) — កុំផ្ញើតាម email
+          ធម្មតា។
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
+          Status
+        </label>
+        <select
+          value={values.status ?? "Active"}
+          onChange={(e) => set("status", e.target.value)}
+          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+        >
+          {(statusOptions.length ? statusOptions : ["Active", "Suspended"]).map(
+            (opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ),
+          )}
+        </select>
+      </div>
+    </AppModal>
   );
 }
 
@@ -17429,68 +17336,35 @@ function RowEditModal({ row, columns, onSave, onClose }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
+    <AppModal
+      title={`Edit ${row.id ?? ""}`}
+      maxW="max-w-md"
+      onClose={onClose}
+      onSubmit={submit}
+      busy={saving}
+      error={error}
+      submitLabel="Save"
+      busyLabel="កំពុងSave..."
     >
-      <form
-        onSubmit={submit}
-        onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-md shadow-lg w-full max-w-md max-h-[90vh] overflow-y-auto"
-      >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-mist-200">
-          <h3 className="font-display font-bold text-lg text-ink-900">
-            Edit {row.id ?? ""}
-          </h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-ink-600/40 hover:text-ink-900"
-          >
-            <X size={18} />
-          </button>
+      {editable.map((c) => (
+        <div key={c.key}>
+          <label className={LABEL_CLS}>{c.label}</label>
+          {c.options || c.optionsFrom ? (
+            <OptionSelect
+              column={c}
+              value={f[c.key] ?? ""}
+              onChange={(val) => setF((v) => ({ ...v, [c.key]: val }))}
+            />
+          ) : (
+            <input
+              className={INPUT_CLS}
+              value={f[c.key] ?? ""}
+              onChange={(e) => setF((v) => ({ ...v, [c.key]: e.target.value }))}
+            />
+          )}
         </div>
-        <div className="px-5 py-4 space-y-3">
-          {error && <p className="text-xs text-signal-red">{error}</p>}
-          {editable.map((c) => (
-            <div key={c.key}>
-              <label className={LABEL_CLS}>{c.label}</label>
-              {c.options || c.optionsFrom ? (
-                <OptionSelect
-                  column={c}
-                  value={f[c.key] ?? ""}
-                  onChange={(val) => setF((v) => ({ ...v, [c.key]: val }))}
-                />
-              ) : (
-                <input
-                  className={INPUT_CLS}
-                  value={f[c.key] ?? ""}
-                  onChange={(e) =>
-                    setF((v) => ({ ...v, [c.key]: e.target.value }))
-                  }
-                />
-              )}
-            </div>
-          ))}
-        </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm font-medium text-ink-700 px-4 py-2 rounded-md hover:bg-mist-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={saving}
-            className="bg-signal-blue text-white text-sm font-medium px-4 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
-          >
-            {saving ? "កំពុងSave..." : "Save"}
-          </button>
-        </div>
-      </form>
-    </div>
+      ))}
+    </AppModal>
   );
 }
 
@@ -17595,127 +17469,92 @@ function CustomerResetPasswordModal({ row, onClose }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <form
-        onSubmit={submit}
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden"
-      >
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 grid place-items-center">
-              <Icons.KeyRound size={18} />
-            </span>
-            <div>
-              <h3 className="font-bold text-lg text-slate-900">
-                Reset Password
-              </h3>
-              <p className="text-xs text-slate-500">
-                {row.id} · {row.name}
-                {row.phone ? ` · ${row.phone}` : ""}
-              </p>
-            </div>
-          </div>
-          <button type="button" onClick={onClose}>
-            <Icons.X size={18} />
-          </button>
-        </div>
-        <div className="p-5 space-y-4">
-          {error && (
-            <div className="rounded-xl bg-red-50 text-red-700 px-3 py-2 text-sm">
-              {error}
-            </div>
-          )}
-          {done ? (
-            <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4 space-y-2">
-              <p className="text-sm font-semibold text-emerald-800">
-                Reset បានជោគជ័យ — សូមផ្តល់ Password ថ្មីនេះទៅអតិថិជន
-              </p>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 rounded-lg bg-white border border-emerald-200 px-3 py-2 text-base font-bold tracking-wider text-slate-900 select-all">
-                  {pw}
-                </code>
-                <button
-                  type="button"
-                  onClick={copyPw}
-                  className="h-10 px-3 rounded-xl border border-emerald-200 bg-white text-sm font-semibold text-emerald-700"
-                >
-                  {copied ? "Copied" : "Copy"}
-                </button>
-              </div>
-              <p className="text-xs text-emerald-700/80">
-                Password នេះនឹងមិនបង្ហាញម្តងទៀតទេ បន្ទាប់ពីបិទផ្ទាំងនេះ។
-              </p>
-              <p className="text-xs text-emerald-700/80">
-                ពេលភ្ញៀវ login ដំបូង app នឹងបង្ខំឱ្យគាត់ប្តូរទៅ Password
-                ផ្ទាល់ខ្លួន ដូច្នេះ staff នឹងលែងដឹង Password របស់គាត់។
-              </p>
-            </div>
-          ) : (
-            <>
-              <label className="block">
-                <span className="text-xs font-semibold text-slate-500">
-                  New Password
-                </span>
-                <div className="mt-1 flex items-center gap-2">
-                  <input
-                    autoFocus
-                    type={show ? "text" : "password"}
-                    value={pw}
-                    onChange={(e) => setPw(e.target.value)}
-                    className={`${INPUT_CLS} flex-1 font-mono`}
-                    autoComplete="new-password"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShow((v) => !v)}
-                    className="h-10 w-10 rounded-xl border border-slate-200 grid place-items-center text-slate-500"
-                    aria-label="Show / hide password"
-                  >
-                    {show ? (
-                      <Icons.EyeOff size={16} />
-                    ) : (
-                      <Icons.Eye size={16} />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPw(generateTempPassword())}
-                    className="h-10 px-3 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 whitespace-nowrap"
-                  >
-                    Generate
-                  </button>
-                </div>
-              </label>
-              <p className="text-xs text-slate-500">
-                អតិថិជននឹងចូលប្រើដោយលេខទូរស័ព្ទ និង Password ថ្មីនេះភ្លាមៗ ហើយ
-                Password ចាស់លែងប្រើបាន។
-              </p>
-            </>
-          )}
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
+    <AppModal
+      title="Reset Password"
+      subtitle={`${row.id} · ${row.name}${row.phone ? ` · ${row.phone}` : ""}`}
+      maxW="max-w-md"
+      onClose={onClose}
+      onSubmit={submit}
+      busy={busy}
+      error={error}
+      submitLabel="Reset Password"
+      busyLabel="Resetting…"
+      footer={
+        done ? (
           <button
             type="button"
+            className="cbx-btn cbx-btn-primary"
             onClick={onClose}
-            className="h-10 px-4 rounded-xl border border-slate-200 text-sm font-semibold"
           >
-            {done ? "Close" : "Cancel"}
+            Close
           </button>
-          {!done && (
+        ) : undefined
+      }
+    >
+      {done ? (
+        <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4 space-y-2">
+          <p className="text-sm font-semibold text-emerald-800">
+            Reset បានជោគជ័យ — សូមផ្តល់ Password ថ្មីនេះទៅអតិថិជន
+          </p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 rounded-lg bg-white border border-emerald-200 px-3 py-2 text-base font-bold tracking-wider text-slate-900 select-all">
+              {pw}
+            </code>
             <button
-              disabled={busy}
-              className="h-10 px-5 rounded-xl bg-amber-600 text-white text-sm font-bold disabled:opacity-50"
+              type="button"
+              onClick={copyPw}
+              className="h-10 px-3 rounded-xl border border-emerald-200 bg-white text-sm font-semibold text-emerald-700"
             >
-              {busy ? "Resetting…" : "Reset Password"}
+              {copied ? "Copied" : "Copy"}
             </button>
-          )}
+          </div>
+          <p className="text-xs text-emerald-700/80">
+            Password នេះនឹងមិនបង្ហាញម្តងទៀតទេ បន្ទាប់ពីបិទផ្ទាំងនេះ។
+          </p>
+          <p className="text-xs text-emerald-700/80">
+            ពេលភ្ញៀវ login ដំបូង app នឹងបង្ខំឱ្យគាត់ប្តូរទៅ Password ផ្ទាល់ខ្លួន
+            ដូច្នេះ staff នឹងលែងដឹង Password របស់គាត់។
+          </p>
         </div>
-      </form>
-    </div>
+      ) : (
+        <>
+          <label className="block">
+            <span className="text-xs font-semibold text-slate-500">
+              New Password
+            </span>
+            <div className="mt-1 flex items-center gap-2">
+              <input
+                autoFocus
+                type={show ? "text" : "password"}
+                value={pw}
+                onChange={(e) => setPw(e.target.value)}
+                className={`${INPUT_CLS} flex-1 font-mono`}
+                autoComplete="new-password"
+              />
+              <button
+                type="button"
+                onClick={() => setShow((v) => !v)}
+                className="h-10 w-10 rounded-xl border border-slate-200 grid place-items-center text-slate-500"
+                aria-label="Show / hide password"
+              >
+                {show ? <Icons.EyeOff size={16} /> : <Icons.Eye size={16} />}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPw(generateTempPassword())}
+                className="h-10 px-3 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 whitespace-nowrap"
+              >
+                Generate
+              </button>
+            </div>
+          </label>
+          <p className="text-xs text-slate-500">
+            អតិថិជននឹងចូលប្រើដោយលេខទូរស័ព្ទ និង Password ថ្មីនេះភ្លាមៗ ហើយ
+            Password ចាស់លែងប្រើបាន។
+          </p>
+        </>
+      )}
+    </AppModal>
   );
 }
 
@@ -17781,123 +17620,89 @@ function StaffResetPasswordModal({ row, onClose }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <form
-        onSubmit={submit}
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden"
-      >
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 grid place-items-center">
-              <Icons.KeyRound size={18} />
-            </span>
-            <div>
-              <h3 className="font-bold text-lg text-slate-900">
-                Reset Staff Password
-              </h3>
-              <p className="text-xs text-slate-500">
-                {row.name} · {row.email}
-              </p>
-            </div>
-          </div>
-          <button type="button" onClick={onClose}>
-            <Icons.X size={18} />
-          </button>
-        </div>
-        <div className="p-5 space-y-4">
-          {error && (
-            <div className="rounded-xl bg-red-50 text-red-700 px-3 py-2 text-sm">
-              {error}
-            </div>
-          )}
-          {done ? (
-            <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4 space-y-2">
-              <p className="text-sm font-semibold text-emerald-800">
-                Reset បានជោគជ័យ — សូមផ្តល់ Password ថ្មីនេះទៅ Staff
-              </p>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 rounded-lg bg-white border border-emerald-200 px-3 py-2 text-base font-bold tracking-wider text-slate-900 select-all">
-                  {pw}
-                </code>
-                <button
-                  type="button"
-                  onClick={copyPw}
-                  className="h-10 px-3 rounded-xl border border-emerald-200 bg-white text-sm font-semibold text-emerald-700"
-                >
-                  {copied ? "Copied" : "Copy"}
-                </button>
-              </div>
-              <p className="text-xs text-emerald-700/80">
-                Password នេះនឹងមិនបង្ហាញម្តងទៀតទេ។ សូមណែនាំ Staff ឱ្យប្តូរទៅ
-                Password ផ្ទាល់ខ្លួនតាម Profile → Change Password។
-              </p>
-            </div>
-          ) : (
-            <>
-              <label className="block">
-                <span className="text-xs font-semibold text-slate-500">
-                  New Password
-                </span>
-                <div className="mt-1 flex items-center gap-2">
-                  <input
-                    autoFocus
-                    type={show ? "text" : "password"}
-                    value={pw}
-                    onChange={(e) => setPw(e.target.value)}
-                    className={`${INPUT_CLS} flex-1 font-mono`}
-                    autoComplete="new-password"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShow((v) => !v)}
-                    className="h-10 w-10 rounded-xl border border-slate-200 grid place-items-center text-slate-500"
-                    aria-label="Show / hide password"
-                  >
-                    {show ? (
-                      <Icons.EyeOff size={16} />
-                    ) : (
-                      <Icons.Eye size={16} />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPw(generateTempPassword(10))}
-                    className="h-10 px-3 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 whitespace-nowrap"
-                  >
-                    Generate
-                  </button>
-                </div>
-              </label>
-              <p className="text-xs text-slate-500">
-                Staff នឹងចូលប្រើដោយ Email និង Password ថ្មីនេះភ្លាមៗ ហើយ
-                Password ចាស់លែងប្រើបាន។
-              </p>
-            </>
-          )}
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
+    <AppModal
+      title="Reset Staff Password"
+      subtitle={`${row.name} · ${row.email}`}
+      maxW="max-w-md"
+      onClose={onClose}
+      onSubmit={submit}
+      busy={busy}
+      error={error}
+      submitLabel="Reset Password"
+      busyLabel="Resetting…"
+      footer={
+        done ? (
           <button
             type="button"
+            className="cbx-btn cbx-btn-primary"
             onClick={onClose}
-            className="h-10 px-4 rounded-xl border border-slate-200 text-sm font-semibold"
           >
-            {done ? "Close" : "Cancel"}
+            Close
           </button>
-          {!done && (
+        ) : undefined
+      }
+    >
+      {done ? (
+        <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4 space-y-2">
+          <p className="text-sm font-semibold text-emerald-800">
+            Reset បានជោគជ័យ — សូមផ្តល់ Password ថ្មីនេះទៅ Staff
+          </p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 rounded-lg bg-white border border-emerald-200 px-3 py-2 text-base font-bold tracking-wider text-slate-900 select-all">
+              {pw}
+            </code>
             <button
-              disabled={busy}
-              className="h-10 px-5 rounded-xl bg-amber-600 text-white text-sm font-bold disabled:opacity-50"
+              type="button"
+              onClick={copyPw}
+              className="h-10 px-3 rounded-xl border border-emerald-200 bg-white text-sm font-semibold text-emerald-700"
             >
-              {busy ? "Resetting…" : "Reset Password"}
+              {copied ? "Copied" : "Copy"}
             </button>
-          )}
+          </div>
+          <p className="text-xs text-emerald-700/80">
+            Password នេះនឹងមិនបង្ហាញម្តងទៀតទេ។ សូមណែនាំ Staff ឱ្យប្តូរទៅ
+            Password ផ្ទាល់ខ្លួនតាម Profile → Change Password។
+          </p>
         </div>
-      </form>
-    </div>
+      ) : (
+        <>
+          <label className="block">
+            <span className="text-xs font-semibold text-slate-500">
+              New Password
+            </span>
+            <div className="mt-1 flex items-center gap-2">
+              <input
+                autoFocus
+                type={show ? "text" : "password"}
+                value={pw}
+                onChange={(e) => setPw(e.target.value)}
+                className={`${INPUT_CLS} flex-1 font-mono`}
+                autoComplete="new-password"
+              />
+              <button
+                type="button"
+                onClick={() => setShow((v) => !v)}
+                className="h-10 w-10 rounded-xl border border-slate-200 grid place-items-center text-slate-500"
+                aria-label="Show / hide password"
+              >
+                {show ? <Icons.EyeOff size={16} /> : <Icons.Eye size={16} />}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPw(generateTempPassword(10))}
+                className="h-10 px-3 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 whitespace-nowrap"
+              >
+                Generate
+              </button>
+            </div>
+          </label>
+          <p className="text-xs text-slate-500">
+            Staff នឹងចូលប្រើដោយ Email និង Password ថ្មីនេះភ្លាមៗ ហើយ Password
+            ចាស់លែងប្រើបាន។
+          </p>
+        </>
+      )}
+    </AppModal>
   );
 }
 
@@ -17959,68 +17764,48 @@ function StaffChangePasswordModal({ onClose }) {
     </label>
   );
 
-  return createPortal(
-    <div
-      className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <form
-        onSubmit={submit}
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md rounded-2xl bg-white shadow-2xl overflow-hidden"
-      >
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-          <h3 className="font-bold text-lg text-slate-900">Change Password</h3>
-          <button type="button" onClick={onClose}>
-            <Icons.X size={18} />
-          </button>
-        </div>
-        <div className="p-5 space-y-3.5">
-          {error && (
-            <div className="rounded-xl bg-red-50 text-red-700 px-3 py-2 text-sm">
-              {error}
-            </div>
-          )}
-          {done ? (
-            <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4 text-sm font-semibold text-emerald-800">
-              Password ត្រូវបានប្តូរជោគជ័យ។
-            </div>
-          ) : (
-            <>
-              {field("Current Password", cur, setCur, "current-password")}
-              {field("New Password", next, setNext, "new-password")}
-              {field("Confirm New Password", again, setAgain, "new-password")}
-              <label className="flex items-center gap-2 text-xs text-slate-500">
-                <input
-                  type="checkbox"
-                  checked={show}
-                  onChange={(e) => setShow(e.target.checked)}
-                />
-                Show passwords
-              </label>
-            </>
-          )}
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
+  return (
+    <AppModal
+      title="Change Password"
+      maxW="max-w-md"
+      onClose={onClose}
+      onSubmit={submit}
+      busy={busy}
+      error={error}
+      submitLabel="Change Password"
+      busyLabel="Saving…"
+      footer={
+        done ? (
           <button
             type="button"
+            className="cbx-btn cbx-btn-primary"
             onClick={onClose}
-            className="h-10 px-4 rounded-xl border border-slate-200 text-sm font-semibold"
           >
-            {done ? "Close" : "Cancel"}
+            Close
           </button>
-          {!done && (
-            <button
-              disabled={busy}
-              className="h-10 px-5 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-50"
-            >
-              {busy ? "Saving…" : "Change Password"}
-            </button>
-          )}
+        ) : undefined
+      }
+    >
+      {done ? (
+        <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4 text-sm font-semibold text-emerald-800">
+          Password ត្រូវបានប្តូរជោគជ័យ។
         </div>
-      </form>
-    </div>,
-    document.body,
+      ) : (
+        <>
+          {field("Current Password", cur, setCur, "current-password")}
+          {field("New Password", next, setNext, "new-password")}
+          {field("Confirm New Password", again, setAgain, "new-password")}
+          <label className="flex items-center gap-2 text-xs text-slate-500">
+            <input
+              type="checkbox"
+              checked={show}
+              onChange={(e) => setShow(e.target.checked)}
+            />
+            Show passwords
+          </label>
+        </>
+      )}
+    </AppModal>
   );
 }
 
@@ -18035,92 +17820,61 @@ function RowDeleteModal({
   const [error, setError] = useState("");
   const [reason, setReason] = useState("");
   if (!label) return null;
+
+  async function go(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await onConfirm(reason.trim());
+      onClose();
+    } catch (err) {
+      setError(
+        err.message || (archive ? "Unable to archive." : "Unable to delete."),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
+    <AppModal
+      title={archive ? "Archive customer" : "Delete"}
+      danger
+      maxW="max-w-sm"
+      onClose={onClose}
+      onSubmit={go}
+      busy={busy}
+      error={error}
+      submitTone="danger"
+      submitLabel={archive ? "Archive" : "Delete"}
+      busyLabel={archive ? "Archiving..." : "Deleting..."}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-md shadow-lg w-full max-w-sm"
-      >
-        <div className="px-5 py-4 border-b border-mist-200 flex items-center gap-2 text-signal-red">
-          <TriangleAlert size={18} />
-          <h3 className="font-display font-bold text-lg">
-            {archive ? "Archive customer" : "Delete"}
-          </h3>
-        </div>
-        <div className="px-5 py-4 text-sm text-ink-700 space-y-2">
-          {archive ? (
-            <>
-              <p>
-                Archive <b>{label}</b>? គណនីនឹងត្រូវផ្អាក មិនអាចចូលប្រើបានទេ
-                ប៉ុន្តែ Orders, Wallet, Address និងប្រវត្តិទាំងអស់ត្រូវបានរក្សា
-                ហើយអាចស្តារឡើងវិញបានពី Customer Recovery។
-              </p>
-              <label className="block text-xs font-medium text-ink-700">
-                Reason (optional)
-                <textarea
-                  value={reason}
-                  onChange={(e) => setReason(e.target.value)}
-                  maxLength={300}
-                  rows={2}
-                  className="mt-1 w-full border border-mist-200 rounded-md px-3 py-2 text-sm"
-                />
-              </label>
-            </>
-          ) : (
-            <p>
-              Are you sure you want to permanently delete <b>{label}</b>{" "}
-              ជាអចិន្ត្រៃយ៍មែនទេ? This action cannot be undone.
-            </p>
-          )}
-          {notice && (
-            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
-              {notice}
-            </p>
-          )}
-          {error && <p className="text-xs text-signal-red">{error}</p>}
-        </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm font-medium text-ink-700 px-4 py-2 rounded-md hover:bg-mist-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              setError("");
-              try {
-                await onConfirm(reason.trim());
-                onClose();
-              } catch (err) {
-                setError(
-                  err.message ||
-                    (archive ? "Unable to archive." : "Unable to delete."),
-                );
-              } finally {
-                setBusy(false);
-              }
-            }}
-            className="bg-signal-red text-white text-sm font-medium px-4 py-2 rounded-md hover:bg-signal-red/90 disabled:opacity-50"
-          >
-            {busy
-              ? archive
-                ? "Archiving..."
-                : "Deleting..."
-              : archive
-                ? "Archive"
-                : "Delete"}
-          </button>
-        </div>
-      </div>
-    </div>
+      {archive ? (
+        <>
+          <p className="cbx-modal-text">
+            Archive <b>{label}</b>? គណនីនឹងត្រូវផ្អាក មិនអាចចូលប្រើបានទេ ប៉ុន្តែ
+            Orders, Wallet, Address និងប្រវត្តិទាំងអស់ត្រូវបានរក្សា
+            ហើយអាចស្តារឡើងវិញបានពី Customer Recovery។
+          </p>
+          <FormField label="Reason (optional)">
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              maxLength={300}
+              rows={2}
+              className="cbx-input"
+            />
+          </FormField>
+        </>
+      ) : (
+        <p className="cbx-modal-text">
+          Are you sure you want to permanently delete <b>{label}</b>{" "}
+          ជាអចិន្ត្រៃយ៍មែនទេ? This action cannot be undone.
+        </p>
+      )}
+      {notice && <div className="cbx-alert is-warn">{notice}</div>}
+    </AppModal>
   );
 }
 
@@ -18505,6 +18259,8 @@ function ListPage({
   const {
     packages,
     ready: packagesReady,
+    loading: packagesLoading,
+    refetch: refetchPackages,
     upsertPackage,
     deletePackage,
     syncTimelineToStatus,
@@ -18697,9 +18453,45 @@ function ListPage({
     if (!canCreate) throw new Error(NO_PERM_MSG); // guard the action itself
     return (isLinkedTk ? addLinkedRow : addTableRow)(values);
   };
-  // Skeleton only while the FIRST server fetch is running.
-  const listLoading =
-    isLinkedTk || isExceptionsModule ? !packagesReady : !tableReady;
+  // Packages / TK, Inbound Origin, Outbound Origin and Sorting read the
+  // app-wide TK registry, which is already cached when you open the page.
+  // To behave like every other list (CN Orders etc.) they now refetch on
+  // every visit and show the Skeleton until that fetch finishes.
+  const [enterLoading, setEnterLoading] = useState(isLinkedTk);
+  const sawLoad = useRef(false);
+  useEffect(() => {
+    if (!isLinkedTk) {
+      setEnterLoading(false);
+      return undefined;
+    }
+    sawLoad.current = false;
+    setEnterLoading(true);
+    refetchPackages?.();
+    // Nothing to fetch (UI-only mode / not signed in): brief skeleton only.
+    // Otherwise a safety net so a slow request never hides cached rows.
+    const t = setTimeout(
+      () => setEnterLoading(false),
+      supabase && user ? 4000 : 300,
+    );
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path]);
+  useEffect(() => {
+    if (!enterLoading) return undefined;
+    if (packagesLoading) {
+      sawLoad.current = true;
+      return undefined;
+    }
+    if (!sawLoad.current) return undefined;
+    const t = setTimeout(() => setEnterLoading(false), 250);
+    return () => clearTimeout(t);
+  }, [packagesLoading, enterLoading]);
+  // Skeleton while the page is (re)loading its data.
+  const listLoading = isLinkedTk
+    ? enterLoading || !packagesReady
+    : isExceptionsModule
+      ? !packagesReady
+      : !tableReady;
   // Real numbers only: TKs this user may see (customers: only their own).
   const visiblePackages = packages.filter(
     (p) =>
@@ -22792,96 +22584,57 @@ function TransferPackageModal({ open, tk, fromLabel, onClose, onTransferred }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
+    <AppModal
+      title="Customer ID Transfer"
+      subtitle={`TK: ${tk}`}
+      maxW="max-w-md"
+      onClose={onClose}
+      onSubmit={handleSubmit}
+      busy={saving}
+      error={error}
+      submitLabel="Confirm"
+      busyLabel="Transferring..."
+      submitDisabled={!canSubmit}
     >
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={handleSubmit}
-        className="bg-white rounded-md shadow-lg w-full max-w-md max-h-[85vh] overflow-y-auto"
-      >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-mist-200">
-          <div>
-            <h3 className="font-display font-bold text-base text-ink-900">
-              Customer ID Transfer
-            </h3>
-            <p className="text-xs text-ink-600/55 mt-0.5">TK: {tk}</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-ink-600/40 hover:text-ink-900"
-          >
-            <X size={18} />
-          </button>
+      <div>
+        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
+          From
+        </label>
+        <div className="w-full bg-mist-50 border border-mist-200 rounded-md px-3 py-2 text-sm text-ink-700">
+          {fromLabel || "—"}
         </div>
+      </div>
 
-        <div className="p-5 space-y-3.5">
-          {error && (
-            <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2">
-              <TriangleAlert size={14} className="shrink-0" />
-              {error}
-            </div>
-          )}
+      <TransferAccountLookup
+        transferType={transferType}
+        onTransferTypeChange={(t) => {
+          setTransferType(t);
+          setQuery("");
+        }}
+        query={query}
+        onQueryChange={setQuery}
+        matched={selectedCustomer}
+        loading={customerLoading}
+        noteText="This transfer takes effect immediately — the TK will be removed from the original customer and appear under the new customer."
+      />
+      {selectedCustomer && sameCustomer && (
+        <p className="text-xs text-signal-red">
+          This is already the same customer — please choose a different
+          customer.
+        </p>
+      )}
 
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              From
-            </label>
-            <div className="w-full bg-mist-50 border border-mist-200 rounded-md px-3 py-2 text-sm text-ink-700">
-              {fromLabel || "—"}
-            </div>
-          </div>
-
-          <TransferAccountLookup
-            transferType={transferType}
-            onTransferTypeChange={(t) => {
-              setTransferType(t);
-              setQuery("");
-            }}
-            query={query}
-            onQueryChange={setQuery}
-            matched={selectedCustomer}
-            loading={customerLoading}
-            noteText="This transfer takes effect immediately — the TK will be removed from the original customer and appear under the new customer."
-          />
-          {selectedCustomer && sameCustomer && (
-            <p className="text-xs text-signal-red">
-              This is already the same customer — please choose a different
-              customer.
-            </p>
-          )}
-
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              Reason
-            </label>
-            <input
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-            />
-          </div>
-        </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={!canSubmit || saving}
-            className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {saving ? "Transferring..." : "Confirm"}
-          </button>
-        </div>
-      </form>
-    </div>
+      <div>
+        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
+          Reason
+        </label>
+        <input
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+        />
+      </div>
+    </AppModal>
   );
 }
 
@@ -23055,195 +22808,162 @@ function EditPackageModal({ open, pkg, onClose }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
+    <AppModal
+      title={`Edit Package · ${pkg.tk}`}
+      maxW="max-w-lg"
+      onClose={onClose}
+      onSubmit={save}
+      busy={saving}
+      error={error}
+      submitLabel="Save"
+      busyLabel="កំពុងSave..."
     >
-      <form
-        onSubmit={save}
-        onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-md shadow-lg w-full max-w-lg max-h-[90vh] overflow-y-auto"
-      >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-mist-200">
-          <h3 className="font-display font-bold text-lg text-ink-900">
-            Edit Package · {pkg.tk}
-          </h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-ink-600/40 hover:text-ink-900"
-          >
-            <X size={18} />
-          </button>
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className={LABEL_CLS}>Order Number</label>
+          <input
+            className={INPUT_CLS}
+            value={f.order_no ?? ""}
+            onChange={set("order_no")}
+          />
         </div>
-        <div className="px-5 py-4 space-y-3">
-          {error && <p className="text-xs text-signal-red">{error}</p>}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className={LABEL_CLS}>Order Number</label>
-              <input
-                className={INPUT_CLS}
-                value={f.order_no ?? ""}
-                onChange={set("order_no")}
-              />
+        <div>
+          <label className={LABEL_CLS}>Product Name</label>
+          <input
+            className={INPUT_CLS}
+            value={f.product_name ?? ""}
+            onChange={set("product_name")}
+          />
+        </div>
+        <div>
+          <label className={LABEL_CLS}>Cargo Type</label>
+          <select
+            className={INPUT_CLS}
+            value={f.cargo_type ?? ""}
+            onChange={set("cargo_type")}
+          >
+            {CARGO_TYPES.map((c) => (
+              <option key={c}>{c}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className={LABEL_CLS}>Package Type</label>
+          <select
+            className={INPUT_CLS}
+            value={
+              f.package_type ??
+              (f.size_class === "OVER" ? "dimension_based" : "small_package")
+            }
+            onChange={(e) => {
+              const v = e.target.value;
+              setF((x) => ({
+                ...x,
+                package_type: v,
+                size_class:
+                  v === "dimension_based"
+                    ? "OVER"
+                    : x.size_class === "OVER"
+                      ? ""
+                      : x.size_class,
+                length: v === "dimension_based" ? x.length : "",
+                width: v === "dimension_based" ? x.width : "",
+                height: v === "dimension_based" ? x.height : "",
+              }));
+            }}
+          >
+            <option value="small_package">Small Package</option>
+            <option value="dimension_based">Dimension Based</option>
+          </select>
+        </div>
+        <div>
+          <label className={LABEL_CLS}>Package Size</label>
+          {f.package_type === "dimension_based" ? (
+            <div
+              className={`${INPUT_CLS} bg-slate-50 text-slate-500 flex items-center`}
+            >
+              Dimension Based (&gt; L)
             </div>
-            <div>
-              <label className={LABEL_CLS}>Product Name</label>
-              <input
-                className={INPUT_CLS}
-                value={f.product_name ?? ""}
-                onChange={set("product_name")}
-              />
-            </div>
-            <div>
-              <label className={LABEL_CLS}>Cargo Type</label>
-              <select
-                className={INPUT_CLS}
-                value={f.cargo_type ?? ""}
-                onChange={set("cargo_type")}
-              >
-                {CARGO_TYPES.map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className={LABEL_CLS}>Package Type</label>
-              <select
-                className={INPUT_CLS}
-                value={
-                  f.package_type ??
-                  (f.size_class === "OVER"
-                    ? "dimension_based"
-                    : "small_package")
-                }
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setF((x) => ({
-                    ...x,
-                    package_type: v,
-                    size_class:
-                      v === "dimension_based"
-                        ? "OVER"
-                        : x.size_class === "OVER"
-                          ? ""
-                          : x.size_class,
-                    length: v === "dimension_based" ? x.length : "",
-                    width: v === "dimension_based" ? x.width : "",
-                    height: v === "dimension_based" ? x.height : "",
-                  }));
-                }}
-              >
-                <option value="small_package">Small Package</option>
-                <option value="dimension_based">Dimension Based</option>
-              </select>
-            </div>
-            <div>
-              <label className={LABEL_CLS}>Package Size</label>
-              {f.package_type === "dimension_based" ? (
-                <div
-                  className={`${INPUT_CLS} bg-slate-50 text-slate-500 flex items-center`}
-                >
-                  Dimension Based (&gt; L)
-                </div>
-              ) : (
-                <select
-                  className={INPUT_CLS}
-                  value={f.size_class ?? ""}
-                  onChange={set("size_class")}
-                >
-                  <option value="">—</option>
-                  {["S", "M", "L"].map((c) => (
-                    <option key={c} value={c}>
-                      Size {c}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-            <div>
-              <label className={LABEL_CLS}>Weight (KG)</label>
-              <input
-                className={INPUT_CLS}
-                type="number"
-                step="any"
-                value={f.weight ?? ""}
-                onChange={set("weight")}
-              />
-            </div>
-            <div className="col-span-2">
-              <label className={LABEL_CLS}>Package Quantity</label>
-              <input
-                className={INPUT_CLS}
-                type="number"
-                min="1"
-                step="1"
-                value={f.package_count ?? 1}
-                onChange={set("package_count")}
-              />
-            </div>
-            {f.package_type === "dimension_based" &&
-              [
-                ["length", "Length (cm)"],
-                ["width", "Width (cm)"],
-                ["height", "Height (cm)"],
-              ].map(([k, label]) => (
-                <div key={k}>
-                  <label className={LABEL_CLS}>{label} *</label>
-                  <input
-                    className={INPUT_CLS}
-                    type="number"
-                    min="0"
-                    step="any"
-                    value={f[k] ?? ""}
-                    onChange={set(k)}
-                  />
-                </div>
-              ))}
-          </div>
-          <div>
-            <label className={LABEL_CLS}>Product Photos</label>
-            {origPhotos === null ? (
-              <p className="text-xs text-ink-600/50">Loading photos…</p>
-            ) : (
-              <PhotoUploader
-                photos={photos}
-                setPhotos={setPhotos}
-                emptyHint="No images yet — Take photo / Upload Photo"
-              />
-            )}
-          </div>
-          <div>
-            <label className={LABEL_CLS}>Reason *</label>
-            <input
+          ) : (
+            <select
               className={INPUT_CLS}
-              value={f.reason ?? ""}
-              onChange={set("reason")}
-            />
-          </div>
-          <p className="text-[11px] text-ink-600/45">
-            CBM is calculated from L × W × H. Freight Fee is recalculated
-            automatically unless the fee is manually overridden.
-          </p>
+              value={f.size_class ?? ""}
+              onChange={set("size_class")}
+            >
+              <option value="">—</option>
+              {["S", "M", "L"].map((c) => (
+                <option key={c} value={c}>
+                  Size {c}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm font-medium text-ink-700 px-4 py-2 rounded-md hover:bg-mist-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={saving}
-            className="bg-signal-blue text-white text-sm font-medium px-4 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
-          >
-            {saving ? "កំពុងSave..." : "Save"}
-          </button>
+        <div>
+          <label className={LABEL_CLS}>Weight (KG)</label>
+          <input
+            className={INPUT_CLS}
+            type="number"
+            step="any"
+            value={f.weight ?? ""}
+            onChange={set("weight")}
+          />
         </div>
-      </form>
-    </div>
+        <div className="col-span-2">
+          <label className={LABEL_CLS}>Package Quantity</label>
+          <input
+            className={INPUT_CLS}
+            type="number"
+            min="1"
+            step="1"
+            value={f.package_count ?? 1}
+            onChange={set("package_count")}
+          />
+        </div>
+        {f.package_type === "dimension_based" &&
+          [
+            ["length", "Length (cm)"],
+            ["width", "Width (cm)"],
+            ["height", "Height (cm)"],
+          ].map(([k, label]) => (
+            <div key={k}>
+              <label className={LABEL_CLS}>{label} *</label>
+              <input
+                className={INPUT_CLS}
+                type="number"
+                min="0"
+                step="any"
+                value={f[k] ?? ""}
+                onChange={set(k)}
+              />
+            </div>
+          ))}
+      </div>
+      <div>
+        <label className={LABEL_CLS}>Product Photos</label>
+        {origPhotos === null ? (
+          <p className="text-xs text-ink-600/50">Loading photos…</p>
+        ) : (
+          <PhotoUploader
+            photos={photos}
+            setPhotos={setPhotos}
+            emptyHint="No images yet — Take photo / Upload Photo"
+          />
+        )}
+      </div>
+      <div>
+        <label className={LABEL_CLS}>Reason *</label>
+        <input
+          className={INPUT_CLS}
+          value={f.reason ?? ""}
+          onChange={set("reason")}
+        />
+      </div>
+      <p className="text-[11px] text-ink-600/45">
+        CBM is calculated from L × W × H. Freight Fee is recalculated
+        automatically unless the fee is manually overridden.
+      </p>
+    </AppModal>
   );
 }
 
@@ -23286,52 +23006,33 @@ function DeletePackageModal({ open, tk, onClose, onDeleted }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
+    <AppModal
+      title="Delete Package"
+      danger
+      onClose={onClose}
+      onSubmit={(e) => {
+        e.preventDefault();
+        confirm();
+      }}
+      busy={busy}
+      error={error}
+      submitTone="danger"
+      submitLabel="Delete"
+      busyLabel="Deleting..."
+      submitDisabled={typed.trim() !== tk}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-md shadow-lg w-full max-w-md"
-      >
-        <div className="px-5 py-4 border-b border-mist-200 flex items-center gap-2 text-signal-red">
-          <TriangleAlert size={18} />
-          <h3 className="font-display font-bold text-lg">Delete Package</h3>
-        </div>
-        <div className="px-5 py-4 space-y-3 text-sm text-ink-700">
-          <p>
-            Are you sure you want to permanently delete <b>{tk}</b>{" "}
-            ជាអចិន្ត្រៃយ៍មែនទេ? This action cannot be undone.
-          </p>
-          <div>
-            <label className={LABEL_CLS}>Enter TK to confirm</label>
-            <input
-              className={INPUT_CLS}
-              value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-            />
-          </div>
-          {error && <p className="text-xs text-signal-red">{error}</p>}
-        </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm font-medium text-ink-700 px-4 py-2 rounded-md hover:bg-mist-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={busy || typed.trim() !== tk}
-            onClick={confirm}
-            className="bg-signal-red text-white text-sm font-medium px-4 py-2 rounded-md hover:bg-signal-red/90 disabled:opacity-50"
-          >
-            {busy ? "Deleting..." : "Delete"}
-          </button>
-        </div>
-      </div>
-    </div>
+      <p className="cbx-modal-text">
+        Are you sure you want to permanently delete <b>{tk}</b>{" "}
+        ជាអចិន្ត្រៃយ៍មែនទេ? This action cannot be undone.
+      </p>
+      <FormField label="Enter TK to confirm" required>
+        <input
+          className="cbx-input"
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+        />
+      </FormField>
+    </AppModal>
   );
 }
 
@@ -23345,40 +23046,21 @@ function DeletePackageModal({ open, tk, onClose, onDeleted }) {
 function TrackingHistoryModal({ open, onClose, steps }) {
   if (!open) return null;
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
+    <AppModal
+      title="Tracking History"
+      onClose={onClose}
+      footer={
+        <button
+          type="button"
+          className="cbx-btn cbx-btn-primary"
+          onClick={onClose}
+        >
+          OK
+        </button>
+      }
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-md shadow-lg w-full max-w-md max-h-[85vh] overflow-y-auto"
-      >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-mist-200">
-          <h3 className="font-display font-bold text-lg text-ink-900">
-            Tracking History
-          </h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-ink-600/40 hover:text-ink-900"
-          >
-            <X size={18} />
-          </button>
-        </div>
-        <div className="px-5 pt-5 pb-1">
-          <Timeline steps={steps} />
-        </div>
-        <div className="flex items-center justify-end px-5 py-4 border-t border-mist-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="bg-signal-blue text-white text-sm font-medium px-5 py-2 rounded-md hover:bg-signal-blue/90"
-          >
-            OK
-          </button>
-        </div>
-      </div>
-    </div>
+      <Timeline steps={steps} />
+    </AppModal>
   );
 }
 
@@ -31479,6 +31161,8 @@ const CustomerApp = (() => {
     "My Orders": "我的订单",
     All: "全部",
     Sort: "排序",
+    "For you": "为你推荐",
+    Refresh: "刷新",
     Newest: "最新",
     Featured: "精选",
     "Price: low to high": "价格：从低到高",
@@ -38403,13 +38087,47 @@ const CustomerApp = (() => {
     );
   }
 
+  // ---------------- "For you" feed ----------------
+  // Like the big shopping apps, the catalog order is reshuffled every time
+  // the customer opens the app (module load = app open), and again when
+  // they come back after being away. The seed is kept while they browse,
+  // so going to a product and pressing Back keeps the same order.
+  const SHOP_FEED_AWAY_MS = 5 * 60 * 1000;
+  let shopFeedSeed = (Math.random() * 4294967296) >>> 0;
+  function shopFeedReseed() {
+    shopFeedSeed = (Math.random() * 4294967296) >>> 0;
+    return shopFeedSeed;
+  }
+  function shopFeedRng(seed) {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  // Seeded Fisher-Yates shuffle; in-stock products always come first.
+  function shopFeedOrder(list, seed) {
+    const rnd = shopFeedRng(seed);
+    const a = list.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return [...a.filter((p) => p.in_stock), ...a.filter((p) => !p.in_stock)];
+  }
+
   // ---------------- Shop home ----------------
   function ShopCHomePage() {
     useShopCss();
     const { tr } = useApp();
     const [q, setQ] = useState("");
     const [cat, setCat] = useState("");
-    const [sort, setSort] = useState("newest");
+    const [sort, setSort] = useState("for_you");
+    const [seed, setSeed] = useState(() => shopFeedSeed);
+    const feedAll = useRef([]);
     const [cats, setCats] = useState([]);
     const [items, setItems] = useState([]);
     const [total, setTotal] = useState(0);
@@ -38425,6 +38143,19 @@ const CustomerApp = (() => {
       const t = setTimeout(() => setDq(q), 300);
       return () => clearTimeout(t);
     }, [q]);
+    useEffect(() => {
+      let hiddenAt = 0;
+      const onVis = () => {
+        if (document.hidden) {
+          hiddenAt = Date.now();
+        } else if (hiddenAt && Date.now() - hiddenAt > SHOP_FEED_AWAY_MS) {
+          hiddenAt = 0;
+          setSeed(shopFeedReseed());
+        }
+      };
+      document.addEventListener("visibilitychange", onVis);
+      return () => document.removeEventListener("visibilitychange", onVis);
+    }, []);
     useEffect(() => {
       supabase.rpc("shop_categories_public").then(({ data }) => {
         const list = data || [];
@@ -38460,10 +38191,35 @@ const CustomerApp = (() => {
       if (error) throw error;
       return data;
     };
+    const fetchAll = async () => {
+      const all = [];
+      let tot = 0;
+      for (let i = 0; i < 30; i++) {
+        const { data, error } = await supabase.rpc("shop_catalog", {
+          p_search: dq.trim() || null,
+          p_category: cat || null,
+          p_sort: "newest",
+          p_limit: 100,
+          p_offset: all.length,
+        });
+        if (error) throw error;
+        tot = data.total;
+        all.push(...data.items);
+        if (!data.items.length || all.length >= tot) break;
+      }
+      return { items: all, total: tot };
+    };
     useEffect(() => {
       let alive = true;
       setLoading(true);
-      fetchPage(0)
+      const load =
+        sort === "for_you"
+          ? fetchAll().then((d) => {
+              feedAll.current = shopFeedOrder(d.items, seed);
+              return { items: feedAll.current.slice(0, PAGE), total: d.total };
+            })
+          : fetchPage(0);
+      load
         .then((d) => {
           if (!alive) return;
           setItems(d.items);
@@ -38476,14 +38232,18 @@ const CustomerApp = (() => {
         alive = false;
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [dq, cat, sort, reload]);
+    }, [dq, cat, sort, reload, seed]);
     async function loadMore() {
       if (more) return;
       setMore(true);
       try {
-        const d = await fetchPage(items.length);
-        setItems((cur) => [...cur, ...d.items]);
-        setTotal(d.total);
+        if (sort === "for_you") {
+          setItems(feedAll.current.slice(0, items.length + PAGE));
+        } else {
+          const d = await fetchPage(items.length);
+          setItems((cur) => [...cur, ...d.items]);
+          setTotal(d.total);
+        }
       } catch (e) {
         setErr(shopCErr(e, tr));
       }
@@ -38547,8 +38307,27 @@ const CustomerApp = (() => {
             ))}
           </div>
           <div className="flex items-center justify-between text-[13px] text-slate-500">
-            <span>
+            <span className="flex items-center gap-1">
               {loading ? "…" : tr(`${total} products`, `ផលិតផល ${total}`)}
+              {sort === "for_you" && (
+                <button
+                  type="button"
+                  aria-label={tr("Refresh", "ផ្លាស់ប្តូរ")}
+                  onClick={() => {
+                    setSeed(shopFeedReseed());
+                    window.scrollTo({
+                      top: 0,
+                      behavior: shopCReduced() ? "auto" : "smooth",
+                    });
+                  }}
+                  className="cb-shop-press w-11 h-11 grid place-items-center rounded-full text-slate-500 active:bg-slate-100"
+                >
+                  <Icons.RefreshCw
+                    size={16}
+                    className={loading ? "animate-spin" : ""}
+                  />
+                </button>
+              )}
             </span>
             <select
               value={sort}
@@ -38556,6 +38335,7 @@ const CustomerApp = (() => {
               aria-label={tr("Sort", "តម្រៀប")}
               className="h-11 rounded-xl border border-slate-200 bg-white px-3 text-[14px] outline-none focus:border-blue-500"
             >
+              <option value="for_you">{tr("For you", "សម្រាប់អ្នក")}</option>
               <option value="newest">{tr("Newest", "ថ្មីបំផុត")}</option>
               <option value="featured">{tr("Featured", "ពិសេស")}</option>
               <option value="price_asc">
@@ -38607,6 +38387,7 @@ const CustomerApp = (() => {
             </Card>
           )}
           <div
+            key={`${sort}-${seed}`}
             className={`jz-shop-grid grid grid-cols-2 gap-3 ${loading && items.length > 0 ? "cb-shop-dim" : ""}`}
           >
             {items.map((p, i) => (
@@ -71698,6 +71479,80 @@ html.cb-admin-dark .shop-detail-page .cb-surface .border-slate-200{border-color:
 @media(max-width:639px){.shop-detail-page .shop-detail-actions{justify-content:flex-start;flex-basis:100%}.shop-detail-page .shop-detail-actions>button{height:auto;min-height:38px}.shop-detail-page .shop-detail-payment-totals{gap:12px;padding:12px}}
 `;
 
+// Loading placeholder that mirrors the real page: breadcrumb, title, header
+// card (order no + badges + Print), customer chip, tabs, then Order details
+// on the left and Customer / Delivery on the right.
+function ShopOrderDetailSkeleton() {
+  return (
+    <SkeletonRegion className="cn-detail-page shop-detail-page space-y-4">
+      <style>{CN_DETAIL_LAYOUT_CSS + SHOP_DETAIL_LAYOUT_CSS}</style>
+      <div className="flex items-center gap-2">
+        <Skeleton className="h-4 w-24" />
+        <Skeleton className="h-4 w-24" delay={60} />
+      </div>
+      <Skeleton className="h-8 w-80 max-w-full" delay={90} />
+      <div className="cn-detail-shell">
+        <header className="cn-detail-header">
+          <div className="min-w-0 space-y-3">
+            <Skeleton className="h-3 w-24" />
+            <Skeleton className="h-6 w-44" delay={60} />
+            <Skeleton className="h-4 w-52" delay={120} />
+            <Skeleton className="h-9 w-56 rounded-full" delay={180} />
+          </div>
+          <div className="cn-detail-actions shop-detail-actions">
+            <Skeleton className="h-8 w-20 rounded-full" />
+            <Skeleton className="h-8 w-20 rounded-full" delay={60} />
+            <Skeleton className="h-10 w-36 rounded-lg" delay={120} />
+          </div>
+        </header>
+        <div className="cn-detail-tabs shop-detail-tabs">
+          <Skeleton className="h-5 w-28 mb-3" />
+          <Skeleton className="h-5 w-40 mb-3" delay={60} />
+        </div>
+        <div className="cn-detail-top">
+          <div className="cn-detail-stack">
+            <section className="cb-surface cn-detail-block">
+              <Skeleton className="h-4 w-32" />
+              <div className="cn-detail-info mt-4 space-y-4">
+                {Array.from({ length: 7 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between gap-6"
+                  >
+                    <Skeleton className="h-3.5 w-28" delay={i * 60} />
+                    <Skeleton
+                      className="h-3.5 rounded"
+                      style={{ width: skWidth(i, 1) }}
+                      delay={i * 60 + 30}
+                    />
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+          <aside className="cn-detail-stack">
+            {[3, 4].map((rows, b) => (
+              <section key={b} className="cb-surface cn-detail-block">
+                <Skeleton className="h-4 w-28" delay={b * 80} />
+                <div className="mt-4 space-y-3">
+                  {Array.from({ length: rows }).map((_, i) => (
+                    <Skeleton
+                      key={i}
+                      className="h-3.5"
+                      style={{ width: skWidth(i + b, 2) }}
+                      delay={b * 80 + i * 60}
+                    />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </aside>
+        </div>
+      </div>
+    </SkeletonRegion>
+  );
+}
+
 function ShopOrderDetailPage() {
   const { id } = useParams();
   const { user } = useAuth();
@@ -71764,8 +71619,7 @@ function ShopOrderDetailPage() {
     return "";
   }
 
-  if (loading && !o)
-    return <div className="p-10 text-center text-slate-400">Loading…</div>;
+  if (loading && !o) return <ShopOrderDetailSkeleton />;
   if (error || !o)
     return (
       <div className="mx-auto max-w-xl p-10 text-center">
