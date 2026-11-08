@@ -3564,12 +3564,79 @@ function cnShippingFeeRows(tks) {
     .filter(
       (x) =>
         x?.tk &&
-        CN_SHIP_FEE_STAGES.includes(
-          String(x.tk_status || x.status || "").trim(),
-        ),
+        // staff pressed "Request Shipping Payment" (Inbound / Outbound …)
+        // → payable like at Arrived Destination
+        (x.ship_pay_requested_at ||
+          CN_SHIP_FEE_STAGES.includes(
+            String(x.tk_status || x.status || "").trim(),
+          )),
     )
     .map((x) => ({ tk: x.tk, fee: shippingFeeOf(x) }))
     .filter((x) => x.fee.state !== "none" && x.fee.total > 0);
+}
+
+// Customer view: EVERY TK that already has a shipping fee is shown (from
+// Inbound on). It is only PAYABLE once staff pressed "Request Shipping
+// Payment" (ship_pay_requested_at) or the TK reached the arrival stages.
+// Cancelling the request makes it unpayable again (amount stays visible).
+function cnShipFeeCustomerRows(tks) {
+  return (tks || [])
+    .filter((x) => x?.tk)
+    .map((x) => ({
+      tk: x.tk,
+      fee: shippingFeeOf(x),
+      payable: !!(
+        x.ship_pay_requested_at ||
+        CN_SHIP_FEE_STAGES.includes(
+          String(x.tk_status || x.status || "").trim(),
+        )
+      ),
+    }))
+    .filter((x) => x.fee.state !== "none" && x.fee.total > 0);
+}
+
+// Every TK of a CN order that already has a shipping fee (any stage), plus
+// totals — used by the staff Order summary / Payment cards.
+function cnShipFeeSummary(parcels) {
+  const rows = (parcels || [])
+    .filter((x) => x?.tk)
+    .map((x) => ({
+      tk: x.tk,
+      fee: shippingFeeOf(x),
+      requested: x.ship_pay_requested_at || null,
+      atArrival: CN_SHIP_FEE_STAGES.includes(
+        String(x.tk_status || x.status || "").trim(),
+      ),
+    }))
+    .filter((x) => x.fee.state !== "none" && x.fee.total > 0);
+  const total = rows.reduce((a, x) => a + x.fee.total, 0);
+  const paid = rows.reduce((a, x) => a + Math.min(x.fee.paid, x.fee.total), 0);
+  const due = rows.reduce((a, x) => a + x.fee.due, 0);
+  return { rows, total, paid, due };
+}
+
+// Parse Link order: TKs that already exist as a package at Inbound Origin or
+// later (any PACKAGE_STAGES status) and can therefore be edited / re-measured.
+function cnEditableTks(parcels) {
+  return (parcels || [])
+    .filter(
+      (x) => x?.tk && PACKAGE_STAGES.includes(String(x.tk_status || "").trim()),
+    )
+    .map((x) => x.tk);
+}
+
+// Parse Link order: which TKs can still be asked for shipping payment
+// (eligible) and which have a pending request that can be cancelled.
+function cnShipReqState(parcels, canPayShip) {
+  const rows = canPayShip
+    ? cnShipFeeSummary(parcels).rows.filter(
+        (r) => r.fee.state === "due" && !r.atArrival,
+      )
+    : [];
+  return {
+    eligible: rows.filter((r) => !r.requested),
+    cancelable: rows.filter((r) => r.requested),
+  };
 }
 
 function shippingFeeText(p) {
@@ -7869,7 +7936,9 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
     const t = setTimeout(async () => {
       const { data } = await supabase
         .from("cn_order_parcels")
-        .select("cn_orders(order_id,customer,customer_id,status,product_name)")
+        .select(
+          "cn_orders(order_id,customer,customer_id,status,product_name,shipping_method)",
+        )
         .ilike(
           "domestic_tracking",
           key.replace(/[%_\\]/g, (m) => "\\" + m),
@@ -7888,6 +7957,9 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
       if (alive) {
         setCnMatch(match);
         setCnCustomer(owner);
+        // Freight must be priced with the CN Order's own method (Land/Sea/Air)
+        const m = normShipMethod(match?.shipping_method);
+        if (m) setF((x) => ({ ...x, shippingMethod: m }));
       }
     }, 300);
     return () => {
@@ -7977,6 +8049,9 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
   // calculated later when the goods ARRIVE in Cambodia. The normal inbound
   // (customer buys directly) is unchanged.
   const cnMode = !!cnCustomer && !duplicateTk;
+  // The scanned TK belongs to a CN Order → ALWAYS reuse that order's ID
+  // (JZE…), never create a new Order — even if the customer lookup failed.
+  const cnOrderNo = !duplicateTk ? cnMatch?.order_id || "" : "";
 
   function resetForNext() {
     setF({ ...blankInboundForm(user), warehouse: f.warehouse });
@@ -8007,22 +8082,17 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
     // later when the TK is scanned at Arrive (Cambodia). "cargoBlank" = the
     // person chose no size / entered no dimensions, so nothing is priced yet.
     const blank = (v) => String(v ?? "").trim() === "";
-    const isAirMethod = !cnMode && normShipMethod(f.shippingMethod) === "Air";
-    const cargoBlank =
-      !cnMode &&
-      (isAirMethod
-        ? !(Number(f.weight) > 0) // Air is priced by KG → needs a weight
-        : !f.packageType ||
-          (f.packageType === "dimension_based"
-            ? !f.cargoType &&
-              blank(f.length) &&
-              blank(f.width) &&
-              blank(f.height)
-            : !f.sizeClass));
-    const skipCargo = cnMode || cargoBlank;
+    const isAirMethod = normShipMethod(f.shippingMethod) === "Air";
+    const cargoBlank = isAirMethod
+      ? !(Number(f.weight) > 0) // Air is priced by KG → needs a weight
+      : !f.packageType ||
+        (f.packageType === "dimension_based"
+          ? !f.cargoType && blank(f.length) && blank(f.width) && blank(f.height)
+          : !f.sizeClass);
+    const skipCargo = cargoBlank;
     const dimsEntered =
       !skipCargo && !isAirMethod && f.packageType === "dimension_based";
-    if (!cnMode) {
+    {
       if (!cargoBlank && !isAirMethod) {
         // Cargo Type (Normal/Sensitive) only applies to Dimension Based; the
         // Small Package form has no such selector, so never require it there.
@@ -8091,17 +8161,16 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
       };
       // A TK that belongs to a CN (Parse Link) order keeps THAT order's ID —
       // no new Order row is created. Only direct Shipment customers get one.
-      newOrder =
-        cnMode && cnMatch?.order_id
-          ? {
-              id: null,
-              order_no: cnMatch.order_id,
-              china_wh_code: route.china,
-              kh_branch_code: route.kh,
-            }
-          : supabase
-            ? await createOrderRemote(f.customer, "", route)
-            : createLocalOrder(f.customer, "", route);
+      newOrder = cnOrderNo
+        ? {
+            id: null,
+            order_no: cnOrderNo,
+            china_wh_code: route.china,
+            kh_branch_code: route.kh,
+          }
+        : supabase
+          ? await createOrderRemote(f.customer, "", route)
+          : createLocalOrder(f.customer, "", route);
       saved = await upsertPackage({
         tk: tkTrim,
         customer_id: f.customer.id,
@@ -8125,13 +8194,14 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
         length_cm: dimsEntered ? Number(f.length) : null,
         width_cm: dimsEntered ? Number(f.width) : null,
         height_cm: dimsEntered ? Number(f.height) : null,
-        weight_kg: !cnMode && f.weight !== "" ? Number(f.weight) : null,
-        weight: !cnMode && f.weight !== "" ? Number(f.weight) : null, // packages.weight is numeric
+        weight_kg: f.weight !== "" ? Number(f.weight) : null,
+        weight: f.weight !== "" ? Number(f.weight) : null, // packages.weight is numeric
         // ចំនួនPackageក្នុង TK នេះ (ទំនិញជាឈុត) — ផ្ញើតែពេល > 1 ដើម្បីមិនបាក់ DB ដែលមិនទាន់មាន column
-        ...(!cnMode && Number(f.packageCount) > 1
+        ...(Number(f.packageCount) > 1
           ? { package_count: Math.floor(Number(f.packageCount)) }
           : {}),
-        // CN Order inbound: no freight yet — charged on Arrive in Cambodia.
+        // CN Order (Parse Link): freight is optional here, same as Shipment —
+        // leave Cargo blank to price it later on Arrive in Cambodia.
         cbm:
           !skipCargo && !isAirMethod && calc.cbm != null
             ? calc.cbm.toFixed(3)
@@ -8267,37 +8337,22 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
     );
   }
 
-  return shell(
-    <form
-      onClick={(e) => e.stopPropagation()}
+  // Same modal shell as New CN Purchase Order (AppModal).
+  return (
+    <AppModal
+      title="New TK — Inbound Origin"
+      subtitle="Scan TK, pick the customer, then set cargo & freight (optional)."
+      maxW="max-w-2xl"
+      onClose={onClose}
       onSubmit={handleSubmit}
-      className="bg-white sm:rounded-md shadow-lg w-full max-w-2xl sm:max-h-[92vh] overflow-y-auto flex flex-col"
+      busy={saving}
+      error={error}
+      submitLabel="Save Inbound"
+      busyLabel="កំពុងSave..."
     >
-      <div className="px-5 py-4 border-b border-mist-200 flex items-center justify-between sticky top-0 bg-white z-10">
-        <h3 className="font-display font-bold text-base text-ink-900">
-          New TK — Inbound Origin
-        </h3>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-ink-600/40 hover:text-ink-900"
-        >
-          <X size={18} />
-        </button>
-      </div>
-
-      <div className="p-5 space-y-6 flex-1">
-        {error && (
-          <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2">
-            <TriangleAlert size={14} className="shrink-0" />
-            {error}
-          </div>
-        )}
-
+      <div className="space-y-5">
         <section className="space-y-3.5">
-          <h4 className="font-display font-bold text-sm text-ink-900">
-            TK និង Customer
-          </h4>
+          <h4 className="text-sm font-bold text-slate-900">TK និង Customer</h4>
           <div>
             <label className={LABEL_CLS}>
               TK Number <span className="text-signal-red">*</span>
@@ -8323,7 +8378,7 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
                 TK នេះជារបស់ <b>{cnMatch.order_id}</b> (Assisted Purchase
                 {cnMatch.customer ? ` · ${cnMatch.customer}` : ""}) —{" "}
                 {cnCustomer
-                  ? `Customer ${cnCustomer.customer_code} ត្រូវបានជ្រើសដោយស្វ័យប្រវត្តិ (មិនអាចប្តូរបាន)។ មិនចាំបាច់បញ្ចូលរូបភាព/ទំហំ — ថ្លៃដឹកនឹងគិតពេល Arrive។ ចុច Enter ឬ Save Inbound ដើម្បីបញ្ចប់។`
+                  ? `Customer ${cnCustomer.customer_code} ត្រូវបានជ្រើសដោយស្វ័យប្រវត្តិ (មិនអាចប្តូរបាន)។ អាចបញ្ចូល Cargo/ទំហំ ដើម្បីកំណត់ថ្លៃដឹកនៅទីនេះបានដូច Shipment (ឬទុកទទេ ដើម្បីគិតពេល Arrive)។ ចុច Enter (បើទទេ) ឬ Save Inbound ដើម្បីបញ្ចប់។`
                   : "សូមជ្រើស Customer ឲ្យត្រូវ។"}{" "}
                 ពេល Save វានឹងភ្ជាប់ និងអាប់ដេត CN Order ដោយស្វ័យប្រវត្តិ។
               </div>
@@ -8353,16 +8408,19 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
             <label className={LABEL_CLS}>Order ID</label>
             <div className="flex items-center justify-between gap-2 border border-mist-200 rounded-md px-3 py-2.5 bg-mist-50">
               <span className="font-display font-bold text-sm text-ink-900">
-                {orderPreview || "…"}
+                {cnOrderNo || orderPreview || "…"}
               </span>
               <span className="flex items-center gap-1 text-[11px] font-medium text-ink-600/60">
                 <Icons.Lock size={12} />
-                Auto Generated · Read Only
+                {cnOrderNo
+                  ? "CN Order · Existing ID · Read Only"
+                  : "Auto Generated · Read Only"}
               </span>
             </div>
             <p className="text-[11px] text-ink-600/50 mt-1">
-              រាល់ Inbound ថ្មី ទទួល Order ID ថ្មីជានិច្ច — Customer ដដែលបាន
-              Order ច្រើន។ លេខពិតត្រូវបានកំណត់ពេល Save។
+              {cnOrderNo
+                ? "TK នេះជារបស់ CN Order — ប្រើ Order ID ចាស់ដែលបានបង្កើតរួច មិនបង្កើត Order ថ្មីទេ។"
+                : "រាល់ Inbound ថ្មី ទទួល Order ID ថ្មីជានិច្ច — Customer ដដែលបាន Order ច្រើន។ លេខពិតត្រូវបានកំណត់ពេល Save។"}
             </p>
           </div>
           <WarehouseSelect
@@ -8379,22 +8437,24 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
           </p>
         </section>
 
-        <section className="space-y-3.5">
-          <h4 className="font-display font-bold text-sm text-ink-900">
+        <section className="space-y-3.5 border-t border-slate-100 pt-5">
+          <h4 className="text-sm font-bold text-slate-900">
             ទំនិញ និង Warehouse
           </h4>
           {!cnMode && (
+            <div>
+              <label className={LABEL_CLS}>Product Name</label>
+              <input
+                value={f.product}
+                onChange={(e) =>
+                  setF((x) => ({ ...x, product: e.target.value }))
+                }
+                className={INPUT_CLS}
+              />
+            </div>
+          )}
+          {
             <>
-              <div>
-                <label className={LABEL_CLS}>Product Name</label>
-                <input
-                  value={f.product}
-                  onChange={(e) =>
-                    setF((x) => ({ ...x, product: e.target.value }))
-                  }
-                  className={INPUT_CLS}
-                />
-              </div>
               <div>
                 <label className={LABEL_CLS}>
                   ចំនួនPackageក្នុង TK (Package Qty)
@@ -8414,7 +8474,7 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
                 </p>
               </div>
             </>
-          )}
+          }
           <div className="grid sm:grid-cols-2 gap-3">
             <div>
               <label className={LABEL_CLS}>China Warehouse</label>
@@ -8457,10 +8517,10 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
           </div>
         </section>
 
-        {!cnMode && (
+        {
           <>
-            <section className="space-y-3.5">
-              <h4 className="font-display font-bold text-sm text-ink-900">
+            <section className="space-y-3.5 border-t border-slate-100 pt-5">
+              <h4 className="text-sm font-bold text-slate-900">
                 Product Photos{" "}
                 <span className="text-ink-600/45 font-normal text-xs">
                   (មិនចាំបាច់ — អាចបន្ថែមពេល Scan Arrive)
@@ -8473,8 +8533,8 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
               />
             </section>
 
-            <section className="space-y-3.5">
-              <h4 className="font-display font-bold text-sm text-ink-900">
+            <section className="space-y-3.5 border-t border-slate-100 pt-5">
+              <h4 className="text-sm font-bold text-slate-900">
                 Cargo និង Freight{" "}
                 <span className="text-ink-600/45 font-normal text-xs">
                   (មិនចាំបាច់ — អាចបញ្ចូលពេល Scan Arrive)
@@ -8491,27 +8551,9 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
               />
             </section>
           </>
-        )}
+        }
       </div>
-
-      <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200 sticky bottom-0 bg-white">
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-sm font-medium text-ink-700 px-3.5 py-2.5 rounded-md hover:bg-mist-50"
-        >
-          Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={saving}
-          className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-4 py-2.5 rounded-md hover:bg-signal-blue/90 disabled:opacity-60 min-h-[42px]"
-        >
-          <Save size={15} />
-          {saving ? "កំពុងSave..." : "Save Inbound"}
-        </button>
-      </div>
-    </form>,
+    </AppModal>
   );
 }
 
@@ -8590,89 +8632,60 @@ function CreateArrivalModal({ open, onClose, onCreated }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
+    <AppModal
+      title="Arrival ថ្មី"
+      maxW="max-w-md"
+      onClose={onClose}
+      onSubmit={handleSubmit}
+      busy={saving}
+      error={error}
+      submitLabel="Save"
+      busyLabel="កំពុងSave..."
     >
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={handleSubmit}
-        className="bg-white rounded-md shadow-lg w-full max-w-md max-h-[85vh] overflow-y-auto"
-      >
-        <div className="px-5 py-4 border-b border-mist-200">
-          <h3 className="font-display font-bold text-base text-ink-900">
-            Arrival ថ្មី
-          </h3>
-        </div>
-        <div className="p-5 space-y-3.5">
-          {error && (
-            <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2">
-              <TriangleAlert size={14} className="shrink-0" />
-              {error}
-            </div>
-          )}
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              Container <span className="text-signal-red">*</span>
-            </label>
-            <select
-              value={containerId}
-              onChange={(e) => setContainerId(e.target.value)}
-              className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-            >
-              <option value="">— ជ្រើសរើស Container —</option>
-              {candidates.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.container_number} · {c.shipping_method || "—"} · {c.status}
-                </option>
-              ))}
-            </select>
-            {candidates.length === 0 && (
-              <p className="mt-1.5 text-xs text-ink-600/55">
-                មិនមាន Container ដែលចេញពីឃ្លាំងចិនទេ — សូម Depart China នៅ
-                Containers សិន
-              </p>
-            )}
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              Port / Dry Port <span className="text-signal-red">*</span>
-            </label>
-            <input
-              value={port}
-              onChange={(e) => setPort(e.target.value)}
-              className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              Arrival Date
-            </label>
-            <input
-              value={arrivalDate}
-              onChange={(e) => setArrivalDate(e.target.value)}
-              className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-            />
-          </div>
-        </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={saving}
-            className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
-          >
-            {saving ? "កំពុងSave..." : "Save"}
-          </button>
-        </div>
-      </form>
-    </div>
+      <div>
+        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
+          Container <span className="text-signal-red">*</span>
+        </label>
+        <select
+          value={containerId}
+          onChange={(e) => setContainerId(e.target.value)}
+          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+        >
+          <option value="">— ជ្រើសរើស Container —</option>
+          {candidates.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.container_number} · {c.shipping_method || "—"} · {c.status}
+            </option>
+          ))}
+        </select>
+        {candidates.length === 0 && (
+          <p className="mt-1.5 text-xs text-ink-600/55">
+            មិនមាន Container ដែលចេញពីឃ្លាំងចិនទេ — សូម Depart China នៅ
+            Containers សិន
+          </p>
+        )}
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
+          Port / Dry Port <span className="text-signal-red">*</span>
+        </label>
+        <input
+          value={port}
+          onChange={(e) => setPort(e.target.value)}
+          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
+          Arrival Date
+        </label>
+        <input
+          value={arrivalDate}
+          onChange={(e) => setArrivalDate(e.target.value)}
+          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+        />
+      </div>
+    </AppModal>
   );
 }
 
@@ -8825,10 +8838,6 @@ function VerifyScanModal({
       alive = false;
     };
   }, [open, tk]);
-  // Drives the entrance animation: mounts closed (scaled-down/transparent),
-  // then flips to open a frame later so the browser actually transitions
-  // instead of snapping straight to the final state.
-  const [show, setShow] = useState(false);
   const { rows: whList } = useWarehouses();
   const [route, setRoute] = useState({
     china: "",
@@ -8899,11 +8908,7 @@ function VerifyScanModal({
         sizeClass: p?.size_class || "",
         reason: "",
       });
-      setShow(false);
-      const raf = requestAnimationFrame(() => setShow(true));
-      return () => cancelAnimationFrame(raf);
     }
-    setShow(false);
   }, [open, tk]);
 
   if (!open || !tk) return null;
@@ -9043,426 +9048,393 @@ function VerifyScanModal({
     }
   }
 
-  return (
-    <div
-      className={`fixed inset-0 z-50 flex items-center justify-center px-4 transition-colors duration-200 ${
-        show ? "bg-ink-900/40" : "bg-ink-900/0"
-      }`}
-      onClick={onClose}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className={`bg-white rounded-md shadow-lg w-full max-w-2xl max-h-[85vh] overflow-y-auto transition-all duration-200 ease-out ${
-          show ? "opacity-100 scale-100" : "opacity-0 scale-95"
-        }`}
-      >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-mist-200">
-          <h3 className="font-display font-bold text-base text-ink-900">
-            {title}
-          </h3>
-          <button
-            onClick={onClose}
-            className="w-7 h-7 flex items-center justify-center rounded-md border border-mist-200 text-ink-600/60 hover:bg-mist-50"
-          >
-            <X size={14} />
-          </button>
-        </div>
+  function handleSubmit(e) {
+    e.preventDefault();
+    if (saving || !checked || route.loading) return;
+    handleConfirm();
+  }
 
-        <div className="p-5 space-y-4">
-          {error && (
-            <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2">
-              <TriangleAlert size={14} className="shrink-0" />
-              {error}
+  // Same shared AppModal frame the CN Order modals use (portal + blur
+  // backdrop + Esc to close + Cancel / Confirm footer + error banner), so
+  // Verify Scan Arrived looks and behaves like every other form modal.
+  return (
+    <AppModal
+      title={title}
+      subtitle={`${pkg.tk} · ${pkg.status || "—"} → ${targetStatus}`}
+      maxW="max-w-2xl"
+      onClose={onClose}
+      onSubmit={handleSubmit}
+      error={error}
+      busy={saving}
+      submitLabel={edit ? "Save & Confirm" : "Confirm"}
+      busyLabel="Confirming…"
+      submitDisabled={!checked || route.loading}
+    >
+      <div className="space-y-4">
+        <div
+          className={`rounded-xl border px-4 py-3 ${
+            route.kh
+              ? "border-signal-blue/30 bg-signal-blue/5"
+              : "border-signal-amber/40 bg-signal-amber/10"
+          }`}
+        >
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-600/55">
+            Receiving Branch (Cambodia)
+          </div>
+          {route.loading ? (
+            <SkeletonRegion className="mt-1.5">
+              <Skeleton className="h-5 w-44" />
+            </SkeletonRegion>
+          ) : route.kh ? (
+            <>
+              <div className="text-base font-bold text-ink-900 mt-0.5">
+                {whName(whList, route.kh)}
+              </div>
+              <div className="text-xs text-ink-600/55 mt-0.5">
+                Origin: {route.china ? whName(whList, route.china) : "—"}
+                {route.source && route.source !== "TK"
+                  ? ` · ពី ${route.source}`
+                  : ""}
+              </div>
+            </>
+          ) : (
+            <div className="text-sm text-[#B87415] mt-0.5">
+              មិនទាន់មាន Receiving Branch លើ Order/Customer នេះ — សូមឱ្យ Admin ឬ
+              Customer Service កំណត់នៅ Order
             </div>
           )}
+        </div>
 
-          <div
-            className={`rounded-md border px-4 py-3 ${
-              route.kh
-                ? "border-signal-blue/30 bg-signal-blue/5"
-                : "border-signal-amber/40 bg-signal-amber/10"
-            }`}
-          >
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-600/55">
-              Receiving Branch (Cambodia)
-            </div>
-            {route.loading ? (
-              <SkeletonRegion className="mt-1.5">
-                <Skeleton className="h-5 w-44" />
-              </SkeletonRegion>
-            ) : route.kh ? (
-              <>
-                <div className="text-base font-bold text-ink-900 mt-0.5">
-                  {whName(whList, route.kh)}
-                </div>
-                <div className="text-xs text-ink-600/55 mt-0.5">
-                  Origin: {route.china ? whName(whList, route.china) : "—"}
-                  {route.source && route.source !== "TK"
-                    ? ` · ពី ${route.source}`
-                    : ""}
-                </div>
-              </>
-            ) : (
-              <div className="text-sm text-[#B87415] mt-0.5">
-                មិនទាន់មាន Receiving Branch លើ Order/Customer នេះ — សូមឱ្យ Admin
-                ឬ Customer Service កំណត់នៅ Order
-              </div>
-            )}
+        <div className="border border-slate-200 rounded-xl overflow-hidden">
+          <div className="bg-slate-50 px-4 py-2.5 text-xs font-semibold text-ink-600/55 uppercase tracking-wide">
+            Order details
           </div>
-
-          <div className="border border-mist-200 rounded-md overflow-hidden">
-            <div className="bg-mist-50 px-4 py-2.5 text-xs font-semibold text-ink-600/55 uppercase tracking-wide">
-              Order details
-            </div>
-            <div className="p-4">
-              <InfoGrid
-                items={[
-                  {
-                    label: "Order ID",
-                    // Parse Link (CN Purchase Order) → show the JZE… order ID,
-                    // not the THN… Shipment order ID, so the two never get mixed up.
-                    value: pkg.cn_order_id
-                      ? CN_ORDER_NO_BY_ID[pkg.cn_order_id] ||
-                        pkg.cn_order_no ||
-                        "—"
-                      : pkg.order_no || pkg.order || "—",
-                  },
-                  { label: "Tracking Number", value: pkg.tk },
-                  { label: "Customer", value: pkg.customer || "—" },
-                  {
-                    label: "Status",
-                    value: <StatusBadge label={pkg.status || "—"} />,
-                  },
-                  { label: "Shipping Method", value: shipMethod },
-                  {
-                    label: "Total Parcel / Total Quantity",
-                    value: (
-                      <span className="inline-flex items-center gap-1.5">
-                        1 / 1 Pcs
-                        <span className="inline-flex items-center gap-1 text-signal-teal text-xs font-semibold">
-                          <Check size={12} /> Verified
-                        </span>
+          <div className="p-4">
+            <InfoGrid
+              items={[
+                {
+                  label: "Order ID",
+                  // Parse Link (CN Purchase Order) → show the JZE… order ID,
+                  // not the THN… Shipment order ID, so the two never get mixed up.
+                  value: pkg.cn_order_id
+                    ? CN_ORDER_NO_BY_ID[pkg.cn_order_id] ||
+                      pkg.cn_order_no ||
+                      "—"
+                    : pkg.order_no || pkg.order || "—",
+                },
+                { label: "Tracking Number", value: pkg.tk },
+                { label: "Customer", value: pkg.customer || "—" },
+                {
+                  label: "Status",
+                  value: <StatusBadge label={pkg.status || "—"} />,
+                },
+                { label: "Shipping Method", value: shipMethod },
+                {
+                  label: "Total Parcel / Total Quantity",
+                  value: (
+                    <span className="inline-flex items-center gap-1.5">
+                      1 / 1 Pcs
+                      <span className="inline-flex items-center gap-1 text-signal-teal text-xs font-semibold">
+                        <Check size={12} /> Verified
                       </span>
-                    ),
-                  },
-                  {
-                    label: "Total Weight / Total CBM",
-                    value: `${pkg.weight || "—"} / ${pkg.cbm || "—"}`,
-                  },
-                  { label: "Warehouse", value: pkg.warehouse || "—" },
-                  { label: "Product", value: pkg.product_name || "—" },
-                  {
-                    label: "Cargo / Size",
-                    value: pkg.cargo_type
-                      ? `${pkg.cargo_type} · ${sizeLabel(pkg.size_class)}`
-                      : pkg.package_type === "small_package" && pkg.size_class
-                        ? `Small · ${sizeLabel(pkg.size_class)}`
-                        : "—",
-                  },
-                  {
-                    label: "Freight",
-                    value:
-                      pkg.freight_fee !== undefined &&
-                      pkg.freight_fee !== null &&
-                      pkg.freight_fee !== ""
-                        ? money(pkg.freight_fee)
-                        : "—",
-                  },
-                ]}
-              />
-            </div>
+                    </span>
+                  ),
+                },
+                {
+                  label: "Total Weight / Total CBM",
+                  value: `${pkg.weight || "—"} / ${pkg.cbm || "—"}`,
+                },
+                { label: "Warehouse", value: pkg.warehouse || "—" },
+                { label: "Product", value: pkg.product_name || "—" },
+                {
+                  label: "Cargo / Size",
+                  value: pkg.cargo_type
+                    ? `${pkg.cargo_type} · ${sizeLabel(pkg.size_class)}`
+                    : pkg.package_type === "small_package" && pkg.size_class
+                      ? `Small · ${sizeLabel(pkg.size_class)}`
+                      : "—",
+                },
+                {
+                  label: "Freight",
+                  value:
+                    pkg.freight_fee !== undefined &&
+                    pkg.freight_fee !== null &&
+                    pkg.freight_fee !== ""
+                      ? money(pkg.freight_fee)
+                      : "—",
+                },
+              ]}
+            />
           </div>
+        </div>
 
-          {canEnterSize && (
-            <div className="border border-mist-200 rounded-md overflow-hidden">
-              <div className="flex items-center justify-between bg-mist-50 px-4 py-2.5">
-                <span className="text-sm font-semibold text-ink-900">
-                  {missingSize
-                    ? "បញ្ចូល Size / Weight (មិនទាន់មានពីឃ្លាំងចិន)"
-                    : "ផ្ទៀងផ្ទាត់ Size / Weight ឡើងវិញ"}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setEdit((v) => !v)}
-                  className="text-xs font-medium text-signal-blue border border-mist-200 bg-white px-2.5 py-1 rounded-md hover:bg-mist-50"
-                >
-                  {edit
-                    ? "Cancel changes"
-                    : missingSize
-                      ? "Enter Size / Weight"
-                      : "Adjust Size / Weight"}
-                </button>
-              </div>
-              {edit && (
-                <div className="p-4 space-y-3">
-                  <div className="text-xs text-ink-600/60">
-                    ពីចិន: {pkg.weight || "—"} · CBM {pkg.cbm || "—"} · Size{" "}
-                    {sizeLabel(pkg.size_class)} · Fee{" "}
-                    {pkg.freight_fee != null ? money(pkg.freight_fee) : "—"}
+        {canEnterSize && (
+          <div className="border border-slate-200 rounded-xl overflow-hidden">
+            <div className="flex items-center justify-between bg-slate-50 px-4 py-2.5">
+              <span className="text-sm font-semibold text-ink-900">
+                {missingSize
+                  ? "បញ្ចូល Size / Weight (មិនទាន់មានពីឃ្លាំងចិន)"
+                  : "ផ្ទៀងផ្ទាត់ Size / Weight ឡើងវិញ"}
+              </span>
+              <button
+                type="button"
+                onClick={() => setEdit((v) => !v)}
+                className="text-xs font-medium text-signal-blue border border-mist-200 bg-white px-2.5 py-1 rounded-md hover:bg-mist-50"
+              >
+                {edit
+                  ? "Cancel changes"
+                  : missingSize
+                    ? "Enter Size / Weight"
+                    : "Adjust Size / Weight"}
+              </button>
+            </div>
+            {edit && (
+              <div className="p-4 space-y-3">
+                <div className="text-xs text-ink-600/60">
+                  ពីចិន: {pkg.weight || "—"} · CBM {pkg.cbm || "—"} · Size{" "}
+                  {sizeLabel(pkg.size_class)} · Fee{" "}
+                  {pkg.freight_fee != null ? money(pkg.freight_fee) : "—"}
+                </div>
+                {isAir && (
+                  <div className="text-xs rounded-md bg-blue-50 text-blue-800 px-3 py-2">
+                    ✈️ Air — freight = Weight (KG) × Air rate. Size / CBM are
+                    not used.
                   </div>
-                  {isAir && (
-                    <div className="text-xs rounded-md bg-blue-50 text-blue-800 px-3 py-2">
-                      ✈️ Air — freight = Weight (KG) × Air rate. Size / CBM are
-                      not used.
-                    </div>
-                  )}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className={isAir ? "hidden" : ""}>
-                      <label className={LABEL_CLS}>Package Type</label>
-                      <select
-                        value={
-                          dims.packageType ||
-                          (dims.sizeClass === "OVER"
-                            ? "dimension_based"
-                            : "small_package")
-                        }
-                        onChange={(e) =>
-                          setDims((d) => ({
-                            ...d,
-                            packageType: e.target.value,
-                            sizeClass:
-                              e.target.value === "dimension_based"
-                                ? "OVER"
-                                : d.sizeClass === "OVER"
-                                  ? ""
-                                  : d.sizeClass,
-                            length:
-                              e.target.value === "dimension_based"
-                                ? d.length
-                                : "",
-                            width:
-                              e.target.value === "dimension_based"
-                                ? d.width
-                                : "",
-                            height:
-                              e.target.value === "dimension_based"
-                                ? d.height
-                                : "",
-                          }))
-                        }
-                        className={INPUT_CLS}
-                      >
-                        <option value="small_package">Small Package</option>
-                        <option value="dimension_based">Dimension Based</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className={LABEL_CLS}>Weight (KG)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={dims.weight}
-                        onChange={(e) =>
-                          setDims((d) => ({ ...d, weight: e.target.value }))
-                        }
-                        className={INPUT_CLS}
-                      />
-                    </div>
-                  </div>
-                  {isAir ? null : dims.packageType === "dimension_based" ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      {[
-                        ["length", "Length (cm)"],
-                        ["width", "Width (cm)"],
-                        ["height", "Height (cm)"],
-                      ].map(([key, label]) => (
-                        <div key={key}>
-                          <label className={LABEL_CLS}>{label} *</label>
-                          <input
-                            type="number"
-                            min="0"
-                            step="any"
-                            value={dims[key]}
-                            onChange={(e) =>
-                              setDims((d) => ({ ...d, [key]: e.target.value }))
-                            }
-                            className={INPUT_CLS}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div>
-                      <label className={LABEL_CLS}>Package Size</label>
-                      <div className="grid grid-cols-3 gap-2">
-                        {["S", "M", "L"].map((z) => (
-                          <button
-                            type="button"
-                            key={z}
-                            onClick={() =>
-                              setDims((d) => ({ ...d, sizeClass: z }))
-                            }
-                            className={segBtn(dims.sizeClass === z)}
-                          >
-                            Size {z}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  <div className={isAir ? "hidden" : "grid grid-cols-2 gap-3"}>
-                    <div>
-                      <label className={LABEL_CLS}>Cargo Type</label>
-                      <select
-                        value={dims.cargoType}
-                        onChange={(e) =>
-                          setDims((d) => ({ ...d, cargoType: e.target.value }))
-                        }
-                        className={INPUT_CLS}
-                      >
-                        <option value="">— ជ្រើសរើស —</option>
-                        {CARGO_TYPES.map((t) => (
-                          <option key={t} value={t}>
-                            {t}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className={LABEL_CLS}>Size</label>
-                      <select
-                        value={dims.sizeClass}
-                        onChange={(e) =>
-                          setDims((d) => ({ ...d, sizeClass: e.target.value }))
-                        }
-                        className={INPUT_CLS}
-                      >
-                        <option value="">— ជ្រើសរើស —</option>
-                        {SIZE_CHOICES.map((z) => (
-                          <option key={z} value={z}>
-                            {sizeLabel(z)}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                )}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className={isAir ? "hidden" : ""}>
+                    <label className={LABEL_CLS}>Package Type</label>
+                    <select
+                      value={
+                        dims.packageType ||
+                        (dims.sizeClass === "OVER"
+                          ? "dimension_based"
+                          : "small_package")
+                      }
+                      onChange={(e) =>
+                        setDims((d) => ({
+                          ...d,
+                          packageType: e.target.value,
+                          sizeClass:
+                            e.target.value === "dimension_based"
+                              ? "OVER"
+                              : d.sizeClass === "OVER"
+                                ? ""
+                                : d.sizeClass,
+                          length:
+                            e.target.value === "dimension_based"
+                              ? d.length
+                              : "",
+                          width:
+                            e.target.value === "dimension_based" ? d.width : "",
+                          height:
+                            e.target.value === "dimension_based"
+                              ? d.height
+                              : "",
+                        }))
+                      }
+                      className={INPUT_CLS}
+                    >
+                      <option value="small_package">Small Package</option>
+                      <option value="dimension_based">Dimension Based</option>
+                    </select>
                   </div>
                   <div>
-                    <label className={LABEL_CLS}>
-                      {missingSize
-                        ? "Reason (មិនចាំបាច់)"
-                        : "Reason for adjustment *"}
-                    </label>
+                    <label className={LABEL_CLS}>Weight (KG)</label>
                     <input
-                      value={dims.reason}
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={dims.weight}
                       onChange={(e) =>
-                        setDims((d) => ({ ...d, reason: e.target.value }))
+                        setDims((d) => ({ ...d, weight: e.target.value }))
                       }
                       className={INPUT_CLS}
                     />
                   </div>
-                  <div className="text-xs rounded-md bg-mist-50 px-3 py-2 text-ink-700">
-                    {calc?.ok ? (
-                      <>
-                        CBM ថ្មី:{" "}
-                        <b>{calc.cbm != null ? calc.cbm.toFixed(3) : "—"}</b> ·
-                        Freight ថ្មី:{" "}
-                        <b>
-                          {pkg.freight_overridden
-                            ? `${money(pkg.freight_fee)} (Override — Save)`
-                            : money(calc.fee)}
-                        </b>
-                      </>
-                    ) : (
-                      <span className="text-signal-red">{calc?.message}</span>
-                    )}
+                </div>
+                {isAir ? null : dims.packageType === "dimension_based" ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    {[
+                      ["length", "Length (cm)"],
+                      ["width", "Width (cm)"],
+                      ["height", "Height (cm)"],
+                    ].map(([key, label]) => (
+                      <div key={key}>
+                        <label className={LABEL_CLS}>{label} *</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={dims[key]}
+                          onChange={(e) =>
+                            setDims((d) => ({ ...d, [key]: e.target.value }))
+                          }
+                          className={INPUT_CLS}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div>
+                    <label className={LABEL_CLS}>Package Size</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {["S", "M", "L"].map((z) => (
+                        <button
+                          type="button"
+                          key={z}
+                          onClick={() =>
+                            setDims((d) => ({ ...d, sizeClass: z }))
+                          }
+                          className={segBtn(dims.sizeClass === z)}
+                        >
+                          Size {z}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className={isAir ? "hidden" : "grid grid-cols-2 gap-3"}>
+                  <div>
+                    <label className={LABEL_CLS}>Cargo Type</label>
+                    <select
+                      value={dims.cargoType}
+                      onChange={(e) =>
+                        setDims((d) => ({ ...d, cargoType: e.target.value }))
+                      }
+                      className={INPUT_CLS}
+                    >
+                      <option value="">— ជ្រើសរើស —</option>
+                      {CARGO_TYPES.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className={LABEL_CLS}>Size</label>
+                    <select
+                      value={dims.sizeClass}
+                      onChange={(e) =>
+                        setDims((d) => ({ ...d, sizeClass: e.target.value }))
+                      }
+                      className={INPUT_CLS}
+                    >
+                      <option value="">— ជ្រើសរើស —</option>
+                      {SIZE_CHOICES.map((z) => (
+                        <option key={z} value={z}>
+                          {sizeLabel(z)}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
-              )}
-            </div>
-          )}
+                <div>
+                  <label className={LABEL_CLS}>
+                    {missingSize
+                      ? "Reason (មិនចាំបាច់)"
+                      : "Reason for adjustment *"}
+                  </label>
+                  <input
+                    value={dims.reason}
+                    onChange={(e) =>
+                      setDims((d) => ({ ...d, reason: e.target.value }))
+                    }
+                    className={INPUT_CLS}
+                  />
+                </div>
+                <div className="text-xs rounded-md bg-mist-50 px-3 py-2 text-ink-700">
+                  {calc?.ok ? (
+                    <>
+                      CBM ថ្មី:{" "}
+                      <b>{calc.cbm != null ? calc.cbm.toFixed(3) : "—"}</b> ·
+                      Freight ថ្មី:{" "}
+                      <b>
+                        {pkg.freight_overridden
+                          ? `${money(pkg.freight_fee)} (Override — Save)`
+                          : money(calc.fee)}
+                      </b>
+                    </>
+                  ) : (
+                    <span className="text-signal-red">{calc?.message}</span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
-          <div className="border border-mist-200 rounded-md overflow-hidden">
-            <div className="flex items-center justify-between bg-mist-50 px-4 py-2.5">
-              <span className="text-sm font-semibold text-ink-900">
-                Split by Packages{" "}
-                <span className="text-ink-600/45 font-normal">
-                  ({checked ? 1 : 0}/1 Selected)
-                </span>
+        <div className="border border-slate-200 rounded-xl overflow-hidden">
+          <div className="flex items-center justify-between bg-slate-50 px-4 py-2.5">
+            <span className="text-sm font-semibold text-ink-900">
+              Split by Packages{" "}
+              <span className="text-ink-600/45 font-normal">
+                ({checked ? 1 : 0}/1 Selected)
               </span>
-              <label className="flex items-center gap-1.5 text-xs text-ink-700">
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={(e) => setChecked(e.target.checked)}
-                />
-                Select All
-              </label>
-            </div>
-            <div className="p-4 flex items-start gap-3">
+            </span>
+            <label className="flex items-center gap-1.5 text-xs text-ink-700">
               <input
                 type="checkbox"
                 checked={checked}
                 onChange={(e) => setChecked(e.target.checked)}
-                className="mt-1"
               />
-              <Package size={18} className="text-signal-blue mt-0.5" />
-              <div className="flex-1 grid grid-cols-3 gap-3 text-sm">
-                <div className="col-span-3 font-medium text-ink-900">
-                  Parcel #1
+              Select All
+            </label>
+          </div>
+          <div className="p-4 flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={(e) => setChecked(e.target.checked)}
+              className="mt-1"
+            />
+            <Package size={18} className="text-signal-blue mt-0.5" />
+            <div className="flex-1 grid grid-cols-3 gap-3 text-sm">
+              <div className="col-span-3 font-medium text-ink-900">
+                Parcel #1
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-ink-600/40 font-semibold">
+                  Qty
                 </div>
-                <div>
-                  <div className="text-[11px] uppercase tracking-wide text-ink-600/40 font-semibold">
-                    Qty
-                  </div>
-                  <div className="text-ink-900">1</div>
+                <div className="text-ink-900">1</div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-ink-600/40 font-semibold">
+                  Weight
                 </div>
-                <div>
-                  <div className="text-[11px] uppercase tracking-wide text-ink-600/40 font-semibold">
-                    Weight
-                  </div>
-                  <div className="text-ink-900">{pkg.weight || "—"}</div>
+                <div className="text-ink-900">{pkg.weight || "—"}</div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-ink-600/40 font-semibold">
+                  Status
                 </div>
-                <div>
-                  <div className="text-[11px] uppercase tracking-wide text-ink-600/40 font-semibold">
-                    Status
-                  </div>
-                  <StatusBadge label={pkg.status || "—"} />
-                </div>
+                <StatusBadge label={pkg.status || "—"} />
               </div>
             </div>
           </div>
-          <PhotoGallery tk={pkg.tk} />
-          {!hasPhotos && targetStatus === "Arrived Destination" && (
-            <div className="border border-mist-200 rounded-md overflow-hidden">
-              <div className="bg-mist-50 px-4 py-2.5 text-sm font-semibold text-ink-900">
-                បន្ថែមរូបភាពទំនិញ{" "}
-                <span className="text-ink-600/45 font-normal text-xs">
-                  (មិនចាំបាច់ — Inbound មិនទាន់មានរូប)
-                </span>
-              </div>
-              <div className="p-4">
-                <PhotoUploader
-                  photos={newPhotos}
-                  setPhotos={setNewPhotos}
-                  emptyHint="No images yet — មិនចាំបាច់ (optional)"
-                />
-              </div>
+        </div>
+        <PhotoGallery tk={pkg.tk} />
+        {!hasPhotos && targetStatus === "Arrived Destination" && (
+          <div className="border border-slate-200 rounded-xl overflow-hidden">
+            <div className="bg-slate-50 px-4 py-2.5 text-sm font-semibold text-ink-900">
+              បន្ថែមរូបភាពទំនិញ{" "}
+              <span className="text-ink-600/45 font-normal text-xs">
+                (មិនចាំបាច់ — Inbound មិនទាន់មានរូប)
+              </span>
             </div>
-          )}
-        </div>
-
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex items-center gap-1.5 text-sm font-medium text-ink-700 border border-mist-200 px-3.5 py-2 rounded-md hover:bg-mist-50"
-          >
-            <X size={14} />
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleConfirm}
-            disabled={saving || !checked || route.loading}
-            className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
-          >
-            <Check size={14} />
-            {saving ? "Confirming..." : edit ? "Save & Confirm" : "Confirm"}
-          </button>
-        </div>
+            <div className="p-4">
+              <PhotoUploader
+                photos={newPhotos}
+                setPhotos={setNewPhotos}
+                emptyHint="No images yet — មិនចាំបាច់ (optional)"
+              />
+            </div>
+          </div>
+        )}
       </div>
-    </div>
+    </AppModal>
   );
 }
 
@@ -9530,9 +9502,10 @@ const SCAN_CSS = `
     transparent 62%
   );
 }
+/* Only the red ring spins while scanning — no sweeping line across the box. */
 .cb-scan--scanning .cb-scan__line {
-  opacity: .55;
-  animation: cb-scan-sweep .35s ease-in-out infinite;
+  opacity: 0;
+  animation: none;
 }
 
 /* icon stack: scanner → check / alert */
@@ -9564,13 +9537,20 @@ const SCAN_CSS = `
   padding: 0 !important;
   line-height: 1.2;
 }
-/* dotted-ring spinner shown while a scan is being checked */
-.cb-scan .cb-ico-spin { color: #f4695c; }
+/* Dotted red ring spinner (bigger + bolder), shown while a scan is being checked */
+.cb-scan .cb-ico-spin {
+  color: #e11d48;
+  inset: auto;
+  left: -3px;
+  top: -3px;
+  width: 24px;
+  height: 24px;
+}
 .cb-scan--idle .cb-ico-scan { opacity: .55; }
 .cb-scan--scanning .cb-ico-scan { opacity: 0; transform: scale(.6); animation: none; }
 .cb-scan--scanning .cb-ico-spin {
   opacity: 1; transform: none;
-  animation: cb-scan-spin .9s linear infinite;
+  animation: cb-scan-spin .55s linear infinite;
 }
 @keyframes cb-scan-spin { to { transform: rotate(360deg); } }
 
@@ -9596,6 +9576,8 @@ const SCAN_CSS = `
 
 @media (prefers-reduced-motion: reduce) {
   .cb-scan, .cb-scan *, .cb-scan-msg, .cb-scan-row-in { animation: none !important; transition: none !important; }
+  /* keep the loading ring turning even with reduced motion (it is the only feedback) */
+  .cb-scan--scanning .cb-ico-spin { animation: cb-scan-spin .55s linear infinite !important; }
 }
 `;
 
@@ -9613,15 +9595,16 @@ function ScanIconStack() {
         height="18"
         fill="currentColor"
       >
+        {/* 8 bold dots in a ring; size + opacity fade gives a clear direction of spin */}
         {Array.from({ length: 8 }).map((_, i) => {
           const a = (i / 8) * 2 * Math.PI;
           return (
             <circle
               key={i}
-              cx={12 + 8.8 * Math.sin(a)}
-              cy={12 - 8.8 * Math.cos(a)}
-              r={2.7 - i * 0.2}
-              opacity={1 - i * 0.11}
+              cx={12 + 8.6 * Math.sin(a)}
+              cy={12 - 8.6 * Math.cos(a)}
+              r={3.4 - i * 0.18}
+              opacity={1 - i * 0.07}
             />
           );
         })}
@@ -10581,74 +10564,49 @@ function WarehouseFormModal({ open, type, existing, onClose, onSave }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
+    <AppModal
+      title={
+        <>
+          {existing ? "កែ" : "បង្កើត"}{" "}
+          {isKh ? "Cambodia Branch" : "China Warehouse"}
+        </>
+      }
+      maxW="max-w-lg"
+      onClose={onClose}
+      onSubmit={submit}
+      busy={saving}
+      error={error}
+      submitLabel="Save"
+      busyLabel="កំពុងSave..."
     >
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={submit}
-        className="bg-white rounded-md shadow-lg w-full max-w-lg max-h-[88vh] overflow-y-auto"
-      >
-        <div className="px-5 py-4 border-b border-mist-200">
-          <h3 className="font-display font-bold text-base text-ink-900">
-            {existing ? "កែ" : "បង្កើត"}{" "}
-            {isKh ? "Cambodia Branch" : "China Warehouse"}
-          </h3>
-        </div>
-        <div className="p-5 space-y-3.5">
-          {error && (
-            <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2">
-              <TriangleAlert size={14} className="shrink-0" />
-              {error}
-            </div>
+      {fields.map(([key, label]) => (
+        <div key={key}>
+          <label className={LABEL_CLS}>{label}</label>
+          <input
+            value={v[key] ?? ""}
+            disabled={key === "code" && !!existing}
+            onChange={(e) => setV((x) => ({ ...x, [key]: e.target.value }))}
+            className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
+          />
+          {key === "code" && existing && (
+            <p className="text-[11px] text-ink-600/50 mt-1">
+              Code មិនអាចប្តូរបានទេ ព្រោះ Order/TK ប្រើវាជាឯកសារយោង
+            </p>
           )}
-          {fields.map(([key, label]) => (
-            <div key={key}>
-              <label className={LABEL_CLS}>{label}</label>
-              <input
-                value={v[key] ?? ""}
-                disabled={key === "code" && !!existing}
-                onChange={(e) => setV((x) => ({ ...x, [key]: e.target.value }))}
-                className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
-              />
-              {key === "code" && existing && (
-                <p className="text-[11px] text-ink-600/50 mt-1">
-                  Code មិនអាចប្តូរបានទេ ព្រោះ Order/TK ប្រើវាជាឯកសារយោង
-                </p>
-              )}
-            </div>
-          ))}
-          <div>
-            <label className={LABEL_CLS}>Status</label>
-            <select
-              value={v.status}
-              onChange={(e) => setV((x) => ({ ...x, status: e.target.value }))}
-              className={INPUT_CLS}
-            >
-              <option value="Active">Active</option>
-              <option value="Disabled">Disabled</option>
-            </select>
-          </div>
         </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={saving}
-            className="bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
-          >
-            {saving ? "កំពុងSave..." : "Save"}
-          </button>
-        </div>
-      </form>
-    </div>
+      ))}
+      <div>
+        <label className={LABEL_CLS}>Status</label>
+        <select
+          value={v.status}
+          onChange={(e) => setV((x) => ({ ...x, status: e.target.value }))}
+          className={INPUT_CLS}
+        >
+          <option value="Active">Active</option>
+          <option value="Disabled">Disabled</option>
+        </select>
+      </div>
+    </AppModal>
   );
 }
 
@@ -12174,77 +12132,40 @@ function TransferOrderModal({ open, order, onClose, onTransferred }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
+    <AppModal
+      title="Transfer Order"
+      maxW="max-w-md"
+      onClose={onClose}
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (canSubmit && !saving) handleSave();
+      }}
+      busy={saving}
+      error={error}
+      submitLabel="Save"
+      busyLabel="Transferring..."
+      submitDisabled={!canSubmit}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-md shadow-lg w-full max-w-md max-h-[85vh] overflow-y-auto"
-      >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-mist-200">
-          <h3 className="font-display font-bold text-lg text-ink-900">
-            Transfer Order
-          </h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-ink-600/40 hover:text-ink-900"
-          >
-            <X size={18} />
-          </button>
-        </div>
+      <TransferAccountLookup
+        transferType={transferType}
+        onTransferTypeChange={(t) => {
+          setTransferType(t);
+          setQuery("");
+        }}
+        query={query}
+        onQueryChange={setQuery}
+        matched={matched}
+        loading={loading}
+        noteText="ការបញ្ជាទិញនេះឈានដល់ស្ថានភាព arrived destination។ បើអ្នកបានផ្ទេរវាទៅ User ផ្សេង សូម print ស្លាកPackage (order sticker) ម្តងទៀត។"
+      />
 
-        <div className="p-5 space-y-3.5">
-          {error && (
-            <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2">
-              <TriangleAlert size={14} className="shrink-0" />
-              {error}
-            </div>
-          )}
-
-          <TransferAccountLookup
-            transferType={transferType}
-            onTransferTypeChange={(t) => {
-              setTransferType(t);
-              setQuery("");
-            }}
-            query={query}
-            onQueryChange={setQuery}
-            matched={matched}
-            loading={loading}
-            noteText="ការបញ្ជាទិញនេះឈានដល់ស្ថានភាព arrived destination។ បើអ្នកបានផ្ទេរវាទៅ User ផ្សេង សូម print ស្លាកPackage (order sticker) ម្តងទៀត។"
-          />
-
-          {matched && sameCustomer && (
-            <p className="text-xs text-signal-red">
-              This is already the same customer — please choose a different
-              customer.
-            </p>
-          )}
-        </div>
-
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex items-center gap-1.5 text-sm font-medium text-ink-700 border border-mist-200 px-3.5 py-2 rounded-md hover:bg-mist-50"
-          >
-            <X size={14} />
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={!canSubmit || saving}
-            className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <Save size={14} />
-            {saving ? "Transferring..." : "Save"}
-          </button>
-        </div>
-      </div>
-    </div>
+      {matched && sameCustomer && (
+        <p className="text-xs text-signal-red">
+          This is already the same customer — please choose a different
+          customer.
+        </p>
+      )}
+    </AppModal>
   );
 }
 
@@ -12386,6 +12307,8 @@ const STATUS_FAMILY_HEX = {
   cyan: { bg: "#CFFAFE", fg: "#0E7490", solid: "#06B6D4" },
   emerald: { bg: "#D1FAE5", fg: "#047857", solid: "#10B981" },
   blue: { bg: "#DBEAFE", fg: "#1D4ED8", solid: "#2563EB" },
+  green: { bg: "#DCFCE7", fg: "#15803D", solid: "#22C55E" },
+  orange: { bg: "#FFEDD5", fg: "#EA580C", solid: "#F97316" },
 };
 function statusToneHex(label) {
   const cls = statusToneClass(label);
@@ -12393,13 +12316,15 @@ function statusToneHex(label) {
   return (family && STATUS_FAMILY_HEX[family]) || null;
 }
 
+// Display-only: the TK stage that customers/CN orders call "Arrive Destination".
+const TK_STAGE_DISPLAY = { "Arrived Destination": "Arrive Destination" };
 function StatusBadge({ label }) {
   const cls = statusToneClass(label) || TONE_CLASS[toneFor(label)];
   return (
     <span
       className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-bold whitespace-nowrap ${cls}`}
     >
-      {label}
+      {TK_STAGE_DISPLAY[label] || label}
     </span>
   );
 }
@@ -12413,6 +12338,8 @@ function StatusBadge({ label }) {
 //   onRetry      handler for the Retry button
 //   emptyTitle / emptyHint / emptyAction({label,onClick})  empty-state copy
 //   col.numeric  right-align + tabular figures   col.align "right"|"center"
+//   rowKey(row,i)  stable React key        minWidth  px, forces horizontal scroll
+//   onRowClick(row, event)  event lets callers handle ctrl/cmd-click
 function colAlignClass(col) {
   if (col.numeric) return "text-right tabular-nums";
   if (col.align === "right") return "text-right";
@@ -12427,6 +12354,8 @@ function DataTable({
   skeletonRows = 6,
   rowActions,
   onRowClick,
+  rowKey,
+  minWidth,
   caption,
   error = null,
   onRetry,
@@ -12446,7 +12375,10 @@ function DataTable({
         caption || "Data table — scroll horizontally for more columns"
       }
     >
-      <table className="w-full text-sm">
+      <table
+        className="w-full text-sm"
+        style={minWidth ? { minWidth } : undefined}
+      >
         {caption && <caption className="sr-only">{caption}</caption>}
         <thead>
           <tr className="border-b border-mist-200">
@@ -12478,7 +12410,7 @@ function DataTable({
             !error &&
             rows.map((row, i) => (
               <tr
-                key={i}
+                key={rowKey ? rowKey(row, i) : i}
                 className={`cbx-row transition-colors ${onRowClick ? "cursor-pointer hover:bg-blue-50/40" : ""}`}
                 onClick={
                   onRowClick
@@ -12490,7 +12422,13 @@ function DataTable({
                           )
                         )
                           return;
-                        onRowClick(row);
+                        // Selecting text inside a row must not open it.
+                        if (
+                          window.getSelection &&
+                          String(window.getSelection())
+                        )
+                          return;
+                        onRowClick(row, e);
                       }
                     : undefined
                 }
@@ -16643,102 +16581,73 @@ function CreateTransferModal({ open, onClose, onCreated }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
+    <AppModal
+      title="New Transfer"
+      maxW="max-w-md"
+      onClose={onClose}
+      onSubmit={handleSubmit}
+      busy={saving}
+      error={error}
+      submitLabel="Confirm"
+      busyLabel="Transferring..."
+      submitDisabled={!canSubmit}
     >
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={handleSubmit}
-        className="bg-white rounded-md shadow-lg w-full max-w-md max-h-[85vh] overflow-y-auto"
-      >
-        <div className="px-5 py-4 border-b border-mist-200">
-          <h3 className="font-display font-bold text-base text-ink-900">
-            New Transfer
-          </h3>
-        </div>
-        <div className="p-5 space-y-3.5">
-          {error && (
-            <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2">
-              <TriangleAlert size={14} className="shrink-0" />
-              {error}
-            </div>
-          )}
-
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              TK Number
-            </label>
-            <input
-              required
-              value={tk}
-              onChange={(e) => {
-                setTk(e.target.value);
-                setTkChecked(false);
-                setFromLabel(null);
-              }}
-              onBlur={checkTk}
-              className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-            />
-            {tkChecked && (
-              <p
-                className={`text-xs mt-1 ${fromLabel ? "text-ink-600/55" : "text-signal-red"}`}
-              >
-                {fromLabel
-                  ? `From: ${fromLabel}`
-                  : "TK not found នេះទេ — សូមពិនិត្យលេខម្តងទៀត"}
-              </p>
-            )}
-          </div>
-
-          <TransferAccountLookup
-            transferType={transferType}
-            onTransferTypeChange={(t) => {
-              setTransferType(t);
-              setQuery("");
-            }}
-            query={query}
-            onQueryChange={setQuery}
-            matched={selectedCustomer}
-            loading={customerLoading}
-            noteText="This transfer takes effect immediately — the TK will be removed from the original customer and appear under the new customer."
-          />
-          {selectedCustomer && sameCustomer && (
-            <p className="text-xs text-signal-red">
-              This is already the same customer — please choose a different
-              customer.
-            </p>
-          )}
-
-          <div>
-            <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-              Reason
-            </label>
-            <input
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-            />
-          </div>
-        </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm font-medium text-ink-700 px-3.5 py-2 rounded-md hover:bg-mist-50"
+      <div>
+        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
+          TK Number
+        </label>
+        <input
+          required
+          value={tk}
+          onChange={(e) => {
+            setTk(e.target.value);
+            setTkChecked(false);
+            setFromLabel(null);
+          }}
+          onBlur={checkTk}
+          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+        />
+        {tkChecked && (
+          <p
+            className={`text-xs mt-1 ${fromLabel ? "text-ink-600/55" : "text-signal-red"}`}
           >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={!canSubmit || saving}
-            className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {saving ? "Transferring..." : "Confirm"}
-          </button>
-        </div>
-      </form>
-    </div>
+            {fromLabel
+              ? `From: ${fromLabel}`
+              : "TK not found នេះទេ — សូមពិនិត្យលេខម្តងទៀត"}
+          </p>
+        )}
+      </div>
+
+      <TransferAccountLookup
+        transferType={transferType}
+        onTransferTypeChange={(t) => {
+          setTransferType(t);
+          setQuery("");
+        }}
+        query={query}
+        onQueryChange={setQuery}
+        matched={selectedCustomer}
+        loading={customerLoading}
+        noteText="This transfer takes effect immediately — the TK will be removed from the original customer and appear under the new customer."
+      />
+      {selectedCustomer && sameCustomer && (
+        <p className="text-xs text-signal-red">
+          This is already the same customer — please choose a different
+          customer.
+        </p>
+      )}
+
+      <div>
+        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
+          Reason
+        </label>
+        <input
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+        />
+      </div>
+    </AppModal>
   );
 }
 
@@ -16920,17 +16829,13 @@ function OutboundStepper({ idx }) {
 // components/QuickInboundScan.jsx
 // ------------------------------------------------------------
 // Inline "Scan & Inbound" box on Inbound Origin (same idea as the Outbound
-// scanner). Scan a TK:
-//   • TK belongs to a CN Order (Assisted Purchase) with a known Customer →
-//     saved straight away: Customer auto-assigned, new THN Order, status
-//     Inbound Origin, NO freight yet (charged later on Arrive).
-//   • Any other TK (customer buys directly) → opens the normal full Inbound
-//     form with the TK already filled in (photos / cargo / freight).
+// scanner). Scan a TK → ALWAYS opens the full Inbound form with the TK filled in.
+// For a CN Order (Parse Link) TK the form locks the Customer, reuses the CN
+// Order's existing Order ID and lets staff set Cargo / Freight like a Shipment
+// (or leave it blank to charge later on Arrive). Direct-customer TKs use the
+// same form with a brand-new Order ID.
 function QuickInboundScan({ focusKey = 0, onNeedForm }) {
-  const { upsertPackage, syncTimelineToStatus, findPackage, logStatus } =
-    usePackageTracking();
-  const { user } = useAuth();
-  const { rows: whList } = useWarehouses();
+  const { findPackage } = usePackageTracking();
   const scan = useScanFeedback();
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -16943,129 +16848,18 @@ function QuickInboundScan({ focusKey = 0, onNeedForm }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focusKey]);
 
-  async function findCnOwner(tk) {
-    if (!supabase) return null;
-    const { data } = await supabase
-      .from("cn_order_parcels")
-      .select("cn_orders(order_id,customer_id,product_name)")
-      .ilike(
-        "domestic_tracking",
-        tk.replace(/[%_\\]/g, (m) => "\\" + m),
-      )
-      .limit(1);
-    const cn = data?.[0]?.cn_orders;
-    if (!cn?.customer_id) return null;
-    const { data: c } = await supabase
-      .from("customers")
-      .select("id, customer_code, name, phone")
-      .eq("id", cn.customer_id)
-      .maybeSingle();
-    return c ? { cn, customer: c } : null;
-  }
-
-  async function process(raw) {
+  function process(raw) {
     const tk = String(raw || "").trim();
     if (!tk || busyRef.current) return;
     if (findPackage(tk)) return scan.fail(`TK "${tk}" មានរួចហើយក្នុងប្រព័ន្ធ`);
-
-    busyRef.current = true;
-    setBusy(true);
-    scan.begin();
-    let newOrder = null;
-    let saved = null;
-    try {
-      const owner = await findCnOwner(tk);
-      if (!owner) {
-        // Not a CN Order TK → normal inbound form (photos / cargo / freight)
-        setValue("");
-        scan.fail(`TK "${tk}" មិនមែនជា CN Order — បើក Form Inbound ពេញ`, false);
-        onNeedForm?.(tk);
-        return;
-      }
-      const { cn, customer } = owner;
-      const userName = user?.name || "Admin";
-      const nowIso = new Date().toISOString();
-
-      const d = await readCustomerDefaults(customer.customer_code);
-      const activeChina = whList.filter(
-        (w) =>
-          String(w.type || "").toLowerCase() === "china" &&
-          String(w.status || "").toLowerCase() === "active",
-      );
-      const china = whIsActive(whList, d.china, "china")
-        ? d.china
-        : whIsActive(whList, user?.defaultWarehouse, "china")
-          ? user.defaultWarehouse
-          : activeChina[0]?.code || "";
-      const khWanted = whIsActive(whList, d.kh, "cambodia") ? d.kh : "";
-      const loc = await ensureCustomerInboundAddress(
-        customer,
-        khWanted,
-        whList,
-        userName,
-      );
-      const problem = validateOrderRoute(china, loc.branchCode, whList);
-      if (problem) throw new Error(problem);
-
-      const route = {
-        china,
-        kh: loc.branchCode,
-        addressId: loc?.id || null,
-      };
-      // Parse Link TK: reuse the CN order's existing Order ID (JZE…) instead
-      // of creating a new Order. New Orders are only for direct Shipment.
-      newOrder = {
-        id: null,
-        order_no: cn.order_id,
-        china_wh_code: route.china,
-        kh_branch_code: route.kh,
-      };
-      saved = await upsertPackage({
-        tk,
-        customer_id: customer.id,
-        order_id: newOrder.id,
-        order_no: newOrder.order_no,
-        origin_wh_code: newOrder.china_wh_code,
-        dest_branch_code: newOrder.kh_branch_code,
-        customer: `${customer.customer_code} · ${customer.name}`,
-        product_name: cn.product_name || "",
-        cargo_type: null,
-        package_type: null,
-        size_class: null,
-        // CN Order inbound: freight is charged later, on Arrive.
-        cbm: null,
-        pricing_method: null,
-        rate: null,
-        freight_fee: null,
-        freight_overridden: false,
-        warehouse: newOrder.china_wh_code || china,
-        status: "Inbound Origin",
-        inbound_status: "Ready for Shipment",
-        inbound_at: nowIso,
-        created_by: userName,
-        updated_by: userName,
-        updated_at: nowIso,
-        ...(supabase ? {} : { created_at: nowIso }),
-      });
-      syncTimelineToStatus(tk, "Inbound Origin", userName, "Inbound saved");
-      logStatus(tk, "Ready for Shipment", userName, "Inbound saved");
-      setLast({
-        tk,
-        customer: `${customer.customer_code} · ${customer.name}`,
-        order_no: newOrder.order_no,
-        cn_order: cn.order_id,
-        at: formatNowTimestamp(),
-      });
-      setValue("");
-      scan.succeed(`TK "${tk}" → Inbound Origin`);
-      scan.focusInput(false);
-    } catch (e) {
-      if (newOrder && !saved) await rollbackNewOrder(newOrder);
-      scan.fail(e?.message || "មិនអាច Inbound បានទេ");
-    } finally {
-      busyRef.current = false;
-      setBusy(false);
-    }
+    // Open the full Inbound form (CN Order TKs are detected inside the form:
+    // Customer + existing Order ID are applied automatically, Cargo/Freight
+    // can be entered like a Shipment).
+    setValue("");
+    // The input is cleared programmatically (no onChange), so stop the
+    // "scanning" animation here — otherwise it keeps running after the form opens.
+    scan.reset();
+    onNeedForm?.(tk);
   }
 
   useEffect(() => {
@@ -17084,8 +16878,8 @@ function QuickInboundScan({ focusKey = 0, onNeedForm }) {
           Scan &amp; Inbound
         </h2>
         <p className="text-xs text-ink-600/55">
-          Scan TK របស់ CN Order → Customer ជាប់ស្វ័យប្រវត្តិ (មិនគិតថ្លៃដឹកទេ
-          ចាំគិតពេល Arrive)
+          Scan TK → បើក Form Inbound (CN Order: Customer + Order ID ចាស់ ជាប់
+          ស្វ័យប្រវត្តិ · អាចបញ្ចូលខ្នាត/ថ្លៃដឹកបានដូច Shipment)
         </p>
       </div>
       <div className="p-4 sm:p-5 grid gap-4 sm:gap-5 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] items-start">
@@ -17120,8 +16914,8 @@ function QuickInboundScan({ focusKey = 0, onNeedForm }) {
           </div>
         ) : (
           <div className="hidden lg:flex items-center justify-center min-h-[6rem] rounded-md border border-dashed border-mist-200 text-xs text-ink-600/45 text-center px-6">
-            Scan TK របស់ CN Order → Inbound ភ្លាមៗ។ TK ផ្សេង (Customer
-            ទិញផ្ទាល់) → បើក Form Inbound ពេញ
+            Scan TK → បើក Form Inbound ពេញ។ TK របស់ CN Order ប្រើ Order ID ចាស់
+            ហើយអាចកំណត់ថ្លៃដឹកបាន
           </div>
         )}
       </div>
@@ -22807,10 +22601,36 @@ function EditPackageModal({ open, pkg, onClose }) {
     }
   }
 
+  const segCls = (on) =>
+    `inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-bold transition ${
+      on
+        ? "border-blue-600 bg-blue-600 text-white shadow-sm"
+        : "border-slate-200 bg-white text-slate-600 hover:border-blue-300"
+    }`;
+  const curPkgType =
+    f.package_type ??
+    (f.size_class === "OVER" ? "dimension_based" : "small_package");
+  function changePackageType(v) {
+    setF((x) => ({
+      ...x,
+      package_type: v,
+      size_class:
+        v === "dimension_based"
+          ? "OVER"
+          : x.size_class === "OVER"
+            ? ""
+            : x.size_class,
+      length: v === "dimension_based" ? x.length : "",
+      width: v === "dimension_based" ? x.width : "",
+      height: v === "dimension_based" ? x.height : "",
+    }));
+  }
+
   return (
     <AppModal
       title={`Edit Package · ${pkg.tk}`}
-      maxW="max-w-lg"
+      subtitle="Super Admin edit — a reason is required and saved to the TK history."
+      maxW="max-w-2xl"
       onClose={onClose}
       onSubmit={save}
       busy={saving}
@@ -22847,56 +22667,43 @@ function EditPackageModal({ open, pkg, onClose }) {
             ))}
           </select>
         </div>
-        <div>
+        <div className="col-span-2">
           <label className={LABEL_CLS}>Package Type</label>
-          <select
-            className={INPUT_CLS}
-            value={
-              f.package_type ??
-              (f.size_class === "OVER" ? "dimension_based" : "small_package")
-            }
-            onChange={(e) => {
-              const v = e.target.value;
-              setF((x) => ({
-                ...x,
-                package_type: v,
-                size_class:
-                  v === "dimension_based"
-                    ? "OVER"
-                    : x.size_class === "OVER"
-                      ? ""
-                      : x.size_class,
-                length: v === "dimension_based" ? x.length : "",
-                width: v === "dimension_based" ? x.width : "",
-                height: v === "dimension_based" ? x.height : "",
-              }));
-            }}
-          >
-            <option value="small_package">Small Package</option>
-            <option value="dimension_based">Dimension Based</option>
-          </select>
+          <div className="grid grid-cols-2 gap-2">
+            {[
+              ["small_package", "Small Package"],
+              ["dimension_based", "Dimension Based"],
+            ].map(([v, text]) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => changePackageType(v)}
+                className={segCls(curPkgType === v)}
+              >
+                {text}
+              </button>
+            ))}
+          </div>
         </div>
-        <div>
+        <div className="col-span-2">
           <label className={LABEL_CLS}>Package Size</label>
-          {f.package_type === "dimension_based" ? (
-            <div
-              className={`${INPUT_CLS} bg-slate-50 text-slate-500 flex items-center`}
-            >
-              Dimension Based (&gt; L)
+          {curPkgType === "dimension_based" ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-500">
+              Dimension Based (&gt; L) — enter Length / Width / Height below
             </div>
           ) : (
-            <select
-              className={INPUT_CLS}
-              value={f.size_class ?? ""}
-              onChange={set("size_class")}
-            >
-              <option value="">—</option>
+            <div className="grid grid-cols-3 gap-2">
               {["S", "M", "L"].map((c) => (
-                <option key={c} value={c}>
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setF((x) => ({ ...x, size_class: c }))}
+                  className={segCls(f.size_class === c)}
+                >
                   Size {c}
-                </option>
+                </button>
               ))}
-            </select>
+            </div>
           )}
         </div>
         <div>
@@ -23904,165 +23711,122 @@ function ChangeInternalWarehouseModal({
       .join(", ") || "No detailed address";
 
   return (
-    <div
-      className="fixed inset-0 z-[90] bg-ink-900/40 flex items-center justify-center p-4"
-      onMouseDown={onClose}
+    <AppModal
+      title="Change Internal Warehouse"
+      subtitle="Internal Warehouse = Cambodia receiving branch selected by the customer."
+      maxW="max-w-xl"
+      onClose={onClose}
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (canConfirm) confirm();
+      }}
+      busy={busy}
+      error={error}
+      submitLabel="Confirm Change"
+      busyLabel="Saving…"
+      submitDisabled={!canConfirm}
     >
-      <div
-        className="bg-white rounded-xl shadow-2xl border border-mist-200 w-full max-w-xl max-h-[88vh] overflow-hidden"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-mist-200">
-          <div>
-            <h3 className="font-display font-bold text-lg text-ink-900">
-              Change Internal Warehouse
-            </h3>
-            <p className="text-xs text-ink-600/45 mt-0.5">
-              Internal Warehouse = Cambodia receiving branch selected by the
-              customer.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-ink-600/40 hover:text-ink-900"
-          >
-            <X size={18} />
-          </button>
-        </div>
-        <div className="p-5 space-y-4 overflow-y-auto max-h-[65vh]">
-          {error && (
-            <div className="rounded-lg bg-signal-red/10 text-signal-red text-sm px-3 py-2">
-              {error}
-            </div>
-          )}
-          <div className="rounded-lg bg-signal-blue/5 border border-signal-blue/15 px-3 py-2.5 text-xs text-ink-700">
-            <b>Rule:</b> Customer must have at least <b>2 saved locations</b>{" "}
-            before this TK can be moved to another receiving branch.
-          </div>
-          {addresses === null ? (
-            <div className="py-8 text-center text-sm text-ink-600/45">
-              Loading customer locations…
-            </div>
-          ) : !hasTwoLocations ? (
-            <div className="rounded-lg border border-dashed border-mist-200 p-6 text-center">
-              <Icons.MapPin
-                size={28}
-                className="mx-auto text-ink-600/25 mb-2"
-              />
-              <div className="text-sm font-semibold text-ink-900">
-                Not enough saved locations
-              </div>
-              <p className="text-xs text-ink-600/50 mt-1">
-                This customer has {addresses.length} saved location
-                {addresses.length === 1 ? "" : "s"}. Add a second location
-                first.
-              </p>
-            </div>
-          ) : (
-            <>
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-ink-600/45 mb-2">
-                  Current Internal Warehouse
-                </div>
-                <div className="rounded-lg border border-mist-200 bg-mist-50 px-3 py-3">
-                  <div className="text-sm font-semibold text-ink-900">
-                    {currentBranchCode || currentAddress?.kh_branch_code || "—"}{" "}
-                    ·{" "}
-                    {whName(
-                      warehouses,
-                      currentBranchCode || currentAddress?.kh_branch_code,
-                    ) || "Cambodia Branch"}
-                  </div>
-                  <div className="text-xs text-ink-600/50 mt-1">
-                    {currentAddress
-                      ? `${currentAddress.label} · ${addressText(currentAddress)}`
-                      : "Current TK branch"}
-                  </div>
-                </div>
-              </div>
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wide text-ink-600/45 mb-2">
-                  Customer Saved Locations
-                </div>
-                <div className="space-y-2">
-                  {addresses.map((a) => {
-                    const branch =
-                      branches.find((b) => b.code === a.kh_branch_code) || null;
-                    const isCurrent =
-                      a.id === currentAddressId ||
-                      (!currentAddressId &&
-                        a.kh_branch_code === currentBranchCode);
-                    return (
-                      <label
-                        key={a.id}
-                        className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition ${selectedId === a.id ? "border-signal-blue bg-signal-blue/5" : "border-mist-200 hover:border-signal-blue/40"}`}
-                      >
-                        <input
-                          type="radio"
-                          name="internal-warehouse-location"
-                          checked={selectedId === a.id}
-                          onChange={() => setSelectedId(a.id)}
-                          className="mt-1"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-sm font-semibold text-ink-900">
-                              {a.label || "Customer Location"}
-                            </span>
-                            {a.is_default && (
-                              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-signal-teal/10 text-signal-teal">
-                                Primary
-                              </span>
-                            )}
-                            {isCurrent && (
-                              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-mist-100 text-ink-600">
-                                Current
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-xs font-semibold text-signal-blue mt-1">
-                            {a.kh_branch_code || "No branch"} ·{" "}
-                            {branch?.name || "Unknown Cambodia Branch"}
-                          </div>
-                          <div className="text-xs text-ink-600/50 mt-1">
-                            {addressText(a)}
-                          </div>
-                        </div>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-              {selectedAddress && (
-                <div className="rounded-lg bg-signal-teal/5 border border-signal-teal/15 px-3 py-2 text-xs text-ink-700">
-                  New Internal Warehouse:{" "}
-                  <b>{selectedAddress.kh_branch_code}</b> ·{" "}
-                  {selectedBranch?.name || "Cambodia Branch"}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-sm font-medium text-ink-700 px-4 py-2 rounded-md hover:bg-mist-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={!canConfirm}
-            onClick={confirm}
-            className="bg-signal-blue text-white text-sm font-medium px-4 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {busy ? "Saving…" : "Confirm Change"}
-          </button>
-        </div>
+      <div className="rounded-lg bg-signal-blue/5 border border-signal-blue/15 px-3 py-2.5 text-xs text-ink-700">
+        <b>Rule:</b> Customer must have at least <b>2 saved locations</b> before
+        this TK can be moved to another receiving branch.
       </div>
-    </div>
+      {addresses === null ? (
+        <div className="py-8 text-center text-sm text-ink-600/45">
+          Loading customer locations…
+        </div>
+      ) : !hasTwoLocations ? (
+        <div className="rounded-lg border border-dashed border-mist-200 p-6 text-center">
+          <Icons.MapPin size={28} className="mx-auto text-ink-600/25 mb-2" />
+          <div className="text-sm font-semibold text-ink-900">
+            Not enough saved locations
+          </div>
+          <p className="text-xs text-ink-600/50 mt-1">
+            This customer has {addresses.length} saved location
+            {addresses.length === 1 ? "" : "s"}. Add a second location first.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-ink-600/45 mb-2">
+              Current Internal Warehouse
+            </div>
+            <div className="rounded-lg border border-mist-200 bg-mist-50 px-3 py-3">
+              <div className="text-sm font-semibold text-ink-900">
+                {currentBranchCode || currentAddress?.kh_branch_code || "—"} ·{" "}
+                {whName(
+                  warehouses,
+                  currentBranchCode || currentAddress?.kh_branch_code,
+                ) || "Cambodia Branch"}
+              </div>
+              <div className="text-xs text-ink-600/50 mt-1">
+                {currentAddress
+                  ? `${currentAddress.label} · ${addressText(currentAddress)}`
+                  : "Current TK branch"}
+              </div>
+            </div>
+          </div>
+          <div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-ink-600/45 mb-2">
+              Customer Saved Locations
+            </div>
+            <div className="space-y-2">
+              {addresses.map((a) => {
+                const branch =
+                  branches.find((b) => b.code === a.kh_branch_code) || null;
+                const isCurrent =
+                  a.id === currentAddressId ||
+                  (!currentAddressId && a.kh_branch_code === currentBranchCode);
+                return (
+                  <label
+                    key={a.id}
+                    className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition ${selectedId === a.id ? "border-signal-blue bg-signal-blue/5" : "border-mist-200 hover:border-signal-blue/40"}`}
+                  >
+                    <input
+                      type="radio"
+                      name="internal-warehouse-location"
+                      checked={selectedId === a.id}
+                      onChange={() => setSelectedId(a.id)}
+                      className="mt-1"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-semibold text-ink-900">
+                          {a.label || "Customer Location"}
+                        </span>
+                        {a.is_default && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-signal-teal/10 text-signal-teal">
+                            Primary
+                          </span>
+                        )}
+                        {isCurrent && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-mist-100 text-ink-600">
+                            Current
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs font-semibold text-signal-blue mt-1">
+                        {a.kh_branch_code || "No branch"} ·{" "}
+                        {branch?.name || "Unknown Cambodia Branch"}
+                      </div>
+                      <div className="text-xs text-ink-600/50 mt-1">
+                        {addressText(a)}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+          {selectedAddress && (
+            <div className="rounded-lg bg-signal-teal/5 border border-signal-teal/15 px-3 py-2 text-xs text-ink-700">
+              New Internal Warehouse: <b>{selectedAddress.kh_branch_code}</b> ·{" "}
+              {selectedBranch?.name || "Cambodia Branch"}
+            </div>
+          )}
+        </>
+      )}
+    </AppModal>
   );
 }
 
@@ -24665,20 +24429,6 @@ function PackageDetail() {
             </div>
 
             <div className="cn-detail-actions shipment-actions">
-              <Link
-                to={`/process-tracking?tk=${encodeURIComponent(data.tk)}`}
-                className="flex items-center gap-1.5 bg-white border border-mist-200 text-sm font-medium text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
-              >
-                <Icons.Route size={14} />
-                Process Tracking
-              </Link>
-              <Link
-                to={`/scan-center?tk=${encodeURIComponent(data.tk)}`}
-                className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3 py-1.5 rounded-md hover:bg-signal-blue/90"
-              >
-                <Icons.ScanLine size={14} />
-                Scan TK
-              </Link>
               {canPrintLabel && (
                 <button
                   type="button"
@@ -24689,16 +24439,6 @@ function PackageDetail() {
                   Print Label
                 </button>
               )}
-              {canChangeInternalWarehouse && data.customer_id && (
-                <button
-                  type="button"
-                  onClick={() => setShowInternalWarehouse(true)}
-                  className="flex items-center gap-1.5 bg-white border border-mist-200 text-sm font-medium text-ink-700 px-3 py-1.5 rounded-md hover:bg-mist-50"
-                >
-                  <Icons.MapPin size={14} />
-                  Internal Warehouse
-                </button>
-              )}
               <button
                 type="button"
                 onClick={() => setShowTrackingHistory(true)}
@@ -24707,6 +24447,7 @@ function PackageDetail() {
                 <Icons.History size={14} />
                 Tracking History
               </button>
+              <RequestShipPayControl pkg={data} stage={currentStage} />
               <div className="relative" ref={actionMenuRef}>
                 <button
                   type="button"
@@ -24717,18 +24458,31 @@ function PackageDetail() {
                   <ChevronDown size={14} className="text-ink-600/50" />
                 </button>
                 {actionMenuOpen && (
-                  <div className="absolute right-0 mt-2 w-64 bg-white border border-mist-200 rounded-md shadow-lg py-1.5 z-50">
+                  <div className="absolute right-0 mt-2 w-64 overflow-hidden bg-white border border-slate-200 rounded-xl shadow-xl py-1 z-50">
                     <button
                       type="button"
                       onClick={() => {
                         setActionMenuOpen(false);
                         setShowTransfer(true);
                       }}
-                      className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
+                      className="w-full flex items-center gap-3 whitespace-nowrap px-4 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 text-left"
                     >
-                      <Icons.ArrowLeftRight size={15} />
+                      <Icons.ArrowLeftRight size={18} />
                       Customer ID Transfer
                     </button>
+                    {canChangeInternalWarehouse && data.customer_id && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActionMenuOpen(false);
+                          setShowInternalWarehouse(true);
+                        }}
+                        className="w-full flex items-center gap-3 whitespace-nowrap px-4 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 text-left"
+                      >
+                        <Icons.MapPin size={18} />
+                        Change Internal Warehouse
+                      </button>
+                    )}
                     {canChangeTk && (
                       <button
                         type="button"
@@ -24736,9 +24490,9 @@ function PackageDetail() {
                           setActionMenuOpen(false);
                           setShowChangeTk(true);
                         }}
-                        className="w-full flex items-center gap-2.5 whitespace-nowrap px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
+                        className="w-full flex items-center gap-3 whitespace-nowrap px-4 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 text-left"
                       >
-                        <Icons.ScanLine size={15} />
+                        <Icons.ScanLine size={18} />
                         Change Tracking Number
                       </button>
                     )}
@@ -24750,9 +24504,9 @@ function PackageDetail() {
                             setActionMenuOpen(false);
                             setShowEdit(true);
                           }}
-                          className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-ink-700 hover:bg-mist-50 text-left"
+                          className="w-full flex items-center gap-3 whitespace-nowrap px-4 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 text-left"
                         >
-                          <Icons.Pencil size={15} />
+                          <Icons.Pencil size={18} />
                           Edit Package
                         </button>
                         <button
@@ -24761,13 +24515,18 @@ function PackageDetail() {
                             setActionMenuOpen(false);
                             setShowDelete(true);
                           }}
-                          className="w-full flex items-center gap-2.5 px-3.5 py-2 text-sm text-signal-red hover:bg-signal-red/5 text-left border-t border-mist-100"
+                          className="w-full flex items-center gap-3 whitespace-nowrap px-4 py-3 text-sm font-semibold text-red-600 hover:bg-red-50 text-left border-t border-slate-100"
                         >
-                          <Icons.Trash2 size={15} />
+                          <Icons.Trash2 size={18} />
                           Delete Package
                         </button>
                       </>
                     )}
+                    <ShipPayCancelMenuItem
+                      pkg={data}
+                      stage={currentStage}
+                      onPicked={() => setActionMenuOpen(false)}
+                    />
                   </div>
                 )}
               </div>
@@ -31464,15 +31223,10 @@ const CustomerApp = (() => {
   const statusOf = (n) =>
     n < 0
       ? ["Processing", "bg-slate-100 text-slate-500"]
-      : n === 0
-        ? ["Inbound Origin", "bg-blue-50 text-blue-700"]
-        : n === 1
-          ? ["Outbound Origin", "bg-blue-50 text-blue-700"]
-          : n === 2
-            ? ["Arrive Destination", "bg-green-50 text-green-700"]
-            : n === 3
-              ? ["Delivery", "bg-orange-50 text-orange-600"]
-              : ["Completed", "bg-slate-100 text-slate-600"];
+      : [
+          STEPS[Math.min(n, 4)][0],
+          CUSTOMER_STAGE_TONE[STEPS[Math.min(n, 4)][0]],
+        ];
   const fmtDate = (iso) =>
     iso
       ? new Date(iso).toLocaleDateString(dateLoc(), {
@@ -31783,6 +31537,24 @@ const CustomerApp = (() => {
       const shopOf = Object.fromEntries(
         (ords || []).map((o) => [o.order_no, o.platform]),
       );
+      // "Request Shipping Payment" flag (needs cn-ship-pay-request.sql;
+      // ignored while the column does not exist yet).
+      let reqOf = {};
+      try {
+        const { data: rq, error: rqErr } = await supabase
+          .from("packages")
+          .select("tk,ship_pay_requested_at")
+          .in(
+            "tk",
+            (pkgs || []).map((p) => p.tk),
+          );
+        if (!rqErr)
+          reqOf = Object.fromEntries(
+            (rq || []).map((r) => [r.tk, r.ship_pay_requested_at]),
+          );
+      } catch (_e) {
+        /* optional */
+      }
       setShips(
         // TKs that belong to a CN Purchase Order (Assisted Purchase / Customer
         // Direct) are tracked under "CN Orders" only, so the same status is
@@ -31800,20 +31572,24 @@ const CustomerApp = (() => {
             desc: p.product_name || "—",
             step: stepOf(p.status),
             createdAt: p.created_at,
-            // Still "Shipping To Branch" (not yet at the receiving branch
-            // warehouse) → show plain "Delivery" and don't ask for payment.
-            // The fee is requested only once the goods reach the warehouse.
-            fee:
-              String(p.status || "")
-                .trim()
-                .toLowerCase() === "shipping to branch"
-                ? { state: "none", total: null, paid: 0, due: 0 }
-                : feeOf[p.tk] || {
-                    state: "none",
-                    total: null,
-                    paid: 0,
-                    due: 0,
-                  },
+            // The fee is SHOWN from Inbound on. It is only PAYABLE once staff
+            // pressed "Request Shipping Payment", or the TK reached Arrived
+            // Destination (same as a CN Order). Cancelling the request makes
+            // it unpayable again.
+            fee: (() => {
+              const base = feeOf[p.tk] || {
+                state: "none",
+                total: null,
+                paid: 0,
+                due: 0,
+              };
+              // Same rule as the TKs inside a CN Order (cnShipFeeCustomerRows):
+              // payable once staff requested it, or from Arrived Destination on.
+              const atArrival =
+                stepOf(p.status) >= 2 ||
+                CN_SHIP_FEE_STAGES.includes(String(p.status || "").trim());
+              return { ...base, payable: !!reqOf[p.tk] || atArrival };
+            })(),
           })),
       );
       setShipsReady(true);
@@ -32555,19 +32331,46 @@ const CustomerApp = (() => {
       </span>
     );
   };
-  const Badge = ({ n, fee }) => {
-    // Only in-progress delivery shipments can be waiting for shipping payment.
-    // A completed TK must always display Completed, never Ready for Pickup/To Pay.
-    const owes = n === 3 && fee?.state === "due" && fee.total > 0;
-    const [l, c] = owes
-      ? ["Pending Shipping Payment", "bg-red-50 text-red-600"]
-      : statusOf(n);
+  const Badge = ({ n }) => {
+    // Always the physical stage (Inbound Origin … Delivery … Completed), the
+    // same process labels as a CN Order. Payment is never a status: the
+    // customer pays from the Shipping Fee block in the detail page.
+    const [l, c] = statusOf(n);
     const { lang } = useApp();
     return (
       <span
         className={`text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap shrink-0 ${c}`}
       >
         {pickTx(lang, STATUS_TX[l] || [l, l])}
+      </span>
+    );
+  };
+  // CN Order status chip — same name, colour and size as the Shipment <Badge>.
+  // Statuses outside the five shared stages (Purchased, Intransit, Refund...)
+  // and cancelled orders keep the regular CN badge.
+  const CnCustomerBadge = ({ status, partial = false, cancelled = false }) => {
+    const { lang } = useApp();
+    const tone = CUSTOMER_STAGE_TONE[status];
+    if (!tone || cancelled)
+      return (
+        <CnStatusBadge
+          status={status}
+          partial={partial}
+          cancelled={cancelled}
+        />
+      );
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        <span
+          className={`text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap shrink-0 ${tone}`}
+        >
+          {pickTx(lang, STATUS_TX[status] || [status, status])}
+        </span>
+        {partial && (
+          <span className="rounded-full bg-amber-50 text-amber-700 px-2 py-0.5 text-[10px] font-bold">
+            Partial
+          </span>
+        )}
       </span>
     );
   };
@@ -33464,7 +33267,7 @@ const CustomerApp = (() => {
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
             <b className="text-[15px] truncate">{s.order_id}</b>
-            <CnStatusBadge
+            <CnCustomerBadge
               status={cnCustomerDisplayStatus(s)}
               cancelled={cnIsCancelledUnpaid(s)}
             />
@@ -33541,7 +33344,7 @@ const CustomerApp = (() => {
         <div className="flex-1 min-w-0">
           <div className="flex items-center justify-between gap-2">
             <b className="text-[15px] truncate">{s.tk}</b>
-            <Badge n={s.step} fee={s.fee} />
+            <Badge n={s.step} />
           </div>
           {s.orderNo && (
             <p className="text-xs font-semibold text-blue-600 truncate">
@@ -33622,10 +33425,6 @@ const CustomerApp = (() => {
     // numbers always match the lists / feed below (AIR is retired: China only).
     const seaList = feat("tab_shipments") ? ships : [];
     const cnList = feat("tab_cn_orders") ? cnOrders : [];
-    const owed = seaList.filter(
-      (s) => s.step === 4 && s.fee?.state === "due" && s.fee.total > 0,
-    );
-    const owedTotal = owed.reduce((a, s) => a + s.fee.due, 0);
     const cnt = (f) => seaList.filter((s) => f(s.step)).length;
     // AIR shipments use their own status flow → map onto the same dashboard cards.
     const airCnt = (f) =>
@@ -33887,32 +33686,6 @@ const CustomerApp = (() => {
                   )}
                 </Card>
               )}
-              {feat("home_pay_alert") &&
-                feat("tab_shipments") &&
-                feat("pay_shipping") &&
-                owed.length > 0 && (
-                  <Card
-                    onClick={() => nav(P("/shipments"))}
-                    className="p-4 flex items-center gap-3 cursor-pointer border border-red-100 bg-red-50/60"
-                  >
-                    <Icon i={Info} c="bg-red-100 text-red-600" />
-                    <div className="flex-1">
-                      <b className="text-[15px] text-red-700">
-                        {tr(
-                          `${owed.length} shipment${owed.length > 1 ? "s" : ""} waiting for payment`,
-                          `${owed.length} ការដឹកជញ្ជូនកំពុងរង់ចាំការបង់ប្រាក់`,
-                        )}
-                      </b>
-                      <p className="text-xs text-slate-600">
-                        {tr(
-                          `Total due ${money(owedTotal)} · tap to pay`,
-                          `សរុបត្រូវបង់ ${money(owedTotal)} · ចុចដើម្បីបង់`,
-                        )}
-                      </p>
-                    </div>
-                    <ChevronRight size={18} className="text-slate-300" />
-                  </Card>
-                )}
               {feat("warehouse") && (
                 <Card
                   onClick={() => nav(P("/warehouse"))}
@@ -33977,7 +33750,11 @@ const CustomerApp = (() => {
       "Outbound Origin": (n) => n === 1,
       "Arrive Destination": (n) => n === 2,
       Delivery: (n) => n === 3,
-      "To Pay": (n, s) => n === 3 && s.fee?.state === "due" && s.fee.total > 0,
+      "To Pay": (n, s) =>
+        n < 4 &&
+        s.fee?.state === "due" &&
+        s.fee.total > 0 &&
+        (n === 3 || !!s.fee.payable),
       Completed: (n) => n === 4,
     };
     const list = ships.filter((s) => tabs[t](s.step, s));
@@ -34412,6 +34189,9 @@ const CustomerApp = (() => {
           </p>
         </>
       );
+    // Same check as the CN Order shipping-fee block.
+    const canPayShip =
+      Number(wallet?.balance || 0) + 0.005 >= Number(s.fee?.due || 0);
     return (
       <>
         <Top
@@ -34432,7 +34212,7 @@ const CustomerApp = (() => {
                 {tr("Shop", "ហាង")}: {s.shop} · {s.desc}
               </p>
             </div>
-            <Badge n={s.step} fee={s.fee} />
+            <Badge n={s.step} />
           </Card>
           <ShipmentPhotosCard tk={s.tk} tr={tr} Card={Card} />
           {s.shipMethod && (
@@ -34495,22 +34275,122 @@ const CustomerApp = (() => {
             </div>
             <div className="mt-3 pt-3 border-t border-slate-100 text-sm">
               {s.fee?.total > 0 ? (
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-slate-700 font-semibold">
-                    {tr("Shipping Fee (Cambodia)", "ថ្លៃដឹកជញ្ជូន (កម្ពុជា)")}
-                  </span>
-                  <span className="flex items-center gap-2">
-                    <b>{money(s.fee.total)}</b>
-                    <CnPaymentBadge
-                      status={s.fee.state === "paid" ? "Paid" : "Unpaid"}
-                    />
-                  </span>
-                </div>
+                <>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-slate-700 font-semibold">
+                      {tr("Shipping Fee (Cambodia)", "ថ្លៃដឹកជញ្ជូន (កម្ពុជា)")}
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <b>{money(s.fee.total)}</b>
+                      <CnPaymentBadge
+                        status={s.fee.state === "paid" ? "Paid" : "Unpaid"}
+                      />
+                    </span>
+                  </div>
+                  {feat("pay_shipping") && s.fee.state === "due" && (
+                    <>
+                      {!s.fee.payable ? (
+                        <p className="mt-2 rounded-xl bg-slate-50 text-slate-500 text-xs px-3 py-2.5">
+                          {tr(
+                            "Payment is not open yet. We will request the shipping payment soon — you can pay it here once requested.",
+                            "ការបង់ប្រាក់មិនទាន់បើកទេ។ យើងនឹងស្នើសុំការបង់ថ្លៃដឹកក្នុងពេលឆាប់ៗ — អ្នកអាចបង់នៅទីនេះបន្ទាប់ពីមានការស្នើសុំ។",
+                          )}
+                        </p>
+                      ) : (
+                        <div className="mt-2">
+                          <div className="flex justify-between gap-3 text-xs text-slate-500">
+                            <span>{tr("Amount due", "ទឹកប្រាក់ត្រូវបង់")}</span>
+                            <b className="text-red-600">{money(s.fee.due)}</b>
+                          </div>
+                          <div className="flex justify-between gap-3 text-xs text-slate-500 mt-1">
+                            <span>{tr("My wallet", "កាបូបរបស់ខ្ញុំ")}</span>
+                            <b
+                              className={
+                                !canPayShip ? "text-red-600" : "text-slate-900"
+                              }
+                            >
+                              {moneyS(wallet.balance)}
+                            </b>
+                          </div>
+                          {!canPayShip && (
+                            <p className="mt-2 rounded-xl bg-amber-50 text-amber-700 text-xs px-3 py-2.5">
+                              {tr(
+                                `Your wallet balance is not enough. You need ${money(s.fee.due - Number(wallet?.balance || 0))} more — please top up your wallet with our staff, then come back to pay.`,
+                                `សមតុល្យកាបូបរបស់អ្នកមិនគ្រប់គ្រាន់ទេ។ អ្នកត្រូវការបន្ថែម ${money(s.fee.due - Number(wallet?.balance || 0))} — សូមបញ្ចូលទឹកប្រាក់ក្នុងកាបូបជាមួយបុគ្គលិក រួចត្រឡប់មកបង់ម្តងទៀត។`,
+                              )}
+                            </p>
+                          )}
+                          {confirmPay ? (
+                            <div className="mt-3 space-y-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+                              <p className="text-sm text-slate-600">
+                                {tr(
+                                  `${money(s.fee.due)} will be deducted from your wallet.`,
+                                  `${money(s.fee.due)} នឹងត្រូវកាត់ចេញពីកាបូបរបស់អ្នក។`,
+                                )}
+                              </p>
+                              <div className="grid grid-cols-2 gap-2">
+                                <Btn
+                                  ghost
+                                  disabled={paying}
+                                  onClick={() => setConfirmPay(false)}
+                                >
+                                  {tr("Cancel", "បោះបង់")}
+                                </Btn>
+                                <Btn
+                                  disabled={paying || !canPayShip}
+                                  loading={paying}
+                                  onClick={async () => {
+                                    if (!s.fee?.payable) return; // not open yet
+                                    setPaying(true);
+                                    setPayErr("");
+                                    const err = await payShipping(s.tk);
+                                    setPaying(false);
+                                    if (err) return setPayErr(err);
+                                    setConfirmPay(false);
+                                    say(
+                                      tr(
+                                        "Payment successful",
+                                        "ការបង់ប្រាក់ជោគជ័យ",
+                                      ),
+                                    );
+                                  }}
+                                >
+                                  {paying
+                                    ? tr("Paying…", "កំពុងបង់…")
+                                    : tr("Confirm", "បញ្ជាក់")}
+                                </Btn>
+                              </div>
+                            </div>
+                          ) : (
+                            <Btn
+                              className="mt-3"
+                              disabled={!canPayShip}
+                              onClick={() => {
+                                setPayErr("");
+                                setConfirmPay(true);
+                              }}
+                            >
+                              {tr(
+                                `Pay ${money(s.fee.due)} from Wallet`,
+                                `បង់ ${money(s.fee.due)} ពីកាបូប`,
+                              )}
+                            </Btn>
+                          )}
+                          {payErr && (
+                            <p className="mt-2 text-xs font-semibold text-red-600">
+                              {payErr}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
               ) : (
                 <p className="text-xs text-slate-500">
                   {tr(
-                    "Shipping fee is shown once your goods arrive at the branch warehouse.",
-                    "ថ្លៃដឹកជញ្ជូននឹងបង្ហាញ នៅពេលទំនិញដល់ឃ្លាំងសាខា។",
+                    "Shipping fee will be shown here once it is set.",
+                    "ថ្លៃដឹកជញ្ជូននឹងបង្ហាញនៅទីនេះ នៅពេលវាត្រូវបានកំណត់។",
                   )}
                 </p>
               )}
@@ -34579,97 +34459,6 @@ const CustomerApp = (() => {
               );
             })}
           </Card>
-          {feat("pay_shipping") && s.step >= 3 && s.fee?.total > 0 && (
-            <Card className="p-5">
-              <h2 className="font-bold mb-3 flex items-center gap-2">
-                <Icons.Wallet size={18} className="text-blue-600" />{" "}
-                {tr("Shipping Payment", "ការបង់ថ្លៃដឹក")}
-              </h2>
-              <div className="flex justify-between text-sm py-1">
-                <span className="text-slate-500">
-                  {tr("Shipping fee", "ថ្លៃដឹក")}
-                </span>
-                <b>{money(s.fee.total)}</b>
-              </div>
-              {s.fee.state === "paid" ? (
-                <p className="mt-2 rounded-xl bg-green-50 text-green-700 text-sm font-semibold px-3 py-2.5 flex items-center gap-2">
-                  <Check size={16} />{" "}
-                  {tr("Paid — ready for pickup", "បានបង់ប្រាក់ — ត្រៀមយក")}
-                </p>
-              ) : (
-                <>
-                  <div className="flex justify-between text-sm py-1">
-                    <span className="text-slate-500">
-                      {tr("Amount due", "ទឹកប្រាក់ត្រូវបង់")}
-                    </span>
-                    <b className="text-red-600">{money(s.fee.due)}</b>
-                  </div>
-                  <div className="flex justify-between text-sm py-1">
-                    <span className="text-slate-500">
-                      {tr("My wallet", "កាបូបរបស់ខ្ញុំ")}
-                    </span>
-                    <b className={wallet.balance < 0 ? "text-red-600" : ""}>
-                      {moneyS(wallet.balance)}
-                    </b>
-                  </div>
-                  {wallet.balance < s.fee.due ? (
-                    <p className="mt-3 rounded-xl bg-amber-50 text-amber-700 text-xs px-3 py-2.5">
-                      {tr(
-                        `Your wallet balance is not enough. You need ${money(s.fee.due - wallet.balance)} more — please top up your wallet with our staff, then come back to pay.`,
-                        `សមតុល្យកាបូបរបស់អ្នកមិនគ្រប់គ្រាន់ទេ។ អ្នកត្រូវការបន្ថែម ${money(s.fee.due - wallet.balance)} — សូមបញ្ចូលទឹកប្រាក់ក្នុងកាបូបជាមួយបុគ្គលិករបស់យើង រួចត្រឡប់មកបង់ម្តងទៀត។`,
-                      )}
-                    </p>
-                  ) : confirmPay ? (
-                    <div className="mt-3 space-y-2">
-                      <p className="text-sm text-slate-600">
-                        {tr(
-                          `${money(s.fee.due)} will be deducted from your wallet.`,
-                          `${money(s.fee.due)} នឹងត្រូវកាត់ចេញពីកាបូបរបស់អ្នក។`,
-                        )}
-                      </p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <Btn
-                          ghost
-                          disabled={paying}
-                          onClick={() => setConfirmPay(false)}
-                        >
-                          {tr("Cancel", "បោះបង់")}
-                        </Btn>
-                        <Btn
-                          disabled={paying}
-                          onClick={async () => {
-                            setPaying(true);
-                            setPayErr("");
-                            const err = await payShipping(s.tk);
-                            setPaying(false);
-                            if (err) return setPayErr(err);
-                            setConfirmPay(false);
-                            say(tr("Payment successful", "ការបង់ប្រាក់ជោគជ័យ"));
-                          }}
-                        >
-                          {paying
-                            ? tr("Paying…", "កំពុងបង់…")
-                            : tr("Confirm", "បញ្ជាក់")}
-                        </Btn>
-                      </div>
-                    </div>
-                  ) : (
-                    <Btn className="mt-3" onClick={() => setConfirmPay(true)}>
-                      {tr(
-                        `Pay ${money(s.fee.due)} from Wallet`,
-                        `បង់ ${money(s.fee.due)} ពីកាបូប`,
-                      )}
-                    </Btn>
-                  )}
-                  {payErr && (
-                    <p className="mt-2 text-xs font-semibold text-red-600">
-                      {payErr}
-                    </p>
-                  )}
-                </>
-              )}
-            </Card>
-          )}
           <p className="flex gap-2 text-xs text-slate-500 bg-blue-50 rounded-xl p-3">
             <Info size={16} className="shrink-0 text-blue-500" />
             {tr(
@@ -36915,7 +36704,7 @@ const CustomerApp = (() => {
                     />
                   </div>
                   <div className="flex items-center justify-between gap-2 mt-3">
-                    <CnStatusBadge
+                    <CnCustomerBadge
                       status={cnCustomerDisplayStatus(r)}
                       cancelled={cnIsCancelledUnpaid(r)}
                     />
@@ -37025,10 +36814,26 @@ const CustomerApp = (() => {
         // from the packages table directly).
         const { data: feeRows } = await supabase.rpc("customer_shipping_fees");
         const feeByTk = new Map((feeRows || []).map((r) => [r.tk, r]));
+        // "Request Shipping Payment" flag (needs cn-ship-pay-request.sql;
+        // silently ignored while the column does not exist yet).
+        let reqByTk = new Map();
+        try {
+          const { data: rq, error: rqErr } = await supabase
+            .from("packages")
+            .select("tk,ship_pay_requested_at")
+            .eq("cn_order_id", data.id);
+          if (!rqErr)
+            reqByTk = new Map(
+              (rq || []).map((x) => [x.tk, x.ship_pay_requested_at]),
+            );
+        } catch (_e) {
+          /* optional */
+        }
         setShipFees(
-          cnShippingFeeRows(
+          cnShipFeeCustomerRows(
             (pk || []).map((x) => ({
               tk: x.tk,
+              ship_pay_requested_at: reqByTk.get(x.tk) || null,
               tk_status: x.status,
               freight_fee: feeByTk.get(x.tk)?.freight_fee,
               paid_amount: feeByTk.get(x.tk)?.paid_amount,
@@ -37121,7 +36926,7 @@ const CustomerApp = (() => {
     }
 
     async function confirmShippingPayment(r) {
-      if (shipPayBusy) return;
+      if (shipPayBusy || !r.payable) return; // staff has not requested payment
       setShipPayBusy(true);
       setShipPayError("");
       const error = await payShipping(r.tk);
@@ -37268,7 +37073,7 @@ const CustomerApp = (() => {
                       {x.tracking}
                     </b>
                     {/* TK stage names are staff-only; show the customer name. */}
-                    <CnStatusBadge
+                    <CnCustomerBadge
                       status={cnOrderTableStatus({
                         status:
                           TK_TO_CN_STATUS[String(x.status || "").trim()] ||
@@ -37345,7 +37150,15 @@ const CustomerApp = (() => {
                               />
                             </span>
                           </div>
-                          {r.fee.state === "due" && (
+                          {r.fee.state === "due" && !r.payable && (
+                            <p className="mt-2 rounded-xl bg-slate-50 text-slate-500 text-xs px-3 py-2.5">
+                              {tr(
+                                "Payment is not open yet. We will request the shipping payment soon — you can pay it here once requested.",
+                                "ការបង់ប្រាក់មិនទាន់បើកទេ។ យើងនឹងស្នើសុំការបង់ថ្លៃដឹកក្នុងពេលឆាប់ៗ — អ្នកអាចបង់នៅទីនេះបន្ទាប់ពីមានការស្នើសុំ។",
+                              )}
+                            </p>
+                          )}
+                          {r.fee.state === "due" && r.payable && (
                             <div className="mt-2">
                               <div className="flex justify-between gap-3 text-xs text-slate-500">
                                 <span>
@@ -37467,7 +37280,7 @@ const CustomerApp = (() => {
               </h2>
               <div className="mb-4">
                 {/* Same customer-facing name as the timeline below. */}
-                <CnStatusBadge
+                <CnCustomerBadge
                   status={
                     cnOrderTableStatus(row) === "Approve Purchase"
                       ? "Order Processing"
@@ -46161,6 +45974,17 @@ function AirShipmentDetailPage() {
 // Same style as airStatusTone / airNextStatus / airStatusCanAdvance.
 // ============================================================
 
+// Customer portal: ONE status style (name + colour) shared by CN Orders and
+// Shipments, so the same stage never looks different in the Home feed / lists.
+// Display only — Staff/Admin screens keep their own names and colours.
+const CUSTOMER_STAGE_TONE = {
+  "Inbound Origin": "bg-blue-50 text-blue-700",
+  "Outbound Origin": "bg-blue-50 text-blue-700",
+  "Arrive Destination": "bg-green-50 text-green-700",
+  Delivery: "bg-orange-50 text-orange-600",
+  Completed: "bg-slate-100 text-slate-600",
+};
+
 // Customer-facing CN Purchase Order table statuses. Kept separate from the
 // underlying cn_orders.status workflow and declared at module scope because
 // both the customer portal and staff/admin CN Orders page use this list.
@@ -46232,6 +46056,22 @@ const CN_LEGACY_STATUS = {
 };
 // ONE normalizer used everywhere a CN status is read or displayed.
 const cnNormalizeStatus = (s) => CN_LEGACY_STATUS[s] || s;
+// Display-only stage name used by Staff, TK and customer screens alike:
+// Inbound Origin / Outbound Origin / Arrive Destination / ... / Completed.
+// "Shipping to Branch" and "Inbound Warehouse" keep their own operational
+// names (both share the Delivery colour). Database values are never changed.
+const CN_STAGE_LABEL = {
+  Inbound: "Inbound Origin",
+  Outbound: "Outbound Origin",
+  Arrived: "Arrive Destination",
+  "Arrived Destination": "Arrive Destination",
+  "Complete Order": "Completed",
+  Complete: "Completed",
+};
+const cnStageLabel = (s) => {
+  const n = cnNormalizeStatus(s);
+  return CN_STAGE_LABEL[n] || n;
+};
 
 // Order types: they only differ in how the order is created. After
 // "Shipping to China WH" both follow the exact same TK-driven flow.
@@ -46273,7 +46113,7 @@ const TK_TO_CN_STATUS = {
 // (Inbound Origin -> Inbound, Completed -> Complete Order, ...). Used on the
 // Package/TK detail page so a TK and its CN order read the same. Never
 // written to the database; unknown / payment-derived labels pass through.
-const tkUnifiedLabel = (label) => TK_TO_CN_STATUS[label] || label;
+const tkUnifiedLabel = (label) => cnStageLabel(TK_TO_CN_STATUS[label] || label);
 
 const CN_PLATFORMS = [
   "Taobao",
@@ -46332,23 +46172,23 @@ function cnStatusTone(status) {
     case "Intransit":
     case "Shipping to China WH":
       return "bg-blue-100 text-blue-700";
+    // Staff, TK and customer screens share ONE style (see CUSTOMER_STAGE_TONE).
     case "Inbound Origin":
     case "Inbound":
-      return "bg-violet-100 text-violet-700";
+      return CUSTOMER_STAGE_TONE["Inbound Origin"];
     case "Outbound Origin":
     case "Outbound":
-      return "bg-orange-100 text-orange-700";
+      return CUSTOMER_STAGE_TONE["Outbound Origin"];
     case "Arrive Destination":
     case "Arrived":
-      return "bg-cyan-100 text-cyan-800";
+      return CUSTOMER_STAGE_TONE["Arrive Destination"];
     case "Delivery":
     case "Shipping to Branch":
-      return "bg-lime-100 text-lime-800";
     case "Inbound Warehouse":
-      return "bg-teal-100 text-teal-800";
+      return CUSTOMER_STAGE_TONE.Delivery;
     case "Completed":
     case "Complete Order":
-      return "bg-emerald-100 text-emerald-700";
+      return CUSTOMER_STAGE_TONE.Completed;
     case CN_ORDER_TERMINAL:
       return "bg-red-600 text-white";
     default:
@@ -46417,6 +46257,11 @@ function cnAdvanceBlocker(row, parcels = []) {
     cnNormalizeStatus(row.status) !== "Inbound Warehouse"
   )
     return "The order can only be completed after it reaches Inbound Warehouse.";
+  if (next === "Complete Order") {
+    const shipDue = cnShipFeeSummary(parcels).due;
+    if (shipDue > 0.005)
+      return `Shipping fee (China → Cambodia) of ${money(shipDue)} is not paid yet. The customer must pay it before this order can be completed.`;
+  }
   if (next === "Purchased") {
     if (row.payment_status !== "Paid")
       return "Payment must be fully received before purchasing.";
@@ -46489,7 +46334,7 @@ function CnStatusBadge({ status, partial = false, cancelled = false }) {
       <span
         className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-bold whitespace-nowrap ${cancelled ? "bg-slate-600 text-white" : cnStatusTone(status)}`}
       >
-        {cancelled ? "Cancelled" : cnNormalizeStatus(status)}
+        {cancelled ? "Cancelled" : cnStageLabel(status)}
       </span>
       {partial && (
         <span className="rounded-full bg-amber-50 text-amber-700 px-2 py-0.5 text-[10px] font-bold">
@@ -50177,7 +50022,7 @@ function CnStatusTimeline({
                     : `text-sm font-semibold ${done || active ? "text-slate-900" : "text-slate-400"}`
                 }
               >
-                {s}
+                {cnStageLabel(s)}
               </p>
               {t ? (
                 <p className="text-xs text-slate-500 mt-0.5">
@@ -50504,287 +50349,240 @@ function CnActualCostModal({ row, onClose, onSaved }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 z-[70] bg-slate-950/45 backdrop-blur-sm flex items-center justify-center p-4"
-      onClick={onClose}
+    <AppModal
+      title="Actual Purchase Cost (Optional)"
+      subtitle={`${row.order_id} · New CN Purchase Order remains the source for customer prices.`}
+      maxW="max-w-2xl"
+      onClose={onClose}
+      onSubmit={submit}
+      busy={busy}
+      error={error}
+      submitLabel="Save Actual Cost"
+      busyLabel="Saving…"
     >
-      <form
-        onSubmit={submit}
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-2xl bg-white shadow-2xl"
-      >
-        <div className="sticky top-0 z-10 px-5 py-4 bg-white border-b border-slate-200 flex items-center justify-between gap-3">
+      <div className="rounded-xl border border-blue-100 bg-blue-50/70 p-4 space-y-2">
+        <div className="flex items-start gap-2">
+          <Icons.Info size={17} className="text-blue-700 mt-0.5 shrink-0" />
           <div>
-            <h2 className="font-bold text-lg text-slate-900">
-              Actual Purchase Cost (Optional)
-            </h2>
-            <p className="text-xs text-slate-500 mt-1">
-              {row.order_id} · New CN Purchase Order remains the source for
-              customer prices.
+            <p className="text-sm font-bold text-blue-900">
+              You do not need to enter the CN Order prices again.
+            </p>
+            <p className="text-xs leading-5 text-blue-800 mt-1">
+              Use this form only when you want to record the real supplier cost
+              after purchase. The values below are optional and will not change
+              customer pricing, invoice, amount due or payment history. If you
+              do not track actual cost, close this window without saving.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-lg hover:bg-slate-100"
-            aria-label="Close"
-          >
-            <Icons.X size={18} />
-          </button>
         </div>
-        <div className="p-5 space-y-4">
-          <div className="rounded-xl border border-blue-100 bg-blue-50/70 p-4 space-y-2">
-            <div className="flex items-start gap-2">
-              <Icons.Info size={17} className="text-blue-700 mt-0.5 shrink-0" />
-              <div>
-                <p className="text-sm font-bold text-blue-900">
-                  You do not need to enter the CN Order prices again.
-                </p>
-                <p className="text-xs leading-5 text-blue-800 mt-1">
-                  Use this form only when you want to record the real supplier
-                  cost after purchase. The values below are optional and will
-                  not change customer pricing, invoice, amount due or payment
-                  history. If you do not track actual cost, close this window
-                  without saving.
-                </p>
-              </div>
-            </div>
-          </div>
+      </div>
 
-          <div className="rounded-xl border border-slate-200 overflow-hidden">
-            <div className="px-4 py-3 bg-slate-50 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-bold text-slate-800">
-                  Existing CN Order Prices
-                </p>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Read-only ·{" "}
-                  {pricingMode === "usd" ? "USD Direct" : "CNY Exchange to USD"}
-                </p>
-              </div>
-              <div className="text-right">
-                <p className="text-xs text-slate-500">Customer goods amount</p>
-                <b className="text-base text-slate-900">
-                  {orderGoodsUsd == null ? "—" : money(orderGoodsUsd)}
-                </b>
-              </div>
-            </div>
-            <div className="divide-y divide-slate-100">
-              {orderItems.map((item, index) => {
-                const q = Number(item.quantity) || 0;
-                const unit =
-                  pricingMode === "usd"
-                    ? Number(item.unit_price_usd) || 0
-                    : Number(item.unit_price_cny) || 0;
-                const currency =
-                  pricingMode === "usd" ? money(q * unit) : cnCny(q * unit);
-                return (
-                  <div
-                    key={`existing-order-price-${index}`}
-                    className="px-4 py-2.5 flex items-center justify-between gap-3 text-sm"
-                  >
-                    <div className="min-w-0">
-                      <p className="font-semibold text-slate-800 truncate">
-                        {item.product_name ||
-                          item.product_url ||
-                          `Item ${index + 1}`}
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        Qty {q} ×{" "}
-                        {pricingMode === "usd" ? money(unit) : cnCny(unit)}
-                        {item.variant ? ` · ${item.variant}` : ""}
-                      </p>
-                    </div>
-                    <b className="shrink-0 text-slate-700">{currency}</b>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="px-4 py-2.5 border-t border-slate-200 flex justify-between gap-3 text-sm">
-              <span className="text-slate-600">
-                Customer total (including fees/eligible shipping)
-              </span>
-              <b>{money(row.total_due_usd || 0)}</b>
-            </div>
-          </div>
-
-          <label className="block text-sm font-semibold text-slate-700">
-            Actual Cost (USD, internal, optional)
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={usdCost}
-              onChange={(e) => setUsdCost(e.target.value)}
-              className={`${INPUT_CLS} mt-1`}
-              placeholder="Total real cost in USD (goods + China shipping)"
-            />
-            <span className="block mt-1 text-xs font-normal text-slate-500">
-              Staff only. Customers never see this. Leave blank if the cost is
-              not known yet; the dashboard will show it as pending, not zero.
-              The Dashboard uses this value for Purchase Profit.
-            </span>
-          </label>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label className="text-sm font-semibold text-slate-700">
-              Purchase Exchange Rate (CNY per USD, only for the CNY fields)
-              <input
-                type="number"
-                min="0.0001"
-                step="0.0001"
-                value={rate}
-                onChange={(e) => setRate(e.target.value)}
-                className={`${INPUT_CLS} mt-1`}
-              />
-              <span className="block mt-1 text-xs font-normal text-slate-500">
-                Defaults to the CN Order rate. Change only if the supplier
-                payment used a different rate.
-              </span>
-            </label>
-            <label className="text-sm font-semibold text-slate-700">
-              Supplier Order No. (optional)
-              <input
-                value={supplierNo}
-                onChange={(e) => setSupplierNo(e.target.value)}
-                className={`${INPUT_CLS} mt-1`}
-                placeholder="Supplier reference"
-              />
-            </label>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <label className="text-sm font-semibold text-slate-700">
-              Actual Goods Cost Total (CNY, optional)
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={totalGoodsCny}
-                onChange={(e) => setTotalGoodsCny(e.target.value)}
-                className={`${INPUT_CLS} mt-1`}
-                placeholder="Enter only if actual cost is known"
-              />
-              <span className="block mt-1 text-xs font-normal text-slate-500">
-                Enter the supplier receipt total, not the customer selling
-                price.
-              </span>
-            </label>
-            <label className="text-sm font-semibold text-slate-700">
-              Actual China Shipping (CNY, optional)
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={shippingCny}
-                onChange={(e) => setShippingCny(e.target.value)}
-                className={`${INPUT_CLS} mt-1`}
-                placeholder="Leave blank if unknown"
-              />
-              <span className="block mt-1 text-xs font-normal text-slate-500">
-                Enter 0 only if shipping is confirmed free.
-              </span>
-            </label>
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2">
-            <div className="flex justify-between gap-3 text-sm">
-              <span className="text-slate-600">
-                Recorded actual goods cost (USD)
-              </span>
-              <b>{goodsUsd == null ? "Not recorded" : money(goodsUsd)}</b>
-            </div>
-            <div className="flex justify-between gap-3 text-sm">
-              <span className="text-slate-600">
-                Recorded actual China shipping (USD)
-              </span>
-              <b>{shipUsd == null ? "Not recorded" : money(shipUsd)}</b>
-            </div>
-            <div className="border-t border-slate-200 pt-2 flex justify-between gap-3">
-              <span className="font-bold">Total recorded actual cost</span>
-              <b className="text-lg">
-                {completeCost == null ? "Incomplete" : money(completeCost)}
-              </b>
-            </div>
-            <p className="text-[11px] leading-4 text-slate-500">
-              International freight and other operating expenses are not
-              included. This section is for optional cost tracking only.
+      <div className="rounded-xl border border-slate-200 overflow-hidden">
+        <div className="px-4 py-3 bg-slate-50 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-bold text-slate-800">
+              Existing CN Order Prices
+            </p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Read-only ·{" "}
+              {pricingMode === "usd" ? "USD Direct" : "CNY Exchange to USD"}
             </p>
           </div>
-          {showLossWarning && (
-            <div
-              role="alert"
-              aria-live="polite"
-              className="rounded-xl border border-red-200 bg-red-50 p-4 space-y-3"
-            >
-              <div className="flex items-start gap-3">
-                <Icons.TriangleAlert
-                  size={21}
-                  className="mt-0.5 shrink-0 text-red-600"
-                />
+          <div className="text-right">
+            <p className="text-xs text-slate-500">Customer goods amount</p>
+            <b className="text-base text-slate-900">
+              {orderGoodsUsd == null ? "—" : money(orderGoodsUsd)}
+            </b>
+          </div>
+        </div>
+        <div className="divide-y divide-slate-100">
+          {orderItems.map((item, index) => {
+            const q = Number(item.quantity) || 0;
+            const unit =
+              pricingMode === "usd"
+                ? Number(item.unit_price_usd) || 0
+                : Number(item.unit_price_cny) || 0;
+            const currency =
+              pricingMode === "usd" ? money(q * unit) : cnCny(q * unit);
+            return (
+              <div
+                key={`existing-order-price-${index}`}
+                className="px-4 py-2.5 flex items-center justify-between gap-3 text-sm"
+              >
                 <div className="min-w-0">
-                  <p className="text-lg font-extrabold text-red-700">
-                    {minimumLossWarning
-                      ? `Loss at least ${money(warningLossUsd)}`
-                      : `Pre-freight loss ${money(warningLossUsd)}`}
+                  <p className="font-semibold text-slate-800 truncate">
+                    {item.product_name ||
+                      item.product_url ||
+                      `Item ${index + 1}`}
                   </p>
-                  <p className="mt-1 text-sm leading-5 text-red-700">
-                    {minimumLossWarning
-                      ? "Goods cost already exceeds customer charges; China shipping is not recorded, so the final loss may be higher."
-                      : "Recorded goods and China shipping costs exceed customer charges. International freight and other operating expenses are not included, so the final loss may be higher."}
+                  <p className="text-xs text-slate-500">
+                    Qty {q} ×{" "}
+                    {pricingMode === "usd" ? money(unit) : cnCny(unit)}
+                    {item.variant ? ` · ${item.variant}` : ""}
                   </p>
                 </div>
+                <b className="shrink-0 text-slate-700">{currency}</b>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 border-t border-red-200 pt-3 text-sm">
-                <div className="flex sm:block items-center justify-between gap-2">
-                  <span className="text-red-700/80">Customer total</span>
-                  <b className="block text-red-800">
-                    {money(customerTotalUsd)}
-                  </b>
-                </div>
-                <div className="flex sm:block items-center justify-between gap-2">
-                  <span className="text-red-700/80">
-                    {minimumLossWarning
-                      ? "Actual goods cost"
-                      : "Known actual cost"}
-                  </span>
-                  <b className="block text-red-800">{money(knownCostUsd)}</b>
-                </div>
-                <div className="flex sm:block items-center justify-between gap-2">
-                  <span className="text-red-700/80">
-                    {minimumLossWarning
-                      ? "Minimum loss"
-                      : "Loss before international freight"}
-                  </span>
-                  <b className="block text-red-800">{money(warningLossUsd)}</b>
-                </div>
-              </div>
-            </div>
-          )}
-          {error && (
-            <div className="rounded-lg border border-red-200 bg-red-50 text-red-700 px-3 py-2 text-sm">
-              {error}
-            </div>
-          )}
+            );
+          })}
         </div>
-        <div className="sticky bottom-0 bg-white border-t border-slate-200 px-5 py-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-10 px-4 rounded-xl border border-slate-200 text-sm font-semibold"
-          >
-            Close
-          </button>
-          <button
-            disabled={busy}
-            type="submit"
-            className="h-10 px-4 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-50"
-          >
-            {busy ? "Saving…" : "Save Actual Cost"}
-          </button>
+        <div className="px-4 py-2.5 border-t border-slate-200 flex justify-between gap-3 text-sm">
+          <span className="text-slate-600">
+            Customer total (including fees/eligible shipping)
+          </span>
+          <b>{money(row.total_due_usd || 0)}</b>
         </div>
-      </form>
-    </div>
+      </div>
+
+      <label className="block text-sm font-semibold text-slate-700">
+        Actual Cost (USD, internal, optional)
+        <input
+          type="number"
+          min="0"
+          step="0.01"
+          value={usdCost}
+          onChange={(e) => setUsdCost(e.target.value)}
+          className={`${INPUT_CLS} mt-1`}
+          placeholder="Total real cost in USD (goods + China shipping)"
+        />
+        <span className="block mt-1 text-xs font-normal text-slate-500">
+          Staff only. Customers never see this. Leave blank if the cost is not
+          known yet; the dashboard will show it as pending, not zero. The
+          Dashboard uses this value for Purchase Profit.
+        </span>
+      </label>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label className="text-sm font-semibold text-slate-700">
+          Purchase Exchange Rate (CNY per USD, only for the CNY fields)
+          <input
+            type="number"
+            min="0.0001"
+            step="0.0001"
+            value={rate}
+            onChange={(e) => setRate(e.target.value)}
+            className={`${INPUT_CLS} mt-1`}
+          />
+          <span className="block mt-1 text-xs font-normal text-slate-500">
+            Defaults to the CN Order rate. Change only if the supplier payment
+            used a different rate.
+          </span>
+        </label>
+        <label className="text-sm font-semibold text-slate-700">
+          Supplier Order No. (optional)
+          <input
+            value={supplierNo}
+            onChange={(e) => setSupplierNo(e.target.value)}
+            className={`${INPUT_CLS} mt-1`}
+            placeholder="Supplier reference"
+          />
+        </label>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <label className="text-sm font-semibold text-slate-700">
+          Actual Goods Cost Total (CNY, optional)
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={totalGoodsCny}
+            onChange={(e) => setTotalGoodsCny(e.target.value)}
+            className={`${INPUT_CLS} mt-1`}
+            placeholder="Enter only if actual cost is known"
+          />
+          <span className="block mt-1 text-xs font-normal text-slate-500">
+            Enter the supplier receipt total, not the customer selling price.
+          </span>
+        </label>
+        <label className="text-sm font-semibold text-slate-700">
+          Actual China Shipping (CNY, optional)
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            value={shippingCny}
+            onChange={(e) => setShippingCny(e.target.value)}
+            className={`${INPUT_CLS} mt-1`}
+            placeholder="Leave blank if unknown"
+          />
+          <span className="block mt-1 text-xs font-normal text-slate-500">
+            Enter 0 only if shipping is confirmed free.
+          </span>
+        </label>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-2">
+        <div className="flex justify-between gap-3 text-sm">
+          <span className="text-slate-600">
+            Recorded actual goods cost (USD)
+          </span>
+          <b>{goodsUsd == null ? "Not recorded" : money(goodsUsd)}</b>
+        </div>
+        <div className="flex justify-between gap-3 text-sm">
+          <span className="text-slate-600">
+            Recorded actual China shipping (USD)
+          </span>
+          <b>{shipUsd == null ? "Not recorded" : money(shipUsd)}</b>
+        </div>
+        <div className="border-t border-slate-200 pt-2 flex justify-between gap-3">
+          <span className="font-bold">Total recorded actual cost</span>
+          <b className="text-lg">
+            {completeCost == null ? "Incomplete" : money(completeCost)}
+          </b>
+        </div>
+        <p className="text-[11px] leading-4 text-slate-500">
+          International freight and other operating expenses are not included.
+          This section is for optional cost tracking only.
+        </p>
+      </div>
+      {showLossWarning && (
+        <div
+          role="alert"
+          aria-live="polite"
+          className="rounded-xl border border-red-200 bg-red-50 p-4 space-y-3"
+        >
+          <div className="flex items-start gap-3">
+            <Icons.TriangleAlert
+              size={21}
+              className="mt-0.5 shrink-0 text-red-600"
+            />
+            <div className="min-w-0">
+              <p className="text-lg font-extrabold text-red-700">
+                {minimumLossWarning
+                  ? `Loss at least ${money(warningLossUsd)}`
+                  : `Pre-freight loss ${money(warningLossUsd)}`}
+              </p>
+              <p className="mt-1 text-sm leading-5 text-red-700">
+                {minimumLossWarning
+                  ? "Goods cost already exceeds customer charges; China shipping is not recorded, so the final loss may be higher."
+                  : "Recorded goods and China shipping costs exceed customer charges. International freight and other operating expenses are not included, so the final loss may be higher."}
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 border-t border-red-200 pt-3 text-sm">
+            <div className="flex sm:block items-center justify-between gap-2">
+              <span className="text-red-700/80">Customer total</span>
+              <b className="block text-red-800">{money(customerTotalUsd)}</b>
+            </div>
+            <div className="flex sm:block items-center justify-between gap-2">
+              <span className="text-red-700/80">
+                {minimumLossWarning ? "Actual goods cost" : "Known actual cost"}
+              </span>
+              <b className="block text-red-800">{money(knownCostUsd)}</b>
+            </div>
+            <div className="flex sm:block items-center justify-between gap-2">
+              <span className="text-red-700/80">
+                {minimumLossWarning
+                  ? "Minimum loss"
+                  : "Loss before international freight"}
+              </span>
+              <b className="block text-red-800">{money(warningLossUsd)}</b>
+            </div>
+          </div>
+        </div>
+      )}
+    </AppModal>
   );
 }
 
@@ -51393,6 +51191,451 @@ function CnOrdersPage() {
     { id: "finance", label: "Purchase & Finance", icon: Icons.Wallet },
   ];
 
+  // Columns for the TK list tab.
+  const cnTkCols = [
+    {
+      key: "tk",
+      label: "Tracking Number",
+      render: (p) => (
+        <Link
+          to={`/packages/${encodeURIComponent(p.tk || "")}`}
+          className="font-bold text-signal-blue hover:underline"
+        >
+          {p.tk || "—"}
+        </Link>
+      ),
+    },
+    {
+      key: "cn_order",
+      label: "CN Order",
+      render: (p) => {
+        const o = ordersById.get(p.cn_order_id);
+        return (
+          <Link
+            to={`/cn-orders/${encodeURIComponent(o?.order_id || "")}`}
+            className="font-semibold text-signal-blue hover:underline"
+          >
+            {o?.order_id || "CN Order not found"}
+          </Link>
+        );
+      },
+    },
+    {
+      key: "customer",
+      label: "Customer",
+      render: (p) => {
+        const o = ordersById.get(p.cn_order_id);
+        return (
+          <CnCustomerCell
+            value={o?.customer || p.customer_name || p.customer_id}
+          />
+        );
+      },
+    },
+    {
+      key: "product",
+      label: "Product",
+      render: (p) => {
+        const o = ordersById.get(p.cn_order_id);
+        const productLabel =
+          Array.isArray(o?.cn_order_items) && o.cn_order_items.length > 1
+            ? `${o.cn_order_items[0]?.product_name || o.product_name || "Products"} + ${o.cn_order_items.length - 1} more`
+            : o?.product_name || o?.cn_order_items?.[0]?.product_name || "—";
+        return (
+          <span className="block max-w-[200px] truncate text-ink-700">
+            {productLabel}
+          </span>
+        );
+      },
+    },
+    {
+      key: "status",
+      label: "Status",
+      render: (p) => (
+        <span
+          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${statusToneClass(p.status) || "bg-mist-100 text-ink-800"}`}
+        >
+          {TK_STAGE_DISPLAY[p.status] || p.status || "Unknown"}
+        </span>
+      ),
+    },
+    {
+      key: "origin",
+      label: "Origin Warehouse",
+      render: (p) => (
+        <span className="text-ink-700">
+          {p.origin_wh_code || p.warehouse || "—"}
+        </span>
+      ),
+    },
+    {
+      key: "branch",
+      label: "Cambodia Branch",
+      render: (p) => (
+        <span className="text-ink-700">{p.dest_branch_code || "—"}</span>
+      ),
+    },
+    {
+      key: "created",
+      label: "Created",
+      render: (p) => <CreatedAtCell iso={p.created_at} />,
+    },
+    {
+      key: "updated",
+      label: "Updated",
+      render: (p) => <CreatedAtCell iso={p.updated_at || p.created_at} />,
+    },
+  ];
+
+  // Per-order numbers for the Purchase & Finance tab.
+  const cnFinanceView = (r) => {
+    const calc = cnPurchaseFinancials(r);
+    const paidAmt = Math.max(0, Number(r.amount_paid_usd) || 0);
+    const balance =
+      r.payment_status === "Refunded"
+        ? 0
+        : Math.max(0, (Number(r.total_due_usd) || 0) - paidAmt);
+    const margin = calc.preFreightMarginUsd;
+    const hasMinimumLoss = calc.minimumKnownLossUsd > 0.005;
+    const marginLabel = calc.refunded
+      ? "Excluded (Refunded)"
+      : margin == null
+        ? hasMinimumLoss
+          ? `Loss at least ${money(calc.minimumKnownLossUsd)}`
+          : "Pending actual costs"
+        : margin > 0.005
+          ? `Profit ${money(margin)}`
+          : margin < -0.005
+            ? `Loss ${money(Math.abs(margin))}`
+            : `Break-even ${money(0)}`;
+    const marginColor =
+      calc.refunded || (margin == null && !hasMinimumLoss)
+        ? "text-amber-700"
+        : hasMinimumLoss || (margin != null && margin < -0.005)
+          ? "text-red-700"
+          : margin > 0.005
+            ? "text-emerald-700"
+            : "text-ink-800";
+    const marginNote =
+      margin != null && !calc.refunded
+        ? "Before international freight & other costs"
+        : hasMinimumLoss
+          ? "Goods cost already exceeds charges; shipping not recorded, so final loss may be higher."
+          : null;
+    return { calc, paidAmt, balance, marginLabel, marginColor, marginNote };
+  };
+  const cnFinanceCols = [
+    {
+      key: "order_id",
+      label: "CN Order",
+      render: (r) => (
+        <>
+          <Link
+            to={`/cn-orders/${encodeURIComponent(r.order_id)}`}
+            className="font-bold text-signal-blue hover:underline"
+          >
+            {r.order_id}
+          </Link>
+          <span className="block text-xs font-normal text-ink-600/40">
+            {r.status}
+          </span>
+        </>
+      ),
+    },
+    {
+      key: "customer",
+      label: "Customer",
+      render: (r) => <CnCustomerCell value={r.customer} />,
+    },
+    {
+      key: "charges",
+      label: "Customer Charges",
+      numeric: true,
+      render: (r) => (
+        <span className="font-semibold">{money(r.total_due_usd)}</span>
+      ),
+    },
+    {
+      key: "paid",
+      label: "Customer Paid",
+      numeric: true,
+      render: (r) => (
+        <span className="text-emerald-700">
+          {money(cnFinanceView(r).paidAmt)}
+        </span>
+      ),
+    },
+    {
+      key: "outstanding",
+      label: "Outstanding",
+      numeric: true,
+      render: (r) => {
+        const { balance } = cnFinanceView(r);
+        return (
+          <span
+            className={`font-semibold ${balance > 0 ? "text-red-600" : "text-emerald-700"}`}
+          >
+            {money(balance)}
+          </span>
+        );
+      },
+    },
+    {
+      key: "goods",
+      label: "Actual Goods Cost",
+      numeric: true,
+      render: (r) => {
+        const { calc } = cnFinanceView(r);
+        return calc.goodsUsd != null ? (
+          <>
+            <b>{money(calc.goodsUsd)}</b>
+            <span className="block text-xs text-ink-600/40">
+              {cnCny(r.actual_cost_cny)}
+            </span>
+          </>
+        ) : (
+          <span className="text-amber-700">Not recorded</span>
+        );
+      },
+    },
+    {
+      key: "shipping",
+      label: "Actual China Shipping",
+      numeric: true,
+      render: (r) => {
+        const { calc } = cnFinanceView(r);
+        return calc.shippingUsd != null ? (
+          <>
+            <b>{money(calc.shippingUsd)}</b>
+            <span className="block text-xs text-ink-600/40">
+              {cnCny(r.actual_domestic_shipping_cny)}
+            </span>
+          </>
+        ) : (
+          <span className="text-amber-700">Not recorded</span>
+        );
+      },
+    },
+    {
+      key: "total_cost",
+      label: "Total Recorded Cost",
+      numeric: true,
+      render: (r) => {
+        const { calc } = cnFinanceView(r);
+        return calc.totalCostUsd == null ? (
+          <span className="text-amber-700">Incomplete</span>
+        ) : (
+          <>
+            <b>{money(calc.totalCostUsd)}</b>
+            <span className="block text-xs text-ink-600/40">
+              Rate{" "}
+              {calc.rate.toLocaleString(undefined, {
+                maximumFractionDigits: 4,
+              })}
+            </span>
+          </>
+        );
+      },
+    },
+    {
+      key: "margin",
+      label: "Pre-Freight Profit / Loss",
+      align: "right",
+      render: (r) => {
+        const { marginLabel, marginColor, marginNote } = cnFinanceView(r);
+        return (
+          <div className={`font-bold ${marginColor}`}>
+            <span>{marginLabel}</span>
+            {marginNote && (
+              <span className="ml-auto block max-w-[210px] whitespace-normal text-xs font-normal text-ink-600/40">
+                {marginNote}
+              </span>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      key: "payment",
+      label: "Payment",
+      render: (r) => <CnPaymentBadge status={r.payment_status} />,
+    },
+    {
+      key: "cost_record",
+      label: "Cost Record",
+      render: (r) =>
+        canRecordCost ? (
+          <button
+            type="button"
+            onClick={() => setActualCostOrder(r)}
+            className="h-8 px-3 rounded-lg border border-signal-blue/30 bg-signal-blue/5 text-signal-blue text-xs font-bold hover:bg-signal-blue/10"
+          >
+            {r.actual_cost_cny != null || r.actual_domestic_shipping_cny != null
+              ? "Edit Actual Cost"
+              : "Record Actual Cost"}
+          </button>
+        ) : (
+          <span className="text-xs text-ink-600/40">View only</span>
+        ),
+    },
+  ];
+
+  // Columns for the CN Orders list (rendered by the shared DataTable).
+  const cnOrderCols = [
+    {
+      key: "order_id",
+      label: "Order ID",
+      render: (r) => (
+        <>
+          <Link
+            to={`/cn-orders/${encodeURIComponent(r.order_id)}`}
+            className="block font-bold text-ink-900 hover:text-signal-blue"
+          >
+            {r.order_id}
+          </Link>
+          <div className="mt-1.5 flex items-center gap-2 text-xs">
+            <span className="inline-flex items-center gap-1 text-ink-600/70">
+              <ShipMethodIcon
+                m={r.shipping_method}
+                size={14}
+                className="text-blue-600"
+              />
+              {normShipMethod(r.shipping_method) || "Land"}
+            </span>
+            {r.platform && (
+              <span
+                className={`rounded-md border px-2 py-0.5 font-semibold ${
+                  String(r.platform).toLowerCase() === "taobao"
+                    ? "border-orange-200 bg-orange-50 text-orange-700"
+                    : String(r.platform).toLowerCase() === "1688"
+                      ? "border-blue-100 bg-blue-50 text-blue-700"
+                      : "border-slate-200 bg-slate-50 text-slate-600"
+                }`}
+              >
+                {r.platform}
+              </span>
+            )}
+          </div>
+        </>
+      ),
+    },
+    {
+      key: "tracking",
+      label: "Tracking Number",
+      render: (r) => <CnTrackingCell tks={tkNumbersByOrder.get(r.id)} />,
+    },
+    {
+      key: "customer",
+      label: "Customer",
+      render: (r) => <CnCustomerCell value={r.customer} />,
+    },
+    {
+      key: "product",
+      label: "Product Items",
+      render: (r) => {
+        const its = Array.isArray(r.cn_order_items) ? r.cn_order_items : [];
+        return (
+          <div className="flex items-center gap-3 text-ink-700">
+            <AirImg
+              src={r.cover_url}
+              alt={r.product_name || r.order_id}
+              className="w-10 h-10 rounded-lg border border-mist-200"
+              fallbackSize={16}
+              FallbackIcon={Icons.ShoppingCart}
+            />
+            <div className="min-w-0">
+              <span className="block truncate max-w-[220px]">
+                {r.product_name || its[0]?.product_name || r.product_url || "—"}
+              </span>
+              <span className="text-xs text-ink-600/40">
+                {its.length > 1
+                  ? `${its.length} items`
+                  : r.shop_name || r.platform || ""}
+              </span>
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      key: "linked",
+      label: "Linked TKs",
+      render: (r) => {
+        const linked = linkedTkCount.get(r.id) || 0;
+        return (
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab("tks");
+              setQ(r.order_id);
+              setTkStatus("");
+              setDateRange(EMPTY_DATE_RANGE);
+            }}
+            className="text-signal-blue hover:underline font-semibold"
+          >
+            {linked} TK{linked === 1 ? "" : "s"}
+          </button>
+        );
+      },
+    },
+    {
+      key: "total",
+      label: "Total (USD)",
+      numeric: true,
+      render: (r) => (
+        <span className="font-semibold text-ink-900">
+          {money(r.total_due_usd)}
+        </span>
+      ),
+    },
+    {
+      key: "paid_balance",
+      label: "Paid / Balance",
+      align: "right",
+      render: (r) => {
+        const paidAmt = Math.max(0, Number(r.amount_paid_usd) || 0);
+        const balance =
+          r.payment_status === "Refunded"
+            ? 0
+            : Math.max(0, (Number(r.total_due_usd) || 0) - paidAmt);
+        return (
+          <div className="text-xs">
+            <b className="block text-ink-800">Paid {money(paidAmt)}</b>
+            <span className={balance > 0 ? "text-red-600" : "text-emerald-600"}>
+              Balance {money(balance)}
+            </span>
+          </div>
+        );
+      },
+    },
+    {
+      key: "payment",
+      label: "Payment",
+      render: (r) => <CnPaymentBadge status={r.payment_status} />,
+    },
+    {
+      key: "status",
+      label: "Status",
+      render: (r) => (
+        <CnStatusBadge
+          status={cnOrderTableStatus(r)}
+          partial={r.is_partial}
+          cancelled={cnIsCancelledUnpaid(r)}
+        />
+      ),
+    },
+    {
+      key: "created",
+      label: "Created",
+      render: (r) => <CreatedAtCell iso={r.created_at} />,
+    },
+    {
+      key: "updated",
+      label: "Updated",
+      render: (r) => <CreatedAtCell iso={r.updated_at} />,
+    },
+  ];
+
   return (
     <div className="space-y-5">
       <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -51639,325 +51882,46 @@ function CnOrdersPage() {
         </div>
 
         {activeTab === "orders" && (
-          <div className="overflow-auto">
-            <table className="min-w-[1380px] w-full text-sm whitespace-nowrap">
-              <thead>
-                <tr className="bg-mist-50 text-left text-[11px] uppercase tracking-wider text-ink-600/60">
-                  {[
-                    "Order ID",
-                    "Tracking Number",
-                    "Customer",
-                    "Product Items",
-                    "Linked TKs",
-                    "Total (USD)",
-                    "Paid / Balance",
-                    "Payment",
-                    "Status",
-                    "Created",
-                    "Updated",
-                  ].map((x) => (
-                    <th key={x} className="px-4 py-3 font-semibold">
-                      {x}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-mist-100">
-                {loading ? (
-                  Array.from({ length: 6 }).map((_, i) => (
-                    <tr key={`cn-sk-${i}`} aria-hidden="true">
-                      {Array.from({ length: 11 }).map((__, j) => (
-                        <td key={j} className="px-4 py-3.5">
-                          <Skeleton
-                            className="h-3.5"
-                            style={{ width: j === 0 ? 110 : 72 }}
-                            delay={i * 70}
-                          />
-                        </td>
-                      ))}
-                    </tr>
-                  ))
-                ) : !filtered.length ? (
-                  <tr>
-                    <td
-                      colSpan={11}
-                      className="px-4 py-10 text-center text-ink-600/40"
-                    >
-                      {loadError
-                        ? "Couldn't load CN purchase orders."
-                        : "No CN purchase orders found."}
-                    </td>
-                  </tr>
-                ) : (
-                  pagedOrders.map((r) => {
-                    const its = Array.isArray(r.cn_order_items)
-                      ? r.cn_order_items
-                      : [];
-                    const paidAmt = Math.max(0, Number(r.amount_paid_usd) || 0);
-                    const balance =
-                      r.payment_status === "Refunded"
-                        ? 0
-                        : Math.max(0, (Number(r.total_due_usd) || 0) - paidAmt);
-                    const linked = linkedTkCount.get(r.id) || 0;
-                    return (
-                      <tr
-                        key={r.id}
-                        onClick={(e) =>
-                          openRow(
-                            e,
-                            `/cn-orders/${encodeURIComponent(r.order_id)}`,
-                          )
-                        }
-                        className="hover:bg-mist-50 cursor-pointer"
-                      >
-                        <td className="px-4 py-3 text-ink-900">
-                          <Link
-                            to={`/cn-orders/${encodeURIComponent(r.order_id)}`}
-                            className="block font-bold hover:text-signal-blue"
-                          >
-                            {r.order_id}
-                          </Link>
-                          <div className="mt-1.5 flex items-center gap-2 text-xs">
-                            <span className="inline-flex items-center gap-1 text-ink-600/70">
-                              <ShipMethodIcon
-                                m={r.shipping_method}
-                                size={14}
-                                className="text-blue-600"
-                              />
-                              {normShipMethod(r.shipping_method) || "Land"}
-                            </span>
-                            {r.platform && (
-                              <span
-                                className={`rounded-md border px-2 py-0.5 font-semibold ${
-                                  String(r.platform).toLowerCase() === "taobao"
-                                    ? "border-orange-200 bg-orange-50 text-orange-700"
-                                    : String(r.platform).toLowerCase() ===
-                                        "1688"
-                                      ? "border-blue-100 bg-blue-50 text-blue-700"
-                                      : "border-slate-200 bg-slate-50 text-slate-600"
-                                }`}
-                              >
-                                {r.platform}
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <CnTrackingCell tks={tkNumbersByOrder.get(r.id)} />
-                        </td>
-                        <td className="px-4 py-3">
-                          <CnCustomerCell value={r.customer} />
-                        </td>
-                        <td className="px-4 py-3 text-ink-700">
-                          <div className="flex items-center gap-3">
-                            <AirImg
-                              src={r.cover_url}
-                              alt={r.product_name || r.order_id}
-                              className="w-10 h-10 rounded-lg border border-mist-200"
-                              fallbackSize={16}
-                              FallbackIcon={Icons.ShoppingCart}
-                            />
-                            <div className="min-w-0">
-                              <span className="block truncate max-w-[220px]">
-                                {r.product_name ||
-                                  its[0]?.product_name ||
-                                  r.product_url ||
-                                  "—"}
-                              </span>
-                              <span className="text-xs text-ink-600/40">
-                                {its.length > 1
-                                  ? `${its.length} items`
-                                  : r.shop_name || r.platform || ""}
-                              </span>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActiveTab("tks");
-                              setQ(r.order_id);
-                              setTkStatus("");
-                              setDateRange(EMPTY_DATE_RANGE);
-                            }}
-                            className="text-signal-blue hover:underline font-semibold"
-                          >
-                            {linked} TK{linked === 1 ? "" : "s"}
-                          </button>
-                        </td>
-                        <td className="px-4 py-3 font-semibold text-ink-900">
-                          {money(r.total_due_usd)}
-                        </td>
-                        <td className="px-4 py-3 text-xs">
-                          <b className="block text-ink-800">
-                            Paid {money(paidAmt)}
-                          </b>
-                          <span
-                            className={
-                              balance > 0 ? "text-red-600" : "text-emerald-600"
-                            }
-                          >
-                            Balance {money(balance)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <CnPaymentBadge status={r.payment_status} />
-                        </td>
-                        <td className="px-4 py-3">
-                          <CnStatusBadge
-                            status={cnOrderTableStatus(r)}
-                            partial={r.is_partial}
-                            cancelled={cnIsCancelledUnpaid(r)}
-                          />
-                        </td>
-                        <td className="px-4 py-3">
-                          <CreatedAtCell iso={r.created_at} />
-                        </td>
-                        <td className="px-4 py-3">
-                          <CreatedAtCell iso={r.updated_at} />
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            caption="CN purchase orders"
+            columns={cnOrderCols}
+            rows={pagedOrders}
+            rowKey={(r) => r.id}
+            loading={loading}
+            skeletonRows={6}
+            minWidth={1380}
+            onRowClick={(r, e) =>
+              openRow(e, `/cn-orders/${encodeURIComponent(r.order_id)}`)
+            }
+            error={
+              loadError && !filtered.length
+                ? {
+                    title: "Couldn't load CN purchase orders.",
+                    hint: loadError,
+                  }
+                : null
+            }
+            onRetry={refreshAll}
+            emptyTitle="No CN purchase orders found."
+          />
         )}
 
         {activeTab === "tks" && (
-          <div className="overflow-auto">
-            <table className="min-w-[1120px] w-full text-sm">
-              <thead>
-                <tr className="bg-mist-50 text-left text-xs uppercase tracking-wide text-ink-600/60">
-                  {[
-                    "Tracking Number",
-                    "CN Order",
-                    "Customer",
-                    "Product",
-                    "Status",
-                    "Origin Warehouse",
-                    "Cambodia Branch",
-                    "Created",
-                    "Updated",
-                  ].map((x) => (
-                    <th key={x} className="px-4 py-3 font-semibold">
-                      {x}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-mist-100">
-                {tkLoading ? (
-                  Array.from({ length: 5 }).map((_, i) => (
-                    <tr key={`tk-sk-${i}`}>
-                      {Array.from({ length: 9 }).map((__, j) => (
-                        <td key={j} className="px-4 py-3.5">
-                          <Skeleton
-                            className="h-3.5"
-                            style={{ width: j === 0 ? 120 : 80 }}
-                          />
-                        </td>
-                      ))}
-                    </tr>
-                  ))
-                ) : tkError ? (
-                  <tr>
-                    <td
-                      colSpan={9}
-                      className="px-4 py-8 text-center text-red-600"
-                    >
-                      {tkError}{" "}
-                      <button
-                        className="ml-2 underline"
-                        type="button"
-                        onClick={loadTks}
-                      >
-                        Retry
-                      </button>
-                    </td>
-                  </tr>
-                ) : !filteredTks.length ? (
-                  <tr>
-                    <td
-                      colSpan={9}
-                      className="px-4 py-10 text-center text-ink-600/40"
-                    >
-                      No TKs linked to CN Orders found.
-                    </td>
-                  </tr>
-                ) : (
-                  pagedTks.map((p) => {
-                    const o = ordersById.get(p.cn_order_id);
-                    const productLabel =
-                      Array.isArray(o?.cn_order_items) &&
-                      o.cn_order_items.length > 1
-                        ? `${o.cn_order_items[0]?.product_name || o.product_name || "Products"} + ${o.cn_order_items.length - 1} more`
-                        : o?.product_name ||
-                          o?.cn_order_items?.[0]?.product_name ||
-                          "—";
-                    return (
-                      <tr
-                        key={p.id || p.tk}
-                        onClick={(e) =>
-                          p.tk &&
-                          openRow(e, `/packages/${encodeURIComponent(p.tk)}`)
-                        }
-                        className={`hover:bg-mist-50 ${p.tk ? "cursor-pointer" : ""}`}
-                      >
-                        <td className="px-4 py-3 font-bold">
-                          <Link
-                            to={`/packages/${encodeURIComponent(p.tk || "")}`}
-                            className="text-signal-blue hover:underline"
-                          >
-                            {p.tk || "—"}
-                          </Link>
-                        </td>
-                        <td className="px-4 py-3 font-semibold">
-                          <Link
-                            to={`/cn-orders/${encodeURIComponent(o?.order_id || "")}`}
-                            className="text-signal-blue hover:underline"
-                          >
-                            {o?.order_id || "CN Order not found"}
-                          </Link>
-                        </td>
-                        <td className="px-4 py-3">
-                          <CnCustomerCell
-                            value={
-                              o?.customer || p.customer_name || p.customer_id
-                            }
-                          />
-                        </td>
-                        <td className="px-4 py-3 text-ink-700 max-w-[200px] truncate">
-                          {productLabel}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span
-                            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-bold ${statusToneClass(p.status) || "bg-mist-100 text-ink-800"}`}
-                          >
-                            {p.status || "Unknown"}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-ink-700">
-                          {p.origin_wh_code || p.warehouse || "—"}
-                        </td>
-                        <td className="px-4 py-3 text-ink-700">
-                          {p.dest_branch_code || "—"}
-                        </td>
-                        <td className="px-4 py-3">
-                          <CreatedAtCell iso={p.created_at} />
-                        </td>
-                        <td className="px-4 py-3">
-                          <CreatedAtCell iso={p.updated_at || p.created_at} />
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
+          <DataTable
+            caption="TKs linked to CN orders"
+            columns={cnTkCols}
+            rows={pagedTks}
+            rowKey={(p) => p.id || p.tk}
+            loading={tkLoading}
+            skeletonRows={5}
+            minWidth={1120}
+            onRowClick={(p, e) =>
+              p.tk && openRow(e, `/packages/${encodeURIComponent(p.tk)}`)
+            }
+            error={tkError ? { title: tkError } : null}
+            onRetry={loadTks}
+            emptyTitle="No TKs linked to CN Orders found."
+          />
         )}
 
         {(activeTab === "orders" || activeTab === "tks") &&
@@ -51994,209 +51958,19 @@ function CnOrdersPage() {
                 and other operating costs are excluded.
               </p>
             </div>
-            <div className="overflow-auto">
-              <table className="min-w-[1510px] w-full text-sm">
-                <thead>
-                  <tr className="bg-mist-50 text-left text-xs uppercase tracking-wide text-ink-600/60">
-                    {[
-                      "CN Order",
-                      "Customer",
-                      "Customer Charges",
-                      "Customer Paid",
-                      "Outstanding",
-                      "Actual Goods Cost",
-                      "Actual China Shipping",
-                      "Total Recorded Cost",
-                      "Pre-Freight Profit / Loss",
-                      "Payment",
-                      "Cost Record",
-                    ].map((x) => (
-                      <th key={x} className="px-4 py-3 font-semibold">
-                        {x}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-mist-100">
-                  {loading ? (
-                    Array.from({ length: 6 }).map((_, i) => (
-                      <tr key={`fin-sk-${i}`}>
-                        {Array.from({ length: 11 }).map((__, j) => (
-                          <td key={j} className="px-4 py-3.5">
-                            <Skeleton
-                              className="h-3.5"
-                              style={{ width: j === 0 ? 100 : 70 }}
-                            />
-                          </td>
-                        ))}
-                      </tr>
-                    ))
-                  ) : !filtered.length ? (
-                    <tr>
-                      <td
-                        colSpan={11}
-                        className="px-4 py-10 text-center text-ink-600/40"
-                      >
-                        No finance records found.
-                      </td>
-                    </tr>
-                  ) : (
-                    pagedOrders.map((r) => {
-                      const calc = cnPurchaseFinancials(r);
-                      const paidAmt = Math.max(
-                        0,
-                        Number(r.amount_paid_usd) || 0,
-                      );
-                      const balance =
-                        r.payment_status === "Refunded"
-                          ? 0
-                          : Math.max(
-                              0,
-                              (Number(r.total_due_usd) || 0) - paidAmt,
-                            );
-                      const margin = calc.preFreightMarginUsd;
-                      const hasMinimumLoss = calc.minimumKnownLossUsd > 0.005;
-                      const marginLabel = calc.refunded
-                        ? "Excluded (Refunded)"
-                        : margin == null
-                          ? hasMinimumLoss
-                            ? `Loss at least ${money(calc.minimumKnownLossUsd)}`
-                            : "Pending actual costs"
-                          : margin > 0.005
-                            ? `Profit ${money(margin)}`
-                            : margin < -0.005
-                              ? `Loss ${money(Math.abs(margin))}`
-                              : `Break-even ${money(0)}`;
-                      const marginColor =
-                        calc.refunded || (margin == null && !hasMinimumLoss)
-                          ? "text-amber-700"
-                          : hasMinimumLoss ||
-                              (margin != null && margin < -0.005)
-                            ? "text-red-700"
-                            : margin > 0.005
-                              ? "text-emerald-700"
-                              : "text-ink-800";
-                      const marginNote =
-                        margin != null && !calc.refunded
-                          ? "Before international freight & other costs"
-                          : hasMinimumLoss
-                            ? "Goods cost already exceeds charges; shipping not recorded, so final loss may be higher."
-                            : null;
-                      return (
-                        <tr
-                          key={r.id}
-                          onClick={(e) =>
-                            openRow(
-                              e,
-                              `/cn-orders/${encodeURIComponent(r.order_id)}`,
-                            )
-                          }
-                          className="hover:bg-mist-50 cursor-pointer"
-                        >
-                          <td className="px-4 py-3 font-bold">
-                            <Link
-                              to={`/cn-orders/${encodeURIComponent(r.order_id)}`}
-                              className="text-signal-blue hover:underline"
-                            >
-                              {r.order_id}
-                            </Link>
-                            <span className="block text-xs font-normal text-ink-600/40">
-                              {r.status}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3">
-                            <CnCustomerCell value={r.customer} />
-                          </td>
-                          <td className="px-4 py-3 font-semibold">
-                            {money(r.total_due_usd)}
-                          </td>
-                          <td className="px-4 py-3 text-emerald-700">
-                            {money(paidAmt)}
-                          </td>
-                          <td
-                            className={`px-4 py-3 font-semibold ${balance > 0 ? "text-red-600" : "text-emerald-700"}`}
-                          >
-                            {money(balance)}
-                          </td>
-                          <td className="px-4 py-3">
-                            {calc.goodsUsd != null ? (
-                              <>
-                                <b>{money(calc.goodsUsd)}</b>
-                                <span className="block text-xs text-ink-600/40">
-                                  {cnCny(r.actual_cost_cny)}
-                                </span>
-                              </>
-                            ) : (
-                              <span className="text-amber-700">
-                                Not recorded
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3">
-                            {calc.shippingUsd != null ? (
-                              <>
-                                <b>{money(calc.shippingUsd)}</b>
-                                <span className="block text-xs text-ink-600/40">
-                                  {cnCny(r.actual_domestic_shipping_cny)}
-                                </span>
-                              </>
-                            ) : (
-                              <span className="text-amber-700">
-                                Not recorded
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 font-semibold">
-                            {calc.totalCostUsd == null ? (
-                              <span className="text-amber-700">Incomplete</span>
-                            ) : (
-                              <>
-                                <b>{money(calc.totalCostUsd)}</b>
-                                <span className="block text-xs text-ink-600/40">
-                                  Rate{" "}
-                                  {calc.rate.toLocaleString(undefined, {
-                                    maximumFractionDigits: 4,
-                                  })}
-                                </span>
-                              </>
-                            )}
-                          </td>
-                          <td className={`px-4 py-3 font-bold ${marginColor}`}>
-                            <span>{marginLabel}</span>
-                            {marginNote && (
-                              <span className="block text-xs font-normal text-ink-600/40 max-w-[210px]">
-                                {marginNote}
-                              </span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3">
-                            <CnPaymentBadge status={r.payment_status} />
-                          </td>
-                          <td className="px-4 py-3">
-                            {canRecordCost ? (
-                              <button
-                                type="button"
-                                onClick={() => setActualCostOrder(r)}
-                                className="h-8 px-3 rounded-lg border border-signal-blue/30 bg-signal-blue/5 text-signal-blue text-xs font-bold hover:bg-signal-blue/10"
-                              >
-                                {r.actual_cost_cny != null ||
-                                r.actual_domestic_shipping_cny != null
-                                  ? "Edit Actual Cost"
-                                  : "Record Actual Cost"}
-                              </button>
-                            ) : (
-                              <span className="text-xs text-ink-600/40">
-                                View only
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <DataTable
+              caption="CN purchase and finance"
+              columns={cnFinanceCols}
+              rows={pagedOrders}
+              rowKey={(r) => r.id}
+              loading={loading}
+              skeletonRows={6}
+              minWidth={1510}
+              onRowClick={(r, e) =>
+                openRow(e, `/cn-orders/${encodeURIComponent(r.order_id)}`)
+              }
+              emptyTitle="No finance records found."
+            />
             {!loading && filtered.length > 0 && (
               <PaginationBar
                 page={curPage}
@@ -52531,9 +52305,17 @@ function CnOrderDetailPage() {
   const [shipOpen, setShipOpen] = useState(false);
   const [changeTkTarget, setChangeTkTarget] = useState(null); // TK being changed
   const [pickTkOpen, setPickTkOpen] = useState(false);
+  // Edit Package (size / weight / dimensions) of a TK of this order — same
+  // modal as the Shipment page, available from Inbound Origin onward.
+  const [editPkgRow, setEditPkgRow] = useState(null); // full packages row
+  const [pickEditOpen, setPickEditOpen] = useState(false);
   // Staff can take the Cambodia shipping fee on behalf of the customer.
   const [feePay, setFeePay] = useState(null); // { tk, method: "wallet" | "cash" }
   const [feeBusy, setFeeBusy] = useState(false);
+  const [reqModal, setReqModal] = useState(null); // { tk, fee, cancel }
+  const [reqError, setReqError] = useState("");
+  const reqErrRef = useRef("");
+  const [cancelShipTk, setCancelShipTk] = useState(null); // TK to cancel request
   const [custBal, setCustBal] = useState(null);
   const canPayShip = hasPermission(user, "payment.manage");
   useEffect(() => {
@@ -52549,6 +52331,56 @@ function CnOrderDetailPage() {
       alive = false;
     };
   }, [row?.customer_id, canPayShip, parcels]);
+  // Staff asks the customer to pay the shipping fee BEFORE arrival (Inbound /
+  // Outbound …): the customer then gets the same payment box as at arrival.
+  async function requestShipPay(tk, cancel = false) {
+    if (!supabase || feeBusy) return false;
+    setFeeBusy(true);
+    setReqError("");
+    const { error } = await supabase
+      .from("packages")
+      .update({
+        ship_pay_requested_at: cancel ? null : new Date().toISOString(),
+        ship_pay_requested_by: cancel ? null : user?.name || "Staff",
+      })
+      .eq("tk", tk);
+    setFeeBusy(false);
+    if (error) {
+      const msg = /ship_pay_requested/.test(error.message || "")
+        ? "Run cn-ship-pay-request.sql in Supabase first."
+        : error.message || "Request failed";
+      reqErrRef.current = msg;
+      setReqError(msg);
+      return false;
+    }
+    emitCBToast(
+      "ok",
+      cancel ? "Request cancelled" : "Shipping payment requested",
+      cancel
+        ? `${tk} — the customer can no longer pay yet.`
+        : `${tk} — the customer can now pay the shipping fee.`,
+    );
+    load();
+    return true;
+  }
+  async function openEditPkg(tk) {
+    if (!supabase || !tk) return;
+    const { data: pkgRow, error: pkgErr } = await supabase
+      .from("packages")
+      .select("*")
+      .eq("tk", tk)
+      .maybeSingle();
+    if (pkgErr || !pkgRow)
+      return emitCBToast(
+        "err",
+        "Cannot edit package",
+        pkgErr?.message || `${tk} was not found.`,
+      );
+    // so the modal can resolve the Land / Sea / Air method of this CN order
+    CN_ORDER_NO_BY_ID[row.id] = row.order_id;
+    CN_SHIP_METHOD_BY_ID[row.id] = row.shipping_method || "";
+    setEditPkgRow(pkgRow);
+  }
   async function confirmFeePay() {
     if (!feePay || feeBusy) return;
     setFeeBusy(true);
@@ -52609,11 +52441,27 @@ function CnOrderDetailPage() {
           .eq("cn_order_id", data.id),
       ]);
       const tkByKey = new Map((pk || []).map((x) => [cnLinkKey(x.tk), x]));
+      // "Request Shipping Payment" flag (needs cn-ship-pay-request.sql;
+      // ignored while the column does not exist yet).
+      let reqByKey = new Map();
+      try {
+        const { data: rq, error: rqErr } = await supabase
+          .from("packages")
+          .select("tk,ship_pay_requested_at")
+          .eq("cn_order_id", data.id);
+        if (!rqErr)
+          reqByKey = new Map(
+            (rq || []).map((x) => [cnLinkKey(x.tk), x.ship_pay_requested_at]),
+          );
+      } catch (_e) {
+        /* optional */
+      }
       const merged = (p || []).map((x) => {
         const m = tkByKey.get(cnLinkKey(x.domestic_tracking));
         return m
           ? {
               ...x,
+              ship_pay_requested_at: reqByKey.get(cnLinkKey(m.tk)) || null,
               tk: m.tk,
               status: TK_TO_CN_STATUS[m.status] || m.status,
               tk_status: m.status,
@@ -52906,6 +52754,10 @@ function CnOrderDetailPage() {
   const terminal = CN_ORDER_TERMINAL_STATUSES.has(row.status);
   const next = cnNextStatus(row.status);
   const canAdvance = canPurchase && cnStatusCanAdvance(row.status);
+  // Completing the order requires the China → Cambodia shipping fee to be paid.
+  const shipFeeBlockDue =
+    next === "Complete Order" ? cnShipFeeSummary(parcels).due : 0;
+  const shipFeeBlocked = shipFeeBlockDue > 0.005;
   const purchaseFinance = cnPurchaseFinancials(row);
   const estMargin = purchaseFinance.preFreightMarginUsd;
   // TKs of this order that already reached Cambodia -> label can be printed.
@@ -53194,14 +53046,6 @@ function CnOrderDetailPage() {
             </div>
           </div>
           <div className="cn-detail-actions">
-            <CnStatusBadge
-              status={row.status}
-              partial={partial}
-              cancelled={cnIsCancelledUnpaid(row)}
-            />
-            {row.order_type !== "direct" && (
-              <CnPaymentBadge status={row.payment_status} />
-            )}
             <button
               type="button"
               onClick={() => setCnInvoiceOpen(true)}
@@ -53260,11 +53104,37 @@ function CnOrderDetailPage() {
             {canAdvance && (
               <button
                 onClick={() => setUpdateOpen(true)}
-                className="h-10 px-3 rounded-xl bg-blue-600 text-white text-sm font-bold"
+                disabled={shipFeeBlocked}
+                title={
+                  shipFeeBlocked
+                    ? "Shipping fee must be paid before completing the order"
+                    : undefined
+                }
+                className="h-10 px-3 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
               >
                 {next}
               </button>
             )}
+            {(() => {
+              const first = cnShipReqState(parcels, canPayShip).eligible[0];
+              return first ? (
+                <button
+                  type="button"
+                  disabled={feeBusy}
+                  onClick={() => {
+                    setReqError("");
+                    setReqModal({
+                      tk: first.tk,
+                      fee: first.fee,
+                      cancel: false,
+                    });
+                  }}
+                  className="h-10 px-3 rounded-xl bg-blue-600 text-white text-sm font-bold inline-flex items-center gap-1.5 hover:bg-blue-700 disabled:opacity-50"
+                >
+                  <Icons.Send size={15} /> Request Shipping Fee Payment
+                </button>
+              ) : null;
+            })()}
             <div className="relative">
               <button
                 type="button"
@@ -53287,7 +53157,7 @@ function CnOrderDetailPage() {
                   />
                   <div
                     role="menu"
-                    className="absolute right-0 top-11 z-40 w-60 rounded-xl border border-slate-200 bg-white p-1 shadow-lg"
+                    className="absolute right-0 top-11 z-40 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-xl"
                   >
                     <button
                       type="button"
@@ -53296,23 +53166,11 @@ function CnOrderDetailPage() {
                         setCnMenuOpen(false);
                         setHistoryOpen(true);
                       }}
-                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                      className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
                     >
-                      <Icons.History size={15} /> History
+                      <Icons.History size={18} /> History
                     </button>
-                    {canEdit && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          setCnMenuOpen(false);
-                          setCnImgOpen(true);
-                        }}
-                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                      >
-                        <Icons.Image size={15} /> Product Images
-                      </button>
-                    )}
+                    <div className="border-t border-slate-100" />
                     {hasPermission(user, "tk.edit") &&
                       parcels.some((x) => x.tk) && (
                         <button
@@ -53329,9 +53187,25 @@ function CnOrderDetailPage() {
                             if (tks.length === 1) setChangeTkTarget(tks[0]);
                             else setPickTkOpen(true);
                           }}
-                          className="flex w-full items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                          className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
                         >
-                          <Icons.ScanLine size={15} /> Change Tracking Number
+                          <Icons.ScanLine size={18} /> Change Tracking Number
+                        </button>
+                      )}
+                    {hasPermission(user, "tk.edit") &&
+                      cnEditableTks(parcels).length > 0 && (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setCnMenuOpen(false);
+                            const tks = cnEditableTks(parcels);
+                            if (tks.length === 1) openEditPkg(tks[0]);
+                            else setPickEditOpen(true);
+                          }}
+                          className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                        >
+                          <Icons.Package size={18} /> Edit Package
                         </button>
                       )}
                     {canEdit && !terminal && (
@@ -53340,31 +53214,35 @@ function CnOrderDetailPage() {
                         role="menuitem"
                         onClick={() => {
                           setCnMenuOpen(false);
-                          setShipOpen(true);
-                        }}
-                        className="flex w-full items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                      >
-                        <Icons.Truck size={15} /> Change Shipping Method
-                      </button>
-                    )}
-                    {canEdit && !terminal && (
-                      <button
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          setCnMenuOpen(false);
                           setEditOpen(true);
                         }}
-                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                        className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
                       >
-                        <Icons.Pencil size={15} /> Edit Order
+                        <Icons.Pencil size={18} /> Edit Order
                       </button>
                     )}
                     {(((canRefund || canEdit) &&
                       !terminal &&
                       cnCanRefund(row.status)) ||
-                      canDelete) && (
-                      <div className="my-1 border-t border-slate-100" />
+                      canDelete ||
+                      cnShipReqState(parcels, canPayShip).cancelable.length >
+                        0) && <div className="border-t border-slate-100" />}
+                    {cnShipReqState(parcels, canPayShip).cancelable.map(
+                      (r, _i, arr) => (
+                        <button
+                          key={r.tk}
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setCnMenuOpen(false);
+                            setCancelShipTk(r.tk);
+                          }}
+                          className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-red-600 hover:bg-red-50"
+                        >
+                          <Icons.Ban size={18} /> Cancel Shipping Payment
+                          {arr.length > 1 ? ` · ${r.tk}` : ""}
+                        </button>
+                      ),
                     )}
                     {(canRefund || canEdit) &&
                       !terminal &&
@@ -53377,9 +53255,9 @@ function CnOrderDetailPage() {
                             setCnMenuOpen(false);
                             setCancelOpen(true);
                           }}
-                          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-red-600 hover:bg-red-50"
+                          className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-red-600 hover:bg-red-50"
                         >
-                          <Icons.XCircle size={15} /> Cancel Order
+                          <Icons.XCircle size={18} /> Cancel Order
                         </button>
                       )}
                     {canRefund &&
@@ -53393,9 +53271,9 @@ function CnOrderDetailPage() {
                             setCnMenuOpen(false);
                             setRefundOpen(true);
                           }}
-                          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-red-600 hover:bg-red-50"
+                          className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-red-600 hover:bg-red-50"
                         >
-                          <Icons.RotateCcw size={15} /> Refund Order
+                          <Icons.RotateCcw size={18} /> Refund Order
                         </button>
                       )}
                     {canDelete && (
@@ -53406,9 +53284,9 @@ function CnOrderDetailPage() {
                           setCnMenuOpen(false);
                           handleDelete();
                         }}
-                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-red-600 hover:bg-red-50"
+                        className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-red-600 hover:bg-red-50"
                       >
-                        <Icons.Trash2 size={15} /> Delete Order
+                        <Icons.Trash2 size={18} /> Delete Order
                       </button>
                     )}
                   </div>
@@ -53466,10 +53344,19 @@ function CnOrderDetailPage() {
         </div>
         {canAdvance && next === "Complete Order" && (
           <div className="mb-5">
-            <div className="rounded-xl bg-emerald-50 text-emerald-800 px-3.5 py-2.5 text-sm">
-              The shipment has reached <b>Inbound Warehouse</b>. Confirm{" "}
-              <b>Complete Order</b> when the customer has received the goods.
-            </div>
+            {shipFeeBlocked ? (
+              <div className="rounded-xl bg-amber-50 text-amber-800 px-3.5 py-2.5 text-sm">
+                The shipment has reached <b>Inbound Warehouse</b>, but the
+                customer has not paid the <b>Shipping Fee</b> (
+                {money(shipFeeBlockDue)} due). <b>Complete Order</b> is
+                available only after the shipping fee is paid.
+              </div>
+            ) : (
+              <div className="rounded-xl bg-emerald-50 text-emerald-800 px-3.5 py-2.5 text-sm">
+                The shipment has reached <b>Inbound Warehouse</b>. Confirm{" "}
+                <b>Complete Order</b> when the customer has received the goods.
+              </div>
+            )}
           </div>
         )}
         <div
@@ -53861,6 +53748,23 @@ function CnOrderDetailPage() {
                             },
                           ]
                         : []),
+                      // Cambodia shipping fee set on the TK(s) at Inbound / Arrive.
+                      ...(() => {
+                        const sf = cnShipFeeSummary(parcels);
+                        if (!sf.rows.length) return [];
+                        return [
+                          ...(sf.rows.length > 1
+                            ? sf.rows.map((x) => ({
+                                label: `Shipping fee · ${x.tk}`,
+                                value: money(x.fee.total),
+                              }))
+                            : []),
+                          {
+                            label: "Total Shipping Fee",
+                            value: money(sf.total),
+                          },
+                        ];
+                      })(),
                     ].map((r) => (
                       <div
                         key={r.label}
@@ -53879,6 +53783,16 @@ function CnOrderDetailPage() {
                       {money(due)}
                     </span>
                   </div>
+                  {cnShipFeeSummary(parcels).rows.length > 0 && (
+                    <div className="mx-3 mb-3 flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                      <span className="font-bold text-slate-900">
+                        Grand Total
+                      </span>
+                      <span className="text-xl font-bold tabular-nums text-slate-900">
+                        {money(due + cnShipFeeSummary(parcels).total)}
+                      </span>
+                    </div>
+                  )}
                 </section>
               )}
 
@@ -53889,6 +53803,46 @@ function CnOrderDetailPage() {
                     title="Payment"
                     right={<CnPaymentBadge status={row.payment_status} />}
                   />
+                  {cnShipFeeSummary(parcels).rows.length > 0 && (
+                    <div className="divide-y divide-slate-100 border-t border-slate-100 px-5 text-sm">
+                      {cnShipFeeSummary(parcels).rows.map((r) => (
+                        <div
+                          key={r.tk}
+                          className="flex flex-wrap items-center justify-between gap-3 py-3"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-semibold text-blue-700">
+                              Shipping Fee
+                            </div>
+                            <div className="font-mono text-xs text-slate-500 break-all">
+                              {r.tk}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <b className="tabular-nums">{money(r.fee.total)}</b>
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${r.fee.state === "paid" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : r.requested || r.atArrival ? "border-amber-200 bg-amber-50 text-amber-700" : "border-slate-200 bg-slate-50 text-slate-600"}`}
+                            >
+                              {r.fee.state === "paid"
+                                ? "Paid"
+                                : r.requested || r.atArrival
+                                  ? "Requested"
+                                  : "Pending"}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                      <div className="flex items-center justify-between gap-3 py-3">
+                        <div className="font-semibold text-blue-700">
+                          Product Order
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <b className="tabular-nums">{money(due)}</b>
+                          <CnPaymentBadge status={row.payment_status} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   <div className="px-5 pb-3">
                     <CnInfoRows
                       items={[
@@ -53916,15 +53870,18 @@ function CnOrderDetailPage() {
                     <div className="px-4 py-3">
                       <div className="text-xs text-slate-500">Paid</div>
                       <div className="mt-0.5 text-xl font-bold tabular-nums text-slate-900">
-                        {money(paid)}
+                        {money(paid + cnShipFeeSummary(parcels).paid)}
                       </div>
                     </div>
                     <div className="border-l border-slate-200 px-4 py-3">
                       <div className="text-xs text-slate-500">Outstanding</div>
                       <div
-                        className={`mt-0.5 text-xl font-bold tabular-nums ${due - paid > 0.005 ? "text-red-600" : "text-slate-900"}`}
+                        className={`mt-0.5 text-xl font-bold tabular-nums ${Math.max(0, due - paid) + cnShipFeeSummary(parcels).due > 0.005 ? "text-red-600" : "text-slate-900"}`}
                       >
-                        {money(Math.max(0, due - paid))}
+                        {money(
+                          Math.max(0, due - paid) +
+                            cnShipFeeSummary(parcels).due,
+                        )}
                       </div>
                     </div>
                   </div>
@@ -53932,6 +53889,38 @@ function CnOrderDetailPage() {
               )}
             </div>
           )}
+          {reqModal && (
+            <RequestShipPayModal
+              pkg={{
+                tk: reqModal.tk,
+                customer_id: row.customer_id,
+                order_no: row.order_id,
+                cn_order_id: row.id,
+                customer: row.customer,
+              }}
+              fee={reqModal.fee}
+              cancel={reqModal.cancel}
+              busy={feeBusy}
+              error={reqError}
+              onClose={() => !feeBusy && setReqModal(null)}
+              onSubmit={async () => {
+                if (await requestShipPay(reqModal.tk, reqModal.cancel))
+                  setReqModal(null);
+              }}
+            />
+          )}
+          <ConfirmModal
+            open={!!cancelShipTk}
+            title="Cancel Shipping Payment"
+            message="Do you want to cancel the pending shipping payment?"
+            confirmLabel="Confirm"
+            danger
+            onClose={() => setCancelShipTk(null)}
+            onConfirm={async () => {
+              if (!(await requestShipPay(cancelShipTk, true)))
+                throw new Error(reqErrRef.current || "Request failed");
+            }}
+          />
           {cnShippingFeeRows(parcels).length > 0 && (
             <div className="cb-surface p-5">
               <h2 className="font-bold text-sm mb-3">
@@ -54263,6 +54252,42 @@ function CnOrderDetailPage() {
           </div>
         </CnModalShell>
       )}
+      {pickEditOpen && (
+        <CnModalShell
+          title="Edit Package"
+          subtitle="This order has several TKs. Which one do you want to edit?"
+          onClose={() => setPickEditOpen(false)}
+          onSubmit={(e) => e.preventDefault()}
+          submitLabel="Close"
+          busyLabel="Close"
+          submitDisabled
+        >
+          <div className="space-y-2">
+            {cnEditableTks(parcels).map((tk) => (
+              <button
+                key={tk}
+                type="button"
+                onClick={() => {
+                  setPickEditOpen(false);
+                  openEditPkg(tk);
+                }}
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-left font-mono text-sm font-semibold hover:bg-slate-50"
+              >
+                {tk}
+              </button>
+            ))}
+          </div>
+        </CnModalShell>
+      )}
+      <EditPackageModal
+        open={!!editPkgRow}
+        pkg={editPkgRow}
+        onClose={() => {
+          setEditPkgRow(null);
+          load();
+          refetchPackages?.();
+        }}
+      />
       <ChangeTkNumberModal
         open={!!changeTkTarget}
         pkg={
@@ -58793,20 +58818,17 @@ function ReportsPage() {
 
 // ============================================================
 // SHIPPING PAYMENT + WALLET (see supabase_wallet_payment.sql)
-// Tracking stage stays "Inbound Warehouse"; the DISPLAYED status is
-// "Pending Shipping Payment" until the fee is paid, then "Shipping Paid".
+// Tracking stage is always shown as-is; payment is shown as Paid / Unpaid on
+// the shipping fee itself (same as a CN Order), not as a status.
 // ============================================================
 const PAY_STATUS = {
   PENDING: "Pending Shipping Payment",
   PAID: "Shipping Paid",
 };
+// A TK always shows its real stage (like a CN Order). Whether the shipping fee
+// is paid is shown by the Paid / Unpaid badge on the fee itself, not as a status.
 function pkgDisplayStatus(p) {
-  const s = p?.status;
-  if (s !== "Inbound Warehouse") return s;
-  const f = shippingFeeOf(p);
-  if (f.state === "due") return PAY_STATUS.PENDING;
-  if (f.state === "paid" && f.total > 0) return PAY_STATUS.PAID;
-  return s;
+  return p?.status;
 }
 const walletErr = (e) =>
   /function .* does not exist|wallet_transactions|balance|paid_at|schema cache/i.test(
@@ -59910,6 +59932,285 @@ function CnInvoiceModal({ row, onClose }) {
   );
 }
 
+// "Request Shipping Payment" for a Shipment / Parse Link TK. Lives in the TK
+// Detail header next to Actions; opens a confirm form first. After Submit the
+// customer can pay the (already visible) shipping fee from their wallet.
+// Needs cn-ship-pay-request.sql (packages.ship_pay_requested_at).
+const SHIP_PAY_EVENT = "ship-pay-request-changed";
+
+function RequestShipPayModal({
+  pkg,
+  fee,
+  cancel,
+  busy,
+  error,
+  onClose,
+  onSubmit,
+}) {
+  const [cust, setCust] = useState(null);
+  useEffect(() => {
+    if (!supabase || !pkg?.customer_id) return undefined;
+    let alive = true;
+    supabase
+      .from("customers")
+      .select("customer_code,name,phone")
+      .eq("id", pkg.customer_id)
+      .maybeSingle()
+      .then(
+        ({ data }) => alive && setCust(data || null),
+        () => {},
+      );
+    return () => {
+      alive = false;
+    };
+  }, [pkg?.customer_id]);
+  const row = (label, value) => (
+    <div className="flex items-center justify-between gap-4 py-3 border-b border-mist-100 last:border-0">
+      <span className="text-sm text-ink-600/70">{label}</span>
+      <span className="text-sm font-semibold text-ink-900 text-right break-all">
+        {value}
+      </span>
+    </div>
+  );
+  return (
+    <AppModal
+      title={cancel ? "Cancel Payment Request" : "Request Payment"}
+      maxW="max-w-lg"
+      onClose={onClose}
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit();
+      }}
+      busy={busy}
+      error={error}
+      submitLabel={cancel ? "Confirm" : "Submit"}
+      busyLabel="Saving..."
+      submitTone={cancel ? "danger" : "primary"}
+    >
+      <div className="flex items-center gap-3 rounded-md border border-mist-200 p-4 mb-4">
+        <span className="w-11 h-11 rounded-lg bg-signal-blue text-white flex items-center justify-center shrink-0">
+          <Icons.CircleDollarSign size={22} />
+        </span>
+        <div>
+          <div className="text-xs text-ink-600/60">Total Amount</div>
+          <div className="font-display font-bold text-2xl text-ink-900">
+            {money(fee.due)}
+          </div>
+        </div>
+      </div>
+      <div className="rounded-md border border-mist-200 px-4 mb-4">
+        <h4 className="font-display font-bold text-sm text-signal-blue pt-3">
+          Information
+        </h4>
+        {row(
+          "Type",
+          <span className="rounded-full bg-amber-50 border border-amber-200 px-2.5 py-0.5 text-xs font-semibold text-amber-700">
+            {pkgType(pkg)}
+          </span>,
+        )}
+        {row("TK", pkg.tk)}
+        {row("Order ID", pkg.order_no || pkg.order || "—")}
+        {row(
+          "Name",
+          cust ? (
+            <>
+              {cust.name}{" "}
+              <span className="text-signal-blue">({cust.customer_code})</span>
+            </>
+          ) : (
+            pkg.customer || "—"
+          ),
+        )}
+        {row("Phone Number", cust?.phone || "—")}
+      </div>
+      <h4 className="font-display font-bold text-sm text-ink-900 mb-2">
+        Payment Options
+      </h4>
+      <div className="rounded-md border-2 border-signal-blue bg-mist-50 p-4">
+        <div className="flex items-center gap-2 font-semibold text-ink-900 mb-1.5">
+          <Icons.Wallet size={20} className="text-signal-blue" />
+          Wallet
+        </div>
+        <p className="text-sm text-ink-600/75">
+          {cancel
+            ? "The customer will no longer be able to pay this shipping fee until you request payment again. They can still see the fee."
+            : "This opens the shipping fee for payment: the customer will be able to pay it through their wallet from their account."}
+        </p>
+      </div>
+    </AppModal>
+  );
+}
+
+// Shared state for the "Request Shipping Payment" flow. Used by the header
+// button (RequestShipPayControl) and by the "Cancel Shipping Payment" item in
+// the Actions menu (ShipPayCancelMenuItem). The module cache stops the menu
+// item from flickering in after a fetch every time the menu opens.
+const SHIP_PAY_CANCEL_EVENT = "ship-pay-cancel-open";
+const shipPayReqCache = new Map(); // tk -> ship_pay_requested_at
+
+function useShipPayRequest(pkg, stage) {
+  const { user } = useAuth();
+  const canPay = hasPermission(user, "payment.manage");
+  const fee = shippingFeeOf(pkg);
+  const [reqAt, setReqAt] = useState(
+    () => shipPayReqCache.get(pkg?.tk) ?? null,
+  );
+  const [busy, setBusy] = useState(false);
+  const [tick, setTick] = useState(0);
+  const put = (v) => {
+    if (pkg?.tk) shipPayReqCache.set(pkg.tk, v);
+    setReqAt(v);
+  };
+  useEffect(() => {
+    if (!supabase || !pkg?.tk) return undefined;
+    let alive = true;
+    supabase
+      .from("packages")
+      .select("ship_pay_requested_at")
+      .eq("tk", pkg.tk)
+      .maybeSingle()
+      .then(
+        ({ data, error: e }) => {
+          if (alive && !e) put(data?.ship_pay_requested_at || null);
+        },
+        () => {},
+      );
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pkg?.tk, tick]);
+  useEffect(() => {
+    const h = () => setTick((t) => t + 1);
+    window.addEventListener(SHIP_PAY_EVENT, h);
+    return () => window.removeEventListener(SHIP_PAY_EVENT, h);
+  }, []);
+
+  // Same rule as a CN Order: from Arrived Destination on the customer can pay
+  // by themselves, so no "Request Shipping Fee Payment" is needed.
+  const reached =
+    PACKAGE_STAGES.indexOf(stage) >=
+    PACKAGE_STAGES.indexOf("Arrived Destination");
+  // Only while there is an unpaid fee and the customer cannot pay on their own
+  // yet (before the goods arrive in Cambodia).
+  const visible = canPay && !reached && fee.state === "due" && fee.total > 0;
+
+  // Returns "" on success, otherwise the error message.
+  async function setRequested(cancel) {
+    if (busy) return "";
+    setBusy(true);
+    const { error: e } = await supabase
+      .from("packages")
+      .update({
+        ship_pay_requested_at: cancel ? null : new Date().toISOString(),
+        ship_pay_requested_by: cancel ? null : user?.name || "Staff",
+      })
+      .eq("tk", pkg.tk);
+    setBusy(false);
+    if (e)
+      return /ship_pay_requested/.test(e.message || "")
+        ? "Run cn-ship-pay-request.sql in Supabase first."
+        : e.message || "Request failed";
+    emitCBToast(
+      "ok",
+      cancel ? "Request cancelled" : "Shipping payment requested",
+      cancel
+        ? `${pkg.tk} — the customer can no longer pay yet.`
+        : `${pkg.tk} — the customer can now pay the shipping fee.`,
+    );
+    put(cancel ? null : new Date().toISOString());
+    window.dispatchEvent(new Event(SHIP_PAY_EVENT));
+    window.dispatchEvent(new Event("focus"));
+    return "";
+  }
+  return { fee, reqAt, visible, busy, setRequested };
+}
+
+// Header button: only "Request Shipping Fee Payment". Once requested the
+// button goes away and "Cancel Shipping Payment" lives in the Actions menu,
+// which opens the confirm dialog rendered here (outside the menu).
+function RequestShipPayControl({ pkg, stage }) {
+  const rq = useShipPayRequest(pkg, stage);
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState("");
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  useEffect(() => {
+    const h = (e) => {
+      if (e.detail?.tk === pkg?.tk) setConfirmCancel(true);
+    };
+    window.addEventListener(SHIP_PAY_CANCEL_EVENT, h);
+    return () => window.removeEventListener(SHIP_PAY_CANCEL_EVENT, h);
+  }, [pkg?.tk]);
+  if (!rq.visible) return null;
+
+  return (
+    <>
+      {!rq.reqAt && (
+        <button
+          type="button"
+          onClick={() => {
+            setError("");
+            setOpen(true);
+          }}
+          className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-md bg-signal-blue text-white hover:bg-signal-blue/90"
+        >
+          <Icons.Send size={14} />
+          Request Shipping Fee Payment
+        </button>
+      )}
+      {open && !rq.reqAt && (
+        <RequestShipPayModal
+          pkg={pkg}
+          fee={rq.fee}
+          cancel={false}
+          busy={rq.busy}
+          error={error}
+          onClose={() => !rq.busy && setOpen(false)}
+          onSubmit={async () => {
+            const msg = await rq.setRequested(false);
+            if (msg) setError(msg);
+            else setOpen(false);
+          }}
+        />
+      )}
+      <ConfirmModal
+        open={confirmCancel}
+        title="Cancel Shipping Payment"
+        message="Do you want to cancel the pending shipping payment?"
+        confirmLabel="Confirm"
+        danger
+        onClose={() => setConfirmCancel(false)}
+        onConfirm={async () => {
+          const msg = await rq.setRequested(true);
+          if (msg) throw new Error(msg);
+        }}
+      />
+    </>
+  );
+}
+
+// "Cancel Shipping Payment" entry for the Actions dropdown (red). Only shows
+// while a payment request is pending.
+function ShipPayCancelMenuItem({ pkg, stage, onPicked }) {
+  const rq = useShipPayRequest(pkg, stage);
+  if (!rq.visible || !rq.reqAt) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        onPicked?.();
+        window.dispatchEvent(
+          new CustomEvent(SHIP_PAY_CANCEL_EVENT, { detail: { tk: pkg.tk } }),
+        );
+      }}
+      className="w-full flex items-center gap-3 whitespace-nowrap px-4 py-3 text-sm font-semibold text-red-600 hover:bg-red-50 text-left border-t border-slate-100"
+    >
+      <Icons.Ban size={18} />
+      Cancel Shipping Payment
+    </button>
+  );
+}
+
 function PayShippingCard({ pkg, stage }) {
   const { user } = useAuth();
   const canPay = hasPermission(user, "payment.manage");
@@ -59917,6 +60218,7 @@ function PayShippingCard({ pkg, stage }) {
   const [bal, setBal] = useState(null);
   const [confirm, setConfirm] = useState(null); // "wallet" | "cash"
   const [tick, setTick] = useState(0);
+  const [reqAt, setReqAt] = useState(null); // "Request Shipping Payment" time
   const company = useSystemSettings()?.company;
   const [printing, setPrinting] = useState(false);
   const [invoicePreview, setInvoicePreview] = useState(null);
@@ -59951,10 +60253,38 @@ function PayShippingCard({ pkg, stage }) {
     };
   }, [pkg?.customer_id, tick, pkg?.paid_amount]);
 
+  // Needs cn-ship-pay-request.sql; silently ignored until the column exists.
+  useEffect(() => {
+    if (!supabase || !pkg?.tk) return undefined;
+    let alive = true;
+    supabase
+      .from("packages")
+      .select("ship_pay_requested_at")
+      .eq("tk", pkg.tk)
+      .maybeSingle()
+      .then(
+        ({ data, error }) => {
+          if (alive && !error) setReqAt(data?.ship_pay_requested_at || null);
+        },
+        () => {},
+      );
+    return () => {
+      alive = false;
+    };
+  }, [pkg?.tk, tick]);
+  useEffect(() => {
+    const h = () => setTick((t) => t + 1);
+    window.addEventListener(SHIP_PAY_EVENT, h);
+    return () => window.removeEventListener(SHIP_PAY_EVENT, h);
+  }, []);
+
   const reached =
     PACKAGE_STAGES.indexOf(stage) >=
-    PACKAGE_STAGES.indexOf("Inbound Warehouse");
-  if (!reached || fee.state === "none" || !(fee.total > 0)) return null;
+    PACKAGE_STAGES.indexOf("Arrived Destination");
+  // The fee is visible from Inbound on; it is payable (by the customer and by
+  // staff here) from Arrived Destination on OR once payment was requested.
+  if (fee.state === "none" || !(fee.total > 0)) return null;
+  const payable = reached || !!reqAt;
 
   const pending = fee.state === "due";
   async function pay(method) {
@@ -59965,7 +60295,7 @@ function PayShippingCard({ pkg, stage }) {
     if (error) throw new Error(walletErr(error));
     emitCBToast(
       "ok",
-      "Shipping Paid",
+      "Shipping fee paid",
       `${pkg.tk} shipping fee marked as paid.`,
     );
     setTick((t) => t + 1);
@@ -59979,7 +60309,7 @@ function PayShippingCard({ pkg, stage }) {
         Shipping Payment
       </h2>
       <div className="mb-3">
-        <StatusBadge label={pending ? PAY_STATUS.PENDING : PAY_STATUS.PAID} />
+        <CnPaymentBadge status={pending ? "Unpaid" : "Paid"} />
       </div>
       <div className="space-y-1.5 text-sm">
         <div className="flex justify-between">
@@ -60030,7 +60360,16 @@ function PayShippingCard({ pkg, stage }) {
         <Icons.Printer size={15} />
         {printing ? "Preparing…" : "Print Invoice"}
       </button>
-      {pending && canPay && (
+      {pending && !reached && (
+        <p
+          className={`mt-3 rounded-md px-3 py-2 text-xs ${reqAt ? "bg-amber-50 text-amber-700" : "bg-slate-50 text-slate-500"}`}
+        >
+          {reqAt
+            ? `Payment requested · ${cdDate(reqAt)} — the customer can pay now.`
+            : "Customer can see this fee but cannot pay yet. Use “Request Shipping Fee Payment” at the top of the page."}
+        </p>
+      )}
+      {pending && canPay && payable && (
         <div className="mt-2 space-y-2">
           <button
             type="button"
@@ -60060,8 +60399,8 @@ function PayShippingCard({ pkg, stage }) {
         title={confirm === "wallet" ? "Pay from wallet?" : "Mark as Paid?"}
         message={
           confirm === "wallet"
-            ? `${money(fee.due)} will be deducted from the customer's wallet and ${pkg.tk} becomes "Shipping Paid".`
-            : `${pkg.tk} becomes "Shipping Paid" without deducting the wallet (use this when payment was received in cash or by transfer).`
+            ? `${money(fee.due)} will be deducted from the customer's wallet and the shipping fee of ${pkg.tk} is marked as paid.`
+            : `The shipping fee of ${pkg.tk} is marked as paid without deducting the wallet (use this when payment was received in cash or by transfer).`
         }
         confirmLabel={confirm === "wallet" ? "Pay" : "Mark Paid"}
         onConfirm={() => pay(confirm)}
@@ -60537,166 +60876,129 @@ function CustomerAddressCreateModal({ customer, warehouses, onClose, onDone }) {
   }
 
   return (
-    <div
-      className="fixed inset-0 z-[80] bg-slate-900/40 flex items-center justify-center p-4"
-      onMouseDown={onClose}
+    <AppModal
+      title="Create Customer Location"
+      subtitle={`${customer.customer_code} · ${customer.name}`}
+      maxW="max-w-2xl"
+      onClose={onClose}
+      onSubmit={submit}
+      busy={busy}
+      error={error}
+      submitLabel="Create Location"
+      busyLabel="Creating…"
     >
-      <form
-        onSubmit={submit}
-        onMouseDown={(e) => e.stopPropagation()}
-        className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-2xl border border-slate-200"
-      >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
-          <div>
-            <div className="text-lg font-extrabold text-slate-900">
-              Create Customer Location
-            </div>
-            <div className="text-xs text-slate-500 mt-0.5">
-              {customer.customer_code} · {customer.name}
-            </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="text-xs font-bold text-slate-600">
+          Location Name *
+          <input
+            value={form.label}
+            onChange={(e) => set("label", e.target.value)}
+            placeholder="Home / Office / Warehouse"
+            className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="text-xs font-bold text-slate-600">
+          Recipient Name
+          <input
+            value={form.recipient_name}
+            onChange={(e) => set("recipient_name", e.target.value)}
+            className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="text-xs font-bold text-slate-600">
+          Phone
+          <input
+            value={form.phone}
+            onChange={(e) => set("phone", e.target.value)}
+            className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="text-xs font-bold text-slate-600">
+          Cambodia Branch *
+          <select
+            value={form.kh_branch_code}
+            onChange={(e) => {
+              const v = e.target.value;
+              const b = branches.find((x) => x.code === v);
+              setForm((x) => ({
+                ...x,
+                kh_branch_code: v,
+                province: x.province || b?.province || "",
+                district: x.district || b?.district || "",
+                commune: x.commune || b?.commune || "",
+                address: x.address || b?.address || b?.name || "",
+              }));
+            }}
+            className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+          >
+            <option value="">Select branch</option>
+            {branches.map((b) => (
+              <option key={b.code} value={b.code}>
+                {b.code} · {b.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-xs font-bold text-slate-600">
+          Province
+          <input
+            value={form.province}
+            onChange={(e) => set("province", e.target.value)}
+            className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="text-xs font-bold text-slate-600">
+          District
+          <input
+            value={form.district}
+            onChange={(e) => set("district", e.target.value)}
+            className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="text-xs font-bold text-slate-600">
+          Commune
+          <input
+            value={form.commune}
+            onChange={(e) => set("commune", e.target.value)}
+            className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="sm:col-span-2 text-xs font-bold text-slate-600">
+          Detailed Address
+          <textarea
+            value={form.address}
+            onChange={(e) => set("address", e.target.value)}
+            rows={3}
+            className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="sm:col-span-2 text-xs font-bold text-slate-600">
+          Note
+          <textarea
+            value={form.additional_info}
+            onChange={(e) => set("additional_info", e.target.value)}
+            rows={2}
+            className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="sm:col-span-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
+          <input
+            type="checkbox"
+            checked={form.is_default}
+            onChange={(e) => set("is_default", e.target.checked)}
+          />{" "}
+          Set as Primary Location
+        </label>
+        {selectedBranch && (
+          <div className="sm:col-span-2 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">
+            Receiving branch:{" "}
+            <b>
+              {selectedBranch.code} · {selectedBranch.name}
+            </b>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-9 w-9 grid place-items-center rounded-lg hover:bg-slate-100 text-slate-500"
-          >
-            <Icons.X size={18} />
-          </button>
-        </div>
-        <div className="p-5 grid gap-4 sm:grid-cols-2">
-          {error && (
-            <div className="sm:col-span-2 rounded-xl bg-red-50 text-red-700 px-3 py-2 text-sm">
-              {error}
-            </div>
-          )}
-          <label className="text-xs font-bold text-slate-600">
-            Location Name *
-            <input
-              value={form.label}
-              onChange={(e) => set("label", e.target.value)}
-              placeholder="Home / Office / Warehouse"
-              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="text-xs font-bold text-slate-600">
-            Recipient Name
-            <input
-              value={form.recipient_name}
-              onChange={(e) => set("recipient_name", e.target.value)}
-              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="text-xs font-bold text-slate-600">
-            Phone
-            <input
-              value={form.phone}
-              onChange={(e) => set("phone", e.target.value)}
-              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="text-xs font-bold text-slate-600">
-            Cambodia Branch *
-            <select
-              value={form.kh_branch_code}
-              onChange={(e) => {
-                const v = e.target.value;
-                const b = branches.find((x) => x.code === v);
-                setForm((x) => ({
-                  ...x,
-                  kh_branch_code: v,
-                  province: x.province || b?.province || "",
-                  district: x.district || b?.district || "",
-                  commune: x.commune || b?.commune || "",
-                  address: x.address || b?.address || b?.name || "",
-                }));
-              }}
-              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
-            >
-              <option value="">Select branch</option>
-              {branches.map((b) => (
-                <option key={b.code} value={b.code}>
-                  {b.code} · {b.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-xs font-bold text-slate-600">
-            Province
-            <input
-              value={form.province}
-              onChange={(e) => set("province", e.target.value)}
-              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="text-xs font-bold text-slate-600">
-            District
-            <input
-              value={form.district}
-              onChange={(e) => set("district", e.target.value)}
-              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="text-xs font-bold text-slate-600">
-            Commune
-            <input
-              value={form.commune}
-              onChange={(e) => set("commune", e.target.value)}
-              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="sm:col-span-2 text-xs font-bold text-slate-600">
-            Detailed Address
-            <textarea
-              value={form.address}
-              onChange={(e) => set("address", e.target.value)}
-              rows={3}
-              className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="sm:col-span-2 text-xs font-bold text-slate-600">
-            Note
-            <textarea
-              value={form.additional_info}
-              onChange={(e) => set("additional_info", e.target.value)}
-              rows={2}
-              className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="sm:col-span-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
-            <input
-              type="checkbox"
-              checked={form.is_default}
-              onChange={(e) => set("is_default", e.target.checked)}
-            />{" "}
-            Set as Primary Location
-          </label>
-          {selectedBranch && (
-            <div className="sm:col-span-2 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">
-              Receiving branch:{" "}
-              <b>
-                {selectedBranch.code} · {selectedBranch.name}
-              </b>
-            </div>
-          )}
-        </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-10 px-4 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={busy}
-            className="h-10 px-4 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-60"
-          >
-            {busy ? "Creating…" : "Create Location"}
-          </button>
-        </div>
-      </form>
-    </div>
+        )}
+      </div>
+    </AppModal>
   );
 }
 
@@ -60789,154 +61091,117 @@ function CustomerAddressEditModal({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-[80] bg-slate-900/40 flex items-center justify-center p-4"
-      onMouseDown={onClose}
+    <AppModal
+      title="Edit Customer Location"
+      subtitle={`${customer.customer_code} · ${customer.name}`}
+      maxW="max-w-2xl"
+      onClose={onClose}
+      onSubmit={submit}
+      busy={busy}
+      error={error}
+      submitLabel="Update Location"
+      busyLabel="Updating…"
     >
-      <form
-        onSubmit={submit}
-        onMouseDown={(e) => e.stopPropagation()}
-        className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl bg-white shadow-2xl border border-slate-200"
-      >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
-          <div>
-            <div className="text-lg font-extrabold text-slate-900">
-              Edit Customer Location
-            </div>
-            <div className="text-xs text-slate-500 mt-0.5">
-              {customer.customer_code} · {customer.name}
-            </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <label className="text-xs font-bold text-slate-600">
+          Location Name *
+          <input
+            value={form.label}
+            onChange={(e) => set("label", e.target.value)}
+            className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="text-xs font-bold text-slate-600">
+          Recipient Name
+          <input
+            value={form.recipient_name}
+            onChange={(e) => set("recipient_name", e.target.value)}
+            className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="text-xs font-bold text-slate-600">
+          Phone
+          <input
+            value={form.phone}
+            onChange={(e) => set("phone", e.target.value)}
+            className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="text-xs font-bold text-slate-600">
+          Cambodia Branch *
+          <select
+            value={form.kh_branch_code}
+            onChange={(e) => set("kh_branch_code", e.target.value)}
+            className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+          >
+            <option value="">Select branch</option>
+            {branches.map((b) => (
+              <option key={b.code} value={b.code}>
+                {b.code} · {b.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-xs font-bold text-slate-600">
+          Province
+          <input
+            value={form.province}
+            onChange={(e) => set("province", e.target.value)}
+            className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="text-xs font-bold text-slate-600">
+          District
+          <input
+            value={form.district}
+            onChange={(e) => set("district", e.target.value)}
+            className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="text-xs font-bold text-slate-600">
+          Commune
+          <input
+            value={form.commune}
+            onChange={(e) => set("commune", e.target.value)}
+            className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="sm:col-span-2 text-xs font-bold text-slate-600">
+          Detailed Address
+          <textarea
+            value={form.address}
+            onChange={(e) => set("address", e.target.value)}
+            rows={3}
+            className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="sm:col-span-2 text-xs font-bold text-slate-600">
+          Note
+          <textarea
+            value={form.additional_info}
+            onChange={(e) => set("additional_info", e.target.value)}
+            rows={2}
+            className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
+          />
+        </label>
+        <label className="sm:col-span-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
+          <input
+            type="checkbox"
+            checked={form.is_default}
+            onChange={(e) => set("is_default", e.target.checked)}
+          />{" "}
+          Set as Primary Location
+        </label>
+        {selectedBranch && (
+          <div className="sm:col-span-2 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">
+            Receiving branch:{" "}
+            <b>
+              {selectedBranch.code} · {selectedBranch.name}
+            </b>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-9 w-9 grid place-items-center rounded-lg hover:bg-slate-100 text-slate-500"
-          >
-            <Icons.X size={18} />
-          </button>
-        </div>
-        <div className="p-5 grid gap-4 sm:grid-cols-2">
-          {error && (
-            <div className="sm:col-span-2 rounded-xl bg-red-50 text-red-700 px-3 py-2 text-sm">
-              {error}
-            </div>
-          )}
-          <label className="text-xs font-bold text-slate-600">
-            Location Name *
-            <input
-              value={form.label}
-              onChange={(e) => set("label", e.target.value)}
-              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="text-xs font-bold text-slate-600">
-            Recipient Name
-            <input
-              value={form.recipient_name}
-              onChange={(e) => set("recipient_name", e.target.value)}
-              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="text-xs font-bold text-slate-600">
-            Phone
-            <input
-              value={form.phone}
-              onChange={(e) => set("phone", e.target.value)}
-              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="text-xs font-bold text-slate-600">
-            Cambodia Branch *
-            <select
-              value={form.kh_branch_code}
-              onChange={(e) => set("kh_branch_code", e.target.value)}
-              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
-            >
-              <option value="">Select branch</option>
-              {branches.map((b) => (
-                <option key={b.code} value={b.code}>
-                  {b.code} · {b.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-xs font-bold text-slate-600">
-            Province
-            <input
-              value={form.province}
-              onChange={(e) => set("province", e.target.value)}
-              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="text-xs font-bold text-slate-600">
-            District
-            <input
-              value={form.district}
-              onChange={(e) => set("district", e.target.value)}
-              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="text-xs font-bold text-slate-600">
-            Commune
-            <input
-              value={form.commune}
-              onChange={(e) => set("commune", e.target.value)}
-              className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="sm:col-span-2 text-xs font-bold text-slate-600">
-            Detailed Address
-            <textarea
-              value={form.address}
-              onChange={(e) => set("address", e.target.value)}
-              rows={3}
-              className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="sm:col-span-2 text-xs font-bold text-slate-600">
-            Note
-            <textarea
-              value={form.additional_info}
-              onChange={(e) => set("additional_info", e.target.value)}
-              rows={2}
-              className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500"
-            />
-          </label>
-          <label className="sm:col-span-2 flex items-center gap-2 text-sm font-semibold text-slate-700">
-            <input
-              type="checkbox"
-              checked={form.is_default}
-              onChange={(e) => set("is_default", e.target.checked)}
-            />{" "}
-            Set as Primary Location
-          </label>
-          {selectedBranch && (
-            <div className="sm:col-span-2 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">
-              Receiving branch:{" "}
-              <b>
-                {selectedBranch.code} · {selectedBranch.name}
-              </b>
-            </div>
-          )}
-        </div>
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-slate-200">
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-10 px-4 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-100"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={busy}
-            className="h-10 px-4 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-60"
-          >
-            {busy ? "Updating…" : "Update Location"}
-          </button>
-        </div>
-      </form>
-    </div>
+        )}
+      </div>
+    </AppModal>
   );
 }
 
@@ -62141,13 +62406,7 @@ function CustomerDetailPage() {
   const orderStatusGroups = [
     {
       name: "Order & Payment",
-      items: [
-        "Waiting Order Payment",
-        "Approve Purchase",
-        "Purchased",
-        "Pending Shipping Payment",
-        "Shipping Paid",
-      ],
+      items: ["Waiting Order Payment", "Approve Purchase", "Purchased"],
     },
     {
       name: "Origin & Transit",
@@ -64445,6 +64704,109 @@ function WalletTopUpPage() {
     );
   };
 
+  // Columns for the top-up list (rendered by the shared DataTable).
+  const wtuCols = [
+    {
+      key: "date",
+      label: "Date",
+      render: (r) => (
+        <>
+          <div className="font-semibold text-slate-800">
+            {cdDate(r.created_at)}
+          </div>
+          <div className="text-[11px] text-slate-400">
+            {new Date(r.created_at).toLocaleTimeString("en-US", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+          </div>
+        </>
+      ),
+    },
+    {
+      key: "customer_code",
+      label: "Customer ID",
+      render: (r) =>
+        r._c?.customer_code ? (
+          <Link
+            to={`/customers/${encodeURIComponent(r._c.customer_code)}`}
+            className="font-semibold text-blue-700 hover:underline"
+          >
+            {r._c.customer_code}
+          </Link>
+        ) : (
+          "—"
+        ),
+    },
+    {
+      key: "customer_name",
+      label: "Customer Name",
+      render: (r) => (
+        <span className="text-slate-800">{r._c?.name || "—"}</span>
+      ),
+    },
+    {
+      key: "amount",
+      label: "Amount",
+      numeric: true,
+      render: (r) => (
+        <span className="font-bold">
+          {r.type === "top_up_reversal" ? (
+            <span className="text-red-600">
+              −{money(Math.abs(Number(r.amount) || 0))}
+            </span>
+          ) : r.reversed_at ? (
+            <span className="text-slate-400 line-through">
+              +{money(Math.abs(Number(r.amount) || 0))}
+            </span>
+          ) : (
+            <span className="text-emerald-600">
+              +{money(Math.abs(Number(r.amount) || 0))}
+            </span>
+          )}
+          {r.type === "top_up_reversal" && (
+            <span className="ml-2 rounded-md bg-red-50 px-1.5 py-0.5 text-[10px] font-bold uppercase text-red-600">
+              Reversal
+            </span>
+          )}
+          {r.reversed_at && (
+            <span className="ml-2 rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-500">
+              Reversed
+            </span>
+          )}
+          {!r.reversed_at && Number(r.reversed_amount) > 0 && (
+            <span className="ml-2 rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
+              −{money(r.reversed_amount)} reversed
+            </span>
+          )}
+        </span>
+      ),
+    },
+    {
+      key: "balance_after",
+      label: "Balance After",
+      numeric: true,
+      render: (r) => (
+        <span className="text-slate-700">
+          {r.balance_after != null ? moneyS(r.balance_after) : "—"}
+        </span>
+      ),
+    },
+    {
+      key: "note",
+      label: "Note",
+      wrap: true,
+      render: (r) => <span className="text-slate-500">{r.note || "—"}</span>,
+    },
+    {
+      key: "created_by",
+      label: "By",
+      render: (r) => (
+        <span className="text-slate-500">{r.created_by || "—"}</span>
+      ),
+    },
+  ];
+
   return (
     <div className="mx-auto max-w-7xl">
       <h1 className="cb-page-title mb-5 text-2xl font-extrabold text-slate-900">
@@ -64562,137 +64924,30 @@ function WalletTopUpPage() {
           </div>
         </div>
 
-        <div className="overflow-x-auto rounded-xl border border-slate-200">
-          <table className="w-full min-w-[820px] text-sm">
-            <thead>
-              <tr className="bg-slate-50 text-left text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                {[
-                  "Date",
-                  "Customer ID",
-                  "Customer Name",
-                  "Amount",
-                  "Balance After",
-                  "Note",
-                  "By",
-                  "",
-                ].map((h) => (
-                  <th key={h} className="px-4 py-3">
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {loading && rows.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={8}
-                    className="px-4 py-10 text-center text-slate-400"
-                  >
-                    Loading…
-                  </td>
-                </tr>
-              )}
-              {error && (
-                <tr>
-                  <td
-                    colSpan={8}
-                    className="px-4 py-10 text-center font-semibold text-red-600"
-                  >
-                    {error}
-                  </td>
-                </tr>
-              )}
-              {!loading && !error && shown.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={8}
-                    className="px-4 py-10 text-center text-slate-400"
-                  >
-                    No top-ups found.
-                  </td>
-                </tr>
-              )}
-              {shown.map((r) => (
-                <tr key={r.id} className="hover:bg-slate-50/70">
-                  <td className="px-4 py-3">
-                    <div className="font-semibold text-slate-800">
-                      {cdDate(r.created_at)}
-                    </div>
-                    <div className="text-[11px] text-slate-400">
-                      {new Date(r.created_at).toLocaleTimeString("en-US", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 font-semibold text-blue-700">
-                    {r._c?.customer_code ? (
-                      <Link
-                        to={`/customers/${encodeURIComponent(r._c.customer_code)}`}
-                        className="hover:underline"
-                      >
-                        {r._c.customer_code}
-                      </Link>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-slate-800">
-                    {r._c?.name || "—"}
-                  </td>
-                  <td className="px-4 py-3 font-bold">
-                    {r.type === "top_up_reversal" ? (
-                      <span className="text-red-600">
-                        −{money(Math.abs(Number(r.amount) || 0))}
-                      </span>
-                    ) : r.reversed_at ? (
-                      <span className="text-slate-400 line-through">
-                        +{money(Math.abs(Number(r.amount) || 0))}
-                      </span>
-                    ) : (
-                      <span className="text-emerald-600">
-                        +{money(Math.abs(Number(r.amount) || 0))}
-                      </span>
-                    )}
-                    {r.type === "top_up_reversal" && (
-                      <span className="ml-2 rounded-md bg-red-50 px-1.5 py-0.5 text-[10px] font-bold uppercase text-red-600">
-                        Reversal
-                      </span>
-                    )}
-                    {r.reversed_at && (
-                      <span className="ml-2 rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-500">
-                        Reversed
-                      </span>
-                    )}
-                    {!r.reversed_at && Number(r.reversed_amount) > 0 && (
-                      <span className="ml-2 rounded-md bg-amber-50 px-1.5 py-0.5 text-[10px] font-bold text-amber-700">
-                        −{money(r.reversed_amount)} reversed
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-slate-700">
-                    {r.balance_after != null ? moneyS(r.balance_after) : "—"}
-                  </td>
-                  <td className="px-4 py-3 text-slate-500">{r.note || "—"}</td>
-                  <td className="px-4 py-3 text-slate-500">
-                    {r.created_by || "—"}
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    {canTopUp && r.type === "top_up" && !r.reversed_at && (
-                      <button
-                        type="button"
-                        onClick={() => setReverse(r)}
-                        className="h-8 rounded-lg border border-red-200 px-3 text-xs font-bold text-red-600 hover:bg-red-50"
-                      >
-                        Reverse
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="overflow-hidden rounded-xl border border-slate-200">
+          <DataTable
+            caption="Wallet top-ups"
+            columns={wtuCols}
+            rows={shown}
+            rowKey={(r) => r.id}
+            loading={loading && rows.length === 0}
+            skeletonRows={6}
+            minWidth={820}
+            error={error ? { title: error } : null}
+            onRetry={() => setReload((n) => n + 1)}
+            emptyTitle="No top-ups found."
+            rowActions={(r) =>
+              canTopUp && r.type === "top_up" && !r.reversed_at ? (
+                <button
+                  type="button"
+                  onClick={() => setReverse(r)}
+                  className="h-8 rounded-lg border border-red-200 px-3 text-xs font-bold text-red-600 hover:bg-red-50"
+                >
+                  Reverse
+                </button>
+              ) : null
+            }
+          />
         </div>
       </div>
 
@@ -67574,72 +67829,65 @@ function CustomerRestoreModal({ row, onClose, onDone }) {
     }
   };
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-ink-900/40 px-4"
-      onClick={(e) => {
-        e.stopPropagation();
-        if (!busy) result ? onDone() : onClose();
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md space-y-3 rounded-md bg-white p-5 shadow-lg"
-      >
-        <h3 className="font-display text-lg font-bold">
-          Restore {row.customer_code}
-        </h3>
-        {result ? (
-          <>
-            <p className="text-sm text-slate-700">
-              Account restored. Orders, wallet and history are unchanged.
-            </p>
-            {result.needs_password_reset && (
-              <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                The login account had to be re-created. Set a new password with
-                Reset Password on the Customers page before the customer logs
-                in.
-              </p>
-            )}
-            <div className="text-right">
-              <button
-                type="button"
-                onClick={onDone}
-                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
-              >
-                Done
-              </button>
-            </div>
-          </>
+    <AppModal
+      title={`Restore ${row.customer_code}`}
+      maxW="max-w-md"
+      onClose={result ? onDone : onClose}
+      busy={busy}
+      error={result ? "" : error}
+      footer={
+        result ? (
+          <button
+            type="button"
+            className="cbx-btn cbx-btn-primary"
+            onClick={onDone}
+          >
+            Done
+          </button>
         ) : (
           <>
-            <p className="text-sm text-slate-600">
-              Restores {row.name || "this customer"} with the original ID and
-              all records. Nothing is re-created or replayed.
-            </p>
-            <CrVerifyFields v={v} setV={setV} />
-            {error && <p className="text-xs text-signal-red">{error}</p>}
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={busy}
-                className="px-4 py-2 text-sm text-slate-700"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={submit}
-                disabled={busy}
-                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-              >
-                {busy ? "Restoring..." : "Restore"}
-              </button>
-            </div>
+            <button
+              type="button"
+              className="cbx-btn"
+              onClick={onClose}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="cbx-btn cbx-btn-primary"
+              onClick={submit}
+              disabled={busy}
+            >
+              {busy ? "Restoring..." : "Restore"}
+            </button>
           </>
-        )}
-      </div>
-    </div>
+        )
+      }
+    >
+      {result ? (
+        <>
+          <p className="cbx-modal-text">
+            Account restored. Orders, wallet and history are unchanged.
+          </p>
+          {result.needs_password_reset && (
+            <div className="cbx-alert is-warn">
+              The login account had to be re-created. Set a new password with
+              Reset Password on the Customers page before the customer logs in.
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <p className="cbx-modal-text">
+            Restores {row.name || "this customer"} with the original ID and all
+            records. Nothing is re-created or replayed.
+          </p>
+          <CrVerifyFields v={v} setV={setV} />
+        </>
+      )}
+    </AppModal>
   );
 }
 
@@ -67696,164 +67944,138 @@ function CustomerPhoneChangeModal({ row, onClose, onDone, isSuper = false }) {
       setDone(true);
       emitCBToast("ok", "Phone changed", `${row.customer_code} phone updated.`);
     });
+  const primary = isSuper
+    ? {
+        label: "Change phone",
+        busyLabel: "Changing...",
+        onClick: direct,
+        disabled: !newPhone.trim() || !nc,
+      }
+    : !challenge
+      ? {
+          label: "Send code",
+          busyLabel: "Sending...",
+          onClick: request,
+          disabled: !newPhone.trim(),
+        }
+      : {
+          label: "Confirm change",
+          busyLabel: "Verifying...",
+          onClick: confirm,
+          disabled: code.length !== 6,
+        };
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-ink-900/40 px-4"
-      onClick={(e) => {
-        e.stopPropagation();
-        if (!busy) done ? onDone() : onClose();
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md space-y-3 rounded-md bg-white p-5 shadow-lg"
-      >
-        <h3 className="font-display text-lg font-bold">
-          Change phone · {row.customer_code}
-        </h3>
-        {done ? (
-          <>
-            <p className="text-sm text-slate-700">
-              Phone number updated. The customer now logs in with the new number
-              and the same password.
-            </p>
-            <div className="text-right">
-              <button
-                type="button"
-                onClick={onDone}
-                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white"
-              >
-                Done
-              </button>
-            </div>
-          </>
-        ) : isSuper ? (
-          <>
-            <div className="text-xs text-slate-500">
-              Current number: <b>{row.phone || "—"}</b>
-            </div>
-            <input
-              value={newPhone}
-              onChange={(e) => setNewPhone(e.target.value)}
-              placeholder="New phone number"
-              className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
-            />
-            <CrVerifyFields v={v} setV={setV} />
-            <div className="space-y-2 rounded-md border border-slate-200 p-3">
-              <div className="text-xs font-semibold text-slate-700">
-                New number check (required)
-              </div>
-              <select
-                value={nc}
-                onChange={(e) => setNc(e.target.value)}
-                className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
-              >
-                <option value="">How did you check the new number?</option>
-                {CR_NEW_NUMBER_CHECKS.map(([k, label]) => (
-                  <option key={k} value={k}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <p className="text-[11px] text-slate-400">
-              Super Admin change: no SMS code is sent. The customer logs in with
-              the new number and the same password. Your name, both checks and
-              the masked numbers are saved in the audit trail.
-            </p>
-            {error && <p className="text-xs text-signal-red">{error}</p>}
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={busy}
-                className="px-4 py-2 text-sm text-slate-700"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={direct}
-                disabled={busy || !newPhone.trim() || !nc}
-                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-              >
-                {busy ? "Changing..." : "Change phone"}
-              </button>
-            </div>
-          </>
-        ) : !challenge ? (
-          <>
-            <div className="text-xs text-slate-500">
-              Current number: <b>{row.phone || "—"}</b>
-            </div>
-            <input
-              value={newPhone}
-              onChange={(e) => setNewPhone(e.target.value)}
-              placeholder="New phone number"
-              className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
-            />
-            <CrVerifyFields v={v} setV={setV} />
-            <p className="text-[11px] text-slate-400">
-              A 6-digit code is sent to the new number. Enter it on the next
-              step to prove the customer controls that number.
-            </p>
-            {error && <p className="text-xs text-signal-red">{error}</p>}
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={busy}
-                className="px-4 py-2 text-sm text-slate-700"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={request}
-                disabled={busy || !newPhone.trim()}
-                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-              >
-                {busy ? "Sending..." : "Send code"}
-              </button>
-            </div>
-          </>
+    <AppModal
+      title={`Change phone · ${row.customer_code}`}
+      maxW="max-w-md"
+      onClose={done ? onDone : onClose}
+      busy={busy}
+      error={done ? "" : error}
+      footer={
+        done ? (
+          <button
+            type="button"
+            className="cbx-btn cbx-btn-primary"
+            onClick={onDone}
+          >
+            Done
+          </button>
         ) : (
           <>
-            <p className="text-sm text-slate-600">
-              Code sent to <b>{challenge.sent_to}</b>. It expires in 10 minutes.
-            </p>
-            <input
-              value={code}
-              onChange={(e) =>
-                setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
-              }
-              inputMode="numeric"
-              placeholder="6-digit code"
-              className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm tracking-widest"
-            />
-            {error && <p className="text-xs text-signal-red">{error}</p>}
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={onClose}
-                disabled={busy}
-                className="px-4 py-2 text-sm text-slate-700"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={confirm}
-                disabled={busy || code.length !== 6}
-                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-              >
-                {busy ? "Verifying..." : "Confirm change"}
-              </button>
-            </div>
+            <button
+              type="button"
+              className="cbx-btn"
+              onClick={onClose}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="cbx-btn cbx-btn-primary"
+              onClick={primary.onClick}
+              disabled={busy || primary.disabled}
+            >
+              {busy ? primary.busyLabel : primary.label}
+            </button>
           </>
-        )}
-      </div>
-    </div>
+        )
+      }
+    >
+      {done ? (
+        <p className="cbx-modal-text">
+          Phone number updated. The customer now logs in with the new number and
+          the same password.
+        </p>
+      ) : isSuper ? (
+        <>
+          <div className="text-xs text-slate-500">
+            Current number: <b>{row.phone || "—"}</b>
+          </div>
+          <input
+            value={newPhone}
+            onChange={(e) => setNewPhone(e.target.value)}
+            placeholder="New phone number"
+            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+          />
+          <CrVerifyFields v={v} setV={setV} />
+          <div className="space-y-2 rounded-md border border-slate-200 p-3">
+            <div className="text-xs font-semibold text-slate-700">
+              New number check (required)
+            </div>
+            <select
+              value={nc}
+              onChange={(e) => setNc(e.target.value)}
+              className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+            >
+              <option value="">How did you check the new number?</option>
+              {CR_NEW_NUMBER_CHECKS.map(([k, label]) => (
+                <option key={k} value={k}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="text-[11px] text-slate-400">
+            Super Admin change: no SMS code is sent. The customer logs in with
+            the new number and the same password. Your name, both checks and the
+            masked numbers are saved in the audit trail.
+          </p>
+        </>
+      ) : !challenge ? (
+        <>
+          <div className="text-xs text-slate-500">
+            Current number: <b>{row.phone || "—"}</b>
+          </div>
+          <input
+            value={newPhone}
+            onChange={(e) => setNewPhone(e.target.value)}
+            placeholder="New phone number"
+            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+          />
+          <CrVerifyFields v={v} setV={setV} />
+          <p className="text-[11px] text-slate-400">
+            A 6-digit code is sent to the new number. Enter it on the next step
+            to prove the customer controls that number.
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="cbx-modal-text">
+            Code sent to <b>{challenge.sent_to}</b>. It expires in 10 minutes.
+          </p>
+          <input
+            value={code}
+            onChange={(e) =>
+              setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+            }
+            inputMode="numeric"
+            placeholder="6-digit code"
+            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm tracking-widest"
+          />
+        </>
+      )}
+    </AppModal>
   );
 }
 
