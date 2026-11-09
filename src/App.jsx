@@ -12446,7 +12446,7 @@ function DataTable({
               <th
                 key={col.key}
                 scope="col"
-                className={`cbx-th ${colAlignClass(col)} font-semibold text-[11px] uppercase tracking-wide text-ink-600/45 px-4 py-3 whitespace-nowrap`}
+                className={`cbx-th ${col.className || ""} ${colAlignClass(col)} font-semibold text-[11px] uppercase tracking-wide text-ink-600/45 px-4 py-3 whitespace-nowrap`}
               >
                 {col.label}
               </th>
@@ -12496,7 +12496,7 @@ function DataTable({
                 {columns.map((col) => (
                   <td
                     key={col.key}
-                    className={`px-4 py-3 ${col.wrap || /(?:name|address|remark|description)/i.test(col.key) ? "cb-cell-wrap" : "whitespace-nowrap"} text-ink-800 ${col.numeric || col.align ? colAlignClass(col) : ""}`}
+                    className={`${col.className || ""} px-4 py-3 ${col.wrap || /(?:name|address|remark|description)/i.test(col.key) ? "cb-cell-wrap" : "whitespace-nowrap"} text-ink-800 ${col.numeric || col.align ? colAlignClass(col) : ""}`}
                   >
                     {col.render ? (
                       col.render(row)
@@ -15582,7 +15582,7 @@ function Layout() {
         <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden overscroll-x-none p-4 lg:p-6 xl:p-7">
           <div
             key={pathname}
-            className={`cb-page-enter${pathname === "/settings" || pathname === "/shop/settings" ? " is-settings" : ""}`}
+            className={`cb-page-enter${pathname === "/settings" || pathname === "/shop/settings" ? " is-settings" : ""}${pathname === "/cn-orders" || pathname === "/packages" || pathname === "/wh-arrived" ? " is-wide" : ""}`}
           >
             <Outlet />
           </div>
@@ -51685,8 +51685,27 @@ function CnOrdersPage() {
     },
     {
       key: "tracking",
-      label: "Tracking Number",
-      render: (r) => <CnTrackingCell tks={tkNumbersByOrder.get(r.id)} />,
+      label: "Tracking / TKs",
+      render: (r) => {
+        const linked = linkedTkCount.get(r.id) || 0;
+        return (
+          <div className="space-y-1">
+            <CnTrackingCell tks={tkNumbersByOrder.get(r.id)} />
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab("tks");
+                setQ(r.order_id);
+                setTkStatus("");
+                setDateRange(EMPTY_DATE_RANGE);
+              }}
+              className="block text-xs text-signal-blue hover:underline font-semibold"
+            >
+              {linked} TK{linked === 1 ? "" : "s"}
+            </button>
+          </div>
+        );
+      },
     },
     {
       key: "customer",
@@ -51708,7 +51727,7 @@ function CnOrdersPage() {
               FallbackIcon={Icons.ShoppingCart}
             />
             <div className="min-w-0">
-              <span className="block truncate max-w-[220px]">
+              <span className="block truncate max-w-[180px]">
                 {r.product_name || its[0]?.product_name || r.product_url || "—"}
               </span>
               <span className="text-xs text-ink-600/40">
@@ -51722,39 +51741,8 @@ function CnOrdersPage() {
       },
     },
     {
-      key: "linked",
-      label: "Linked TKs",
-      render: (r) => {
-        const linked = linkedTkCount.get(r.id) || 0;
-        return (
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab("tks");
-              setQ(r.order_id);
-              setTkStatus("");
-              setDateRange(EMPTY_DATE_RANGE);
-            }}
-            className="text-signal-blue hover:underline font-semibold"
-          >
-            {linked} TK{linked === 1 ? "" : "s"}
-          </button>
-        );
-      },
-    },
-    {
       key: "total",
       label: "Total (USD)",
-      numeric: true,
-      render: (r) => (
-        <span className="font-semibold text-ink-900">
-          {money(r.total_due_usd)}
-        </span>
-      ),
-    },
-    {
-      key: "paid_balance",
-      label: "Paid / Balance",
       align: "right",
       render: (r) => {
         const paidAmt = Math.max(0, Number(r.amount_paid_usd) || 0);
@@ -51763,11 +51751,16 @@ function CnOrdersPage() {
             ? 0
             : Math.max(0, (Number(r.total_due_usd) || 0) - paidAmt);
         return (
-          <div className="text-xs">
-            <b className="block text-ink-800">Paid {money(paidAmt)}</b>
-            <span className={balance > 0 ? "text-red-600" : "text-emerald-600"}>
-              Balance {money(balance)}
+          <div>
+            <b className="block text-ink-900">{money(r.total_due_usd)}</b>
+            <span className="text-xs text-ink-600/60">
+              Paid {money(paidAmt)}
             </span>
+            {balance > 0 && (
+              <span className="block text-xs font-semibold text-red-600">
+                Balance {money(balance)}
+              </span>
+            )}
           </div>
         );
       },
@@ -51796,6 +51789,7 @@ function CnOrdersPage() {
     {
       key: "updated",
       label: "Updated",
+      className: "hidden 2xl:table-cell",
       render: (r) => <CreatedAtCell iso={r.updated_at} />,
     },
   ];
@@ -51926,7 +51920,7 @@ function CnOrdersPage() {
           <div
             role="tablist"
             aria-label="Order status"
-            className="flex items-center gap-1 px-3 lg:px-4 border-b border-mist-200 overflow-x-auto"
+            className="flex flex-wrap items-center gap-1 px-3 lg:px-4 py-1 border-b border-mist-200"
           >
             <ListTab
               label="All"
@@ -52053,7 +52047,6 @@ function CnOrdersPage() {
             rowKey={(r) => r.id}
             loading={loading}
             skeletonRows={6}
-            minWidth={1380}
             onRowClick={(r, e) =>
               openRow(e, `/cn-orders/${encodeURIComponent(r.order_id)}`)
             }
@@ -52078,7 +52071,6 @@ function CnOrdersPage() {
             rowKey={(p) => p.id || p.tk}
             loading={tkLoading}
             skeletonRows={5}
-            minWidth={1120}
             onRowClick={(p, e) =>
               p.tk && openRow(e, `/packages/${encodeURIComponent(p.tk)}`)
             }
@@ -76146,12 +76138,14 @@ const CB_DESIGN_CSS = `
 [class~="placeholder:text-ink-600/40"]::placeholder{color:rgba(71,85,105,.40)!important}
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-:root{--cb-primary:#2563eb;--cb-primary-dark:#1d4ed8;--cb-navy:#0f1f3d;--cb-bg:#f4f7fb;--cb-border:#e5eaf2;--cb-text:#10213f;--cb-muted:#6b7b96;}
+:root{--cb-primary:#2563eb;--cb-primary-dark:#1d4ed8;--cb-navy:#0f1f3d;--cb-bg:#ffffff;--cb-border:#e5eaf2;--cb-text:#10213f;--cb-muted:#6b7b96;}
 html,body,#root{font-family:Inter,"Noto Sans Khmer","Khmer OS Battambang",ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
 body{background:var(--cb-bg);color:var(--cb-text);}
 /* No elastic page bounce: it shifts the page under fixed (blurred) overlays and leaves an unblurred strip at the top. */
 html,body{overscroll-behavior:none;}
 .cb-app{min-height:100vh;background:var(--cb-bg);}
+/* App shell uses the same white as the cards (the Tailwind bg class is overridden here; dark mode keeps its own higher-specificity rule) */
+.cb-app.bg-\[\#f4f7fb\]{background-color:var(--cb-bg);}
 /* Admin shell follows the real visible viewport so fixed overlays and the shell stay aligned. */
 .cb-app.h-screen{height:100vh;height:100dvh;overflow:hidden;overflow:clip;max-width:100vw;}
 .cb-app *{font-family:inherit;}
@@ -76435,6 +76429,14 @@ html.cb-admin-dark{
 .cb-app main{padding:28px 32px;}
 .cb-page-enter{max-width:1680px;}
 .cb-page-enter.is-settings{max-width:1080px;}
+/* CN Orders / Packages-TK / WH Arrived: fill the full width when zoomed out (no centered max-width cap) */
+.cb-page-enter.is-wide{max-width:none;}
+/* One background colour for the whole app shell: sidebar, topbar, page area and cards are all white (light mode only; dark mode keeps its own palette) */
+html:not(.cb-admin-dark) div.cb-app{background:#fff;}
+/* Wide pages: tables fill the card, no inner horizontal scroll bar, compact cell padding so every column fits */
+.cb-page-enter.is-wide .cb-table-scroll{overflow-x:auto;scrollbar-width:thin;}
+.cb-page-enter.is-wide table{width:100%;}
+.cb-page-enter.is-wide :is(th,td){padding-left:12px!important;padding-right:12px!important;}
 .cb-app main :is(h1,.cbx-h1,.cb-page-title){font-size:28px;font-weight:650;letter-spacing:-.025em;line-height:1.4;}
 .cb-app main :is(h2,h3){letter-spacing:-.01em;}
 /* Cards and summary panels */
