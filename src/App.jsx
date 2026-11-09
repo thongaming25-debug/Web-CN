@@ -1463,6 +1463,10 @@ const NAV_SECTIONS = [
     ],
   },
   {
+    label: "Support",
+    items: [{ label: "Support", icon: "Wrench", path: "/support" }],
+  },
+  {
     label: "System",
     items: [
       { label: "Users", icon: "UserRound", path: "/users" },
@@ -1679,6 +1683,15 @@ const PERMISSION_GROUPS = [
     ],
   },
   {
+    key: "support",
+    label: "Support Tools",
+    perms: [
+      ["support.view", "View Support Tools (menu)"],
+      ["support.rollback", "Rollback Completed Orders to Inbound Warehouse"],
+      ["support.rollback_refund", "Rollback Refunded CN Orders"],
+    ],
+  },
+  {
     key: "system",
     label: "Users & System",
     perms: [
@@ -1749,6 +1762,9 @@ const PATH_VIEW = {
   "/reports/warehouse": "report.view",
   "/reports/transport": "report.view",
   "/reports/sla": "report.view",
+  "/support": "support.view",
+  "/support/rollback-completed": "support.rollback",
+  "/support/rollback-refund": "support.rollback_refund",
 };
 
 // Generic list pages: which permission creates / edits / deletes a row.
@@ -12849,65 +12865,60 @@ function InfoGrid({ items }) {
 // ------------------------------------------------------------
 // components/Timeline.jsx
 // ------------------------------------------------------------
-const DOT_STYLE = {
-  done: "bg-signal-teal border-signal-teal text-white",
-  active: "bg-signal-blue border-signal-blue text-white",
-  pending: "bg-white border-mist-200 text-transparent",
-};
-
-const LINE_STYLE = {
-  done: "bg-signal-teal",
-  active: "bg-mist-200",
-  pending: "bg-mist-200",
-};
-
+// Same look as CnStatusTimeline (Order History): green ✓ done, blue dot active,
+// hollow grey circle pending. Text is English only.
 function Timeline({ steps }) {
   return (
     <div>
-      {steps.map((step, i) => (
-        <div key={step.label} className="flex gap-3">
-          <div className="flex flex-col items-center">
-            <div
-              className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 ${DOT_STYLE[step.state]} ${
-                step.state === "active" ? "animate-pulse" : ""
-              }`}
-            >
-              {step.state === "done" && <Check size={13} strokeWidth={3} />}
+      {steps.map((step, i) => {
+        const done = step.state === "done";
+        const active = step.state === "active";
+        const isLast = i === steps.length - 1;
+        return (
+          <div key={step.label} className="flex gap-3">
+            <div className="flex flex-col items-center">
+              <span
+                className={`w-6 h-6 rounded-full grid place-items-center shrink-0 ${
+                  done
+                    ? "bg-emerald-500 text-white"
+                    : active
+                      ? "bg-blue-600 text-white animate-pulse"
+                      : "bg-white border-2 border-slate-200 text-transparent"
+                }`}
+              >
+                {done ? (
+                  <Check size={13} />
+                ) : active ? (
+                  <span className="w-1.5 h-1.5 rounded-full bg-white" />
+                ) : null}
+              </span>
+              {!isLast && (
+                <span
+                  className={`w-0.5 flex-1 min-h-6 ${done ? "bg-emerald-300" : "bg-slate-200"}`}
+                />
+              )}
             </div>
-            {i < steps.length - 1 && (
-              <div
-                className={`w-0.5 flex-1 min-h-[28px] ${LINE_STYLE[step.state]}`}
-              />
-            )}
-          </div>
-          <div
-            className={`pb-6 ${step.state === "pending" ? "opacity-45" : ""}`}
-          >
-            <div
-              className={`text-sm ${
-                step.state === "pending"
-                  ? "text-ink-600"
-                  : "font-medium text-ink-900"
-              }`}
-            >
-              {step.label}
+            <div className="pb-5">
+              <p
+                className={`text-sm font-semibold ${done || active ? "text-slate-900" : "text-slate-400"}`}
+              >
+                {step.label}
+              </p>
+              {step.time && (
+                <p className="text-xs text-slate-500 mt-0.5">{step.time}</p>
+              )}
+              {(done || active) && (
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Proceed By: {step.proceedBy || "NA"}
+                </p>
+              )}
+              {active && (
+                <p className="text-xs text-blue-600 mt-0.5">In progress</p>
+              )}
             </div>
-            {step.time && (
-              <div className="text-xs text-ink-600/50 mt-0.5">{step.time}</div>
-            )}
-            {step.state !== "pending" && (
-              <div className="text-xs text-ink-600/40 mt-0.5">
-                Proceed By: {step.proceedBy || "NA"}
-              </div>
-            )}
-            {step.state === "active" && (
-              <div className="text-xs text-signal-blue mt-0.5">
-                កំពុងដំណើរការ
-              </div>
-            )}
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -15469,6 +15480,7 @@ function Topbar({ title, onMenuClick }) {
 function useCurrentTitle() {
   const { pathname } = useLocation();
   if (pathname === "/notifications") return "Notifications";
+  if (pathname.startsWith("/support")) return "Support";
   for (const section of NAV_SECTIONS) {
     for (const item of section.items) {
       if (item.path === pathname) return item.label;
@@ -20907,7 +20919,8 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
   // "cn_order_payment" is the older name of the same wallet payment.
   const cnOrderWallet =
     walletSum(["cn_order_payment_wallet", "cn_order_payment"]) -
-    walletSum(["cn_order_refund"]);
+    walletSum(["cn_order_refund"]) +
+    walletSum(["cn_order_refund_reversal"]);
   const shippingFeeWallet = walletSum([
     "shipping_payment_wallet",
     "shipping_payment",
@@ -22851,23 +22864,41 @@ function DeletePackageModal({ open, tk, onClose, onDeleted }) {
 // shown inline on the page — same Timeline component/data, just a
 // cleaner default view of the page with the full history one click away.
 function TrackingHistoryModal({ open, onClose, steps }) {
+  // Esc to close (AppModal used to provide this)
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose?.();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
   if (!open) return null;
-  return (
-    <AppModal
-      title="Tracking History"
-      onClose={onClose}
-      footer={
-        <button
-          type="button"
-          className="cbx-btn cbx-btn-primary"
-          onClick={onClose}
-        >
-          OK
-        </button>
-      }
+  // Same shell as CnHistoryModal (Order History): full-screen blur backdrop via
+  // portal, rounded-2xl card, header + X, scrollable body, no OK footer.
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[120] min-h-[100dvh] bg-slate-950/40 backdrop-blur-md flex items-center justify-center p-4"
+      onClick={onClose}
     >
-      <Timeline steps={steps} />
-    </AppModal>
+      <div
+        role="dialog"
+        aria-modal="true"
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-lg rounded-2xl bg-white shadow-2xl overflow-hidden"
+      >
+        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+          <h3 className="font-bold text-lg">Tracking History</h3>
+          <button type="button" onClick={onClose} aria-label="Close">
+            <Icons.X size={18} />
+          </button>
+        </div>
+        <div className="p-5 max-h-[70vh] overflow-y-auto">
+          <Timeline steps={steps} />
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -34751,6 +34782,10 @@ const CustomerApp = (() => {
         "បានបង់ CN Order ពី Wallet",
       ),
       cn_order_refund: tr("CN order refund", "សងប្រាក់ CN Order វិញ"),
+      cn_order_refund_reversal: tr(
+        "CN order refund reversed",
+        "ដកប្រាក់សងវិញ CN Order",
+      ),
       cn_order_payment_cash: tr(
         "CN order paid (cash)",
         "បានបង់ CN Order (សាច់ប្រាក់)",
@@ -49721,9 +49756,11 @@ function CnRefundModal({ open, row, onClose, onSaved }) {
 // ------------------------------------------------------------
 function CnHistoryModal({ history, onClose, timeline = null }) {
   const [tab, setTab] = useState(timeline ? "timeline" : "history");
-  return (
+  // Portal to <body> so the backdrop covers the WHOLE screen (not clipped by a
+  // transformed/filtered parent) and sits above the topbar (z-20) / sidebar.
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4"
+      className="fixed inset-0 z-[120] min-h-[100dvh] bg-slate-950/40 backdrop-blur-md flex items-center justify-center p-4"
       onClick={onClose}
     >
       <div
@@ -49784,7 +49821,8 @@ function CnHistoryModal({ history, onClose, timeline = null }) {
           ))}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -54337,6 +54375,879 @@ function CnOrderDetailPage() {
   );
 }
 
+// ============================================================
+// SUPPORT MODULE — /support (tool hub) + Rollback Completed
+// ------------------------------------------------------------
+// A home for admin "fix it" tools. Add a new tool = add one entry to
+// SUPPORT_TOOLS, one PATH_VIEW permission and one <Route>.
+// ============================================================
+const SUPPORT_TOOLS = [
+  {
+    key: "rollback-completed",
+    code: "RC",
+    color: "bg-rose-500",
+    title: "Rollback Completed",
+    desc: "Wrongly marked Completed? Enter the tracking number and move it back to Inbound Warehouse.",
+    perm: "support.rollback",
+  },
+  {
+    key: "rollback-refund",
+    code: "RR",
+    color: "bg-amber-500",
+    title: "Rollback Refund",
+    desc: "Undo a CN order refund by Order ID: takes the money back from the wallet and returns the order to Approve Purchase.",
+    perm: "support.rollback_refund",
+  },
+];
+
+function SupportHubPage() {
+  const { user } = useAuth();
+  const [q, setQ] = useState("");
+  const query = q.trim().toLowerCase();
+  const tools = SUPPORT_TOOLS.filter((t) => hasPermission(user, t.perm)).filter(
+    (t) => !query || `${t.title} ${t.desc}`.toLowerCase().includes(query),
+  );
+  return (
+    <div className="min-h-full bg-slate-50/70">
+      <div className="mx-auto max-w-[1100px] space-y-5 p-5 md:p-7">
+        <div>
+          <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
+            Support
+          </h1>
+          <p className="text-sm text-slate-500">
+            Admin tools to fix mistakes and handle special cases.
+          </p>
+        </div>
+        <div className="relative max-w-sm">
+          <Icons.Search
+            size={15}
+            className="absolute left-3 top-3 text-slate-400"
+          />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search support tools…"
+            className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+          />
+        </div>
+        {!tools.length ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-400">
+            {query
+              ? `No tool matches "${q}".`
+              : "No support tool is available for your role."}
+          </div>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {tools.map((t) => (
+              <Link
+                key={t.key}
+                to={`/support/${t.key}`}
+                className="group flex overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:border-blue-300 hover:shadow-md"
+              >
+                <span
+                  className={`flex w-16 shrink-0 items-center justify-center text-sm font-bold text-white ${t.color}`}
+                >
+                  {t.code}
+                </span>
+                <span className="min-w-0 p-3">
+                  <span className="block truncate text-sm font-bold text-slate-900 group-hover:text-blue-700">
+                    {t.title}
+                  </span>
+                  <span className="mt-0.5 line-clamp-2 block text-xs text-slate-500">
+                    {t.desc}
+                  </span>
+                </span>
+              </Link>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const escLike = (s) => String(s).replace(/[\\%_]/g, "\\$&");
+const isCompletedStatus = (s) =>
+  ["Completed", "Complete"].includes(String(s || "").trim());
+
+// Finds everything a tracking number points to:
+//  • a Shipment (TK package), or
+//  • a Parse Link CN order (matched by the TK, or by the China domestic
+//    tracking number saved on the order) together with all its linked TKs.
+async function findOrdersByTracking(raw) {
+  const q = String(raw || "").trim();
+  if (!q) throw new Error("Enter a tracking number.");
+  if (!supabase) throw new Error("Database is not connected.");
+  const like = escLike(q);
+  const [pkgRes, parcelRes] = await Promise.all([
+    supabase.from("packages").select("*").ilike("tk", like).limit(20),
+    supabase
+      .from("cn_order_parcels")
+      .select("cn_order_id")
+      .ilike("domestic_tracking", like)
+      .limit(50),
+  ]);
+  if (pkgRes.error) throw pkgRes.error;
+  const matched = pkgRes.data || [];
+  const cnIds = [
+    ...new Set(
+      [
+        ...matched.map((p) => p.cn_order_id),
+        ...(parcelRes.data || []).map((x) => x.cn_order_id),
+      ].filter(Boolean),
+    ),
+  ];
+  let orders = [];
+  let linked = [];
+  if (cnIds.length) {
+    const [oRes, lRes] = await Promise.all([
+      supabase.from("cn_orders").select("*").in("id", cnIds),
+      supabase.from("packages").select("*").in("cn_order_id", cnIds).limit(500),
+    ]);
+    orders = oRes.data || [];
+    linked = lRes.data || [];
+  }
+  const byId = new Map();
+  [...matched, ...linked].forEach((p) => byId.set(String(p.id), p));
+  const all = [...byId.values()];
+  const groups = orders.map((o) => ({
+    kind: "cn",
+    order: o,
+    packages: all.filter((p) => String(p.cn_order_id) === String(o.id)),
+  }));
+  const loose = all.filter(
+    (p) => !orders.some((o) => String(o.id) === String(p.cn_order_id)),
+  );
+  if (loose.length)
+    groups.push({ kind: "shipment", order: null, packages: loose });
+  return groups;
+}
+
+// Completed → Inbound Warehouse. Writes the package status, the TK
+// Tracking History and (for Parse Link) the CN order status + history.
+async function rollbackCompletedToInboundWarehouse({ group, ids, user, note }) {
+  requirePermission(user, "support.rollback");
+  const by = cnBy(user);
+  const now = new Date().toISOString();
+  const targets = group.packages.filter(
+    (p) => ids.includes(p.id) && isCompletedStatus(p.status),
+  );
+  if (!targets.length)
+    throw new Error("Select at least one Completed package.");
+
+  const { data: updated, error } = await supabase
+    .from("packages")
+    .update({ status: "Inbound Warehouse", updated_by: by, updated_at: now })
+    .in(
+      "id",
+      targets.map((p) => p.id),
+    )
+    .in("status", ["Completed", "Complete"])
+    .select("id,tk,status");
+  if (error) throw error;
+  const done = updated || [];
+  if (!done.length)
+    throw new Error(
+      "Nothing was changed. Someone may have updated it already, or your role cannot edit packages. Search again.",
+    );
+
+  const remark = `Rollback from Completed to Inbound Warehouse${
+    note.trim() ? `: ${note.trim()}` : ""
+  }`;
+  const { error: hErr } = await supabase.from("status_history").insert(
+    done.map((p) => ({
+      tk: p.tk,
+      status: "Inbound Warehouse",
+      remark,
+      created_by: by,
+      created_at: now,
+    })),
+  );
+  if (hErr) console.error("[Rollback] status_history insert failed", hErr);
+
+  let cnRolled = false;
+  if (group.kind === "cn" && group.order) {
+    // A DB trigger may already have synced the CN order — re-read first.
+    const { data: latest } = await supabase
+      .from("cn_orders")
+      .select("*")
+      .eq("id", group.order.id)
+      .maybeSingle();
+    if (latest && cnNormalizeStatus(latest.status) === "Complete Order") {
+      const { error: cErr } = await supabase
+        .from("cn_orders")
+        .update({
+          status: "Inbound Warehouse",
+          updated_by: by,
+          updated_at: now,
+        })
+        .eq("id", latest.id)
+        .eq("status", latest.status);
+      if (cErr)
+        throw new Error(
+          `Packages were rolled back, but the CN order status could not be changed: ${cErr.message}`,
+        );
+      cnRolled = true;
+    }
+    if (
+      cnRolled ||
+      cnNormalizeStatus(group.order.status) === "Complete Order"
+    ) {
+      const { error: chErr } = await supabase.from("cn_order_history").insert({
+        cn_order_id: group.order.id,
+        event: "status",
+        status: "Inbound Warehouse",
+        created_by: by,
+        note: remark,
+      });
+      if (chErr) console.error("[Rollback] cn_order_history failed", chErr);
+    }
+  }
+  return {
+    count: done.length,
+    tks: done.map((p) => p.tk),
+    cn: group.kind === "cn",
+  };
+}
+
+function RollbackGroupCard({ group, user, onDone }) {
+  const eligible = group.packages.filter((p) => isCompletedStatus(p.status));
+  const [picked, setPicked] = useState(
+    () => new Set(eligible.map((p) => p.id)),
+  );
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const isCn = group.kind === "cn";
+  const first = group.packages[0];
+  const cust = first ? tkCustomerParts(first) : null;
+
+  function toggle(id) {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }
+
+  async function submit() {
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await rollbackCompletedToInboundWarehouse({
+        group,
+        ids: [...picked],
+        user,
+        note,
+      });
+      emitCBToast(
+        "ok",
+        "Rolled back",
+        `${res.tks.join(", ")} → Inbound Warehouse`,
+      );
+      onDone(res);
+    } catch (e) {
+      setErr(e.message || "Rollback failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 p-5">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            {isCn ? "Parse Link · CN Order" : "Shipment · TK"}
+          </div>
+          <div className="mt-0.5 text-lg font-bold text-slate-900">
+            {isCn ? group.order.order_id : first?.tk}
+          </div>
+          {cust && cust.id !== "—" && (
+            <div className="text-sm text-slate-500">
+              {cust.id} · {cust.name}
+            </div>
+          )}
+        </div>
+        {isCn && (
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+            Order status: {cnStageLabel(group.order.status)}
+          </span>
+        )}
+      </div>
+
+      <div className="space-y-2 p-5">
+        <div className="text-sm font-semibold text-slate-900">
+          Select packages
+        </div>
+        {group.packages.map((p) => {
+          const ok = isCompletedStatus(p.status);
+          return (
+            <label
+              key={p.id}
+              className={`flex items-center gap-3 rounded-xl border px-4 py-3 ${
+                ok
+                  ? "cursor-pointer border-slate-200 hover:bg-slate-50"
+                  : "border-slate-100 bg-slate-50/60 opacity-70"
+              }`}
+            >
+              <input
+                type="checkbox"
+                disabled={!ok}
+                checked={picked.has(p.id)}
+                onChange={() => toggle(p.id)}
+                className="h-4 w-4 accent-blue-600"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-semibold text-slate-900">
+                  {p.tk}
+                </div>
+                <div className="text-xs text-slate-400">
+                  {p.updated_at ? formatDbTimestamp(p.updated_at) : "—"}
+                </div>
+              </div>
+              <span
+                className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                  ok
+                    ? "bg-emerald-50 text-emerald-700"
+                    : "bg-slate-100 text-slate-500"
+                }`}
+              >
+                {p.status || "No status"}
+              </span>
+            </label>
+          );
+        })}
+
+        {!eligible.length ? (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Nothing to roll back — only packages with status Completed can be
+            moved back to Inbound Warehouse.
+          </div>
+        ) : (
+          <>
+            <div className="pt-2">
+              <label className="mb-1 block text-sm font-semibold text-slate-900">
+                Note{" "}
+                <span className="font-normal text-slate-400">(optional)</span>
+              </label>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                rows={2}
+                placeholder="e.g. Completed by mistake — customer has not received the goods"
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+              />
+            </div>
+            <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <Icons.TriangleAlert size={16} className="mt-0.5 shrink-0" />
+              <span>
+                The selected packages move from Completed back to Inbound
+                Warehouse
+                {isCn
+                  ? ", and the CN order goes back to Inbound Warehouse"
+                  : ""}
+                . Payments are not changed.
+              </span>
+            </div>
+            {err && (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {err}
+              </div>
+            )}
+            <div className="flex justify-end pt-1">
+              <button
+                type="button"
+                onClick={submit}
+                disabled={busy || picked.size === 0}
+                className="inline-flex h-10 items-center gap-2 rounded-xl bg-red-600 px-5 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {busy ? (
+                  <Icons.Loader2 size={15} className="animate-spin" />
+                ) : (
+                  <Icons.Undo2 size={15} />
+                )}
+                {busy ? "Rolling back..." : "Rollback to Inbound Warehouse"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RollbackCompletedPage() {
+  const { user } = useAuth();
+  const { refetch } = usePackageTracking();
+  const canRollback = hasPermission(user, "support.rollback");
+  const [tracking, setTracking] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [groups, setGroups] = useState(null); // null = nothing searched yet
+  const [searched, setSearched] = useState("");
+  const [success, setSuccess] = useState("");
+
+  async function search(value, keepSuccess = false) {
+    const v = String(value ?? tracking).trim();
+    setBusy(true);
+    setError("");
+    if (!keepSuccess) setSuccess("");
+    try {
+      const g = await findOrdersByTracking(v);
+      setGroups(g);
+      setSearched(v);
+    } catch (e) {
+      setGroups(null);
+      setError(e.message || "Search failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDone(res) {
+    setSuccess(
+      `Rolled back ${res.count} package${res.count > 1 ? "s" : ""} to Inbound Warehouse: ${res.tks.join(", ")}`,
+    );
+    try {
+      await refetch?.();
+    } catch {
+      /* lists refresh on the next realtime event / focus */
+    }
+    search(searched, true);
+  }
+
+  return (
+    <div className="min-h-full bg-slate-50/70">
+      <div className="mx-auto max-w-[900px] space-y-5 p-5 md:p-7">
+        <div className="flex items-start gap-3">
+          <Link
+            to="/support"
+            className="mt-1 rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"
+            aria-label="Back to Support"
+          >
+            <Icons.ArrowLeft size={18} />
+          </Link>
+          <div>
+            <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
+              Rollback Completed to Inbound Warehouse
+            </h1>
+            <p className="text-sm text-slate-500">
+              Marked Completed by mistake? Enter the tracking number to move the
+              package back to Inbound Warehouse. Works for Shipments and Parse
+              Link orders.
+            </p>
+          </div>
+        </div>
+
+        {!canRollback ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
+            You do not have permission to roll back orders. Ask a Super Admin to
+            grant "Rollback Completed Orders" in Role Management.
+          </div>
+        ) : (
+          <>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                search();
+              }}
+              className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+            >
+              <label className="mb-1.5 block text-sm font-semibold text-slate-900">
+                Tracking Number <span className="text-red-500">*</span>
+              </label>
+              <div className="flex gap-3">
+                <div className="relative flex-1">
+                  <Icons.Search
+                    size={15}
+                    className="absolute left-3 top-3 text-slate-400"
+                  />
+                  <input
+                    value={tracking}
+                    onChange={(e) => setTracking(e.target.value)}
+                    placeholder="Enter TK or China tracking number"
+                    autoFocus
+                    className="h-10 w-full rounded-xl border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={busy || !tracking.trim()}
+                  className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {busy ? (
+                    <Icons.Loader2 size={15} className="animate-spin" />
+                  ) : (
+                    <Icons.Search size={15} />
+                  )}
+                  Search
+                </button>
+              </div>
+            </form>
+
+            {error && (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {error}
+              </div>
+            )}
+            {success && (
+              <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                <Icons.CheckCircle2 size={16} className="mt-0.5 shrink-0" />
+                <span>{success}</span>
+              </div>
+            )}
+
+            {groups === null && !error && (
+              <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center">
+                <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+                  <Icons.PackageSearch size={24} />
+                </div>
+                <div className="font-semibold text-slate-900">
+                  Search for a completed order
+                </div>
+                <p className="mt-1 text-sm text-slate-500">
+                  Enter a tracking number above to find the order.
+                </p>
+              </div>
+            )}
+            {groups && groups.length === 0 && (
+              <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
+                No order found for tracking number "{searched}".
+              </div>
+            )}
+            {groups &&
+              groups.map((g, i) => (
+                <RollbackGroupCard
+                  key={`${searched}-${i}-${g.packages.map((p) => p.status).join("|")}`}
+                  group={g}
+                  user={user}
+                  onDone={onDone}
+                />
+              ))}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Rollback Refund — undoes refund_cn_order via the rollback_cn_refund RPC
+// (supabase_cn_refund_rollback.sql). Wallet money is taken back and the
+// order returns to Order Processing (shown as "Approve Purchase").
+function parseOrderRefs(text) {
+  return [
+    ...new Set(
+      String(text || "")
+        .split(/[\s,;]+/)
+        .map((x) => x.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function RollbackRefundPage() {
+  const { user } = useAuth();
+  const canRun = hasPermission(user, "support.rollback_refund");
+  const [pos, setPos] = useState("");
+  const [minAmt, setMinAmt] = useState("");
+  const [maxAmt, setMaxAmt] = useState("");
+  const [note, setNote] = useState("");
+  const [allowNeg, setAllowNeg] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [formErr, setFormErr] = useState("");
+  const [results, setResults] = useState(null); // null = nothing processed
+
+  const refs = parseOrderRefs(pos);
+
+  function reset() {
+    setPos("");
+    setMinAmt("");
+    setMaxAmt("");
+    setNote("");
+    setAllowNeg(false);
+    setFormErr("");
+    setResults(null);
+    setProgress("");
+  }
+
+  async function run(e) {
+    e?.preventDefault();
+    setFormErr("");
+    if (!refs.length) return setFormErr("Enter at least one Order ID.");
+    if (refs.length > 200) return setFormErr("Maximum 200 orders at a time.");
+    const min = minAmt === "" ? null : Number(minAmt);
+    const max = maxAmt === "" ? null : Number(maxAmt);
+    if (
+      (min !== null && !Number.isFinite(min)) ||
+      (max !== null && !Number.isFinite(max))
+    )
+      return setFormErr("Min / Max amount must be numbers.");
+    if (min !== null && max !== null && min > max)
+      return setFormErr("Min amount cannot be greater than Max amount.");
+    if (!supabase) return setFormErr("Database is not connected.");
+
+    setBusy(true);
+    const out = [];
+    for (let i = 0; i < refs.length; i++) {
+      const orderId = refs[i];
+      setProgress(`${i + 1} / ${refs.length}`);
+      try {
+        const { data, error } = await supabase.rpc("rollback_cn_refund", {
+          p_order_ref: orderId,
+          p_reason: note.trim() || null,
+          p_by: cnBy(user),
+          p_allow_negative: allowNeg,
+          p_min: min,
+          p_max: max,
+        });
+        if (error) throw error;
+        out.push({
+          orderId,
+          ok: true,
+          amount: Number(data?.wallet_deducted) || 0,
+          msg:
+            (Number(data?.wallet_deducted) > 0
+              ? `Deducted $${Number(data.wallet_deducted).toFixed(2)} from wallet · `
+              : "") + "Back to Approve Purchase",
+        });
+      } catch (err) {
+        const raw = err?.message || "Rollback failed.";
+        out.push({
+          orderId,
+          ok: false,
+          amount: null,
+          msg: /does not exist|schema cache|could not find the function/i.test(
+            raw,
+          )
+            ? "Run supabase_cn_refund_rollback.sql in Supabase first."
+            : raw,
+        });
+      }
+    }
+    setResults(out);
+    setProgress("");
+    setBusy(false);
+    const okN = out.filter((r) => r.ok).length;
+    emitCBToast(
+      okN === out.length ? "ok" : "warn",
+      "Rollback finished",
+      `${okN} succeeded, ${out.length - okN} failed`,
+    );
+  }
+
+  const okCount = results ? results.filter((r) => r.ok).length : 0;
+
+  return (
+    <div className="min-h-full bg-slate-50/70">
+      <div className="mx-auto max-w-[900px] space-y-5 p-5 md:p-7">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <Link
+              to="/support"
+              className="mt-1 rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"
+              aria-label="Back to Support"
+            >
+              <Icons.ArrowLeft size={18} />
+            </Link>
+            <div>
+              <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
+                Rollback Refund
+              </h1>
+              <p className="text-sm text-slate-500">
+                Undo a refunded CN order: the refunded money is taken back from
+                the customer wallet and the order returns to Approve Purchase.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={reset}
+            disabled={busy}
+            className="h-9 rounded-lg bg-red-600 px-4 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+          >
+            Reset
+          </button>
+        </div>
+
+        {!canRun ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
+            You do not have permission to roll back refunds. Ask a Super Admin
+            to grant "Rollback Refunded CN Orders" in Role Management.
+          </div>
+        ) : (
+          <>
+            <form
+              onSubmit={run}
+              className="rounded-2xl border border-slate-200 bg-white shadow-sm"
+            >
+              <div className="border-b border-slate-100 p-5">
+                <div className="font-bold text-slate-900">
+                  Rollback Parameters
+                </div>
+                <p className="text-sm text-slate-500">
+                  Specify the Order IDs and optional amount range to rollback.
+                </p>
+              </div>
+              <div className="space-y-4 p-5">
+                <div>
+                  <label className="mb-1.5 block text-sm font-semibold text-slate-900">
+                    Order IDs <span className="text-red-500">*</span>
+                  </label>
+                  <textarea
+                    value={pos}
+                    onChange={(e) => setPos(e.target.value)}
+                    rows={5}
+                    placeholder="Enter Order IDs, one per line or separated by commas"
+                    className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                  />
+                  {refs.length > 0 && (
+                    <div className="mt-1 text-xs text-slate-400">
+                      {refs.length} order{refs.length > 1 ? "s" : ""} detected
+                    </div>
+                  )}
+                </div>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  {[
+                    ["Min Amount", minAmt, setMinAmt, "0.00"],
+                    ["Max Amount", maxAmt, setMaxAmt, "9999.99"],
+                  ].map(([label, val, set, ph]) => (
+                    <div key={label}>
+                      <div className="mb-1.5 flex items-center justify-between text-sm">
+                        <span className="font-semibold text-slate-900">
+                          {label}
+                        </span>
+                        <span className="text-xs text-slate-400">Optional</span>
+                      </div>
+                      <input
+                        value={val}
+                        onChange={(e) => set(e.target.value)}
+                        inputMode="decimal"
+                        placeholder={ph}
+                        className="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between text-sm">
+                    <span className="font-semibold text-slate-900">Note</span>
+                    <span className="text-xs text-slate-400">Optional</span>
+                  </div>
+                  <input
+                    value={note}
+                    onChange={(e) => setNote(e.target.value)}
+                    placeholder="e.g. Refunded by mistake"
+                    className="h-10 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                  />
+                </div>
+                <label className="flex items-start gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={allowNeg}
+                    onChange={(e) => setAllowNeg(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-blue-600"
+                  />
+                  <span>
+                    Allow negative wallet balance
+                    <span className="block text-xs text-slate-400">
+                      Only needed if the customer already spent the refunded
+                      money. Otherwise that order is skipped with an error.
+                    </span>
+                  </span>
+                </label>
+                {formErr && (
+                  <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                    {formErr}
+                  </div>
+                )}
+                <div className="flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={busy || !refs.length}
+                    className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {busy ? (
+                      <Icons.Loader2 size={15} className="animate-spin" />
+                    ) : (
+                      <Icons.RefreshCw size={15} />
+                    )}
+                    {busy ? `Processing ${progress}` : "Process Rollback"}
+                  </button>
+                </div>
+              </div>
+            </form>
+
+            {results === null ? (
+              <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center">
+                <div className="font-semibold text-slate-900">
+                  No results yet
+                </div>
+                <p className="mt-1 text-sm text-slate-500">
+                  Fill out the form and submit to see the rollback results here.
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex items-center justify-between border-b border-slate-100 p-5">
+                  <div className="font-bold text-slate-900">Results</div>
+                  <div className="text-sm text-slate-500">
+                    <span className="font-semibold text-emerald-600">
+                      {okCount} succeeded
+                    </span>
+                    {" · "}
+                    <span
+                      className={`font-semibold ${results.length - okCount ? "text-red-600" : "text-slate-400"}`}
+                    >
+                      {results.length - okCount} failed
+                    </span>
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-400">
+                      <tr>
+                        <th className="px-5 py-2.5">Order ID</th>
+                        <th className="px-5 py-2.5">Result</th>
+                        <th className="px-5 py-2.5">Details</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {results.map((r) => (
+                        <tr
+                          key={r.orderId}
+                          className="border-t border-slate-100"
+                        >
+                          <td className="px-5 py-3 font-semibold text-slate-900">
+                            {r.orderId}
+                          </td>
+                          <td className="px-5 py-3">
+                            <span
+                              className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                                r.ok
+                                  ? "bg-emerald-50 text-emerald-700"
+                                  : "bg-red-50 text-red-700"
+                              }`}
+                            >
+                              {r.ok ? "Success" : "Failed"}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3 text-slate-600">{r.msg}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ------------------------------------------------------------
 // App.jsx
 // ------------------------------------------------------------
@@ -54344,7 +55255,10 @@ function CnOrderDetailPage() {
 // ListPage (filter bar + table). Anything without a config yet falls
 // back to a placeholder, so a newly added nav item never breaks routing.
 const OTHER_ROUTES = NAV_SECTIONS.flatMap((s) => s.items).filter(
-  (item) => item.path !== "/" && !item.path.startsWith("/reports"),
+  (item) =>
+    item.path !== "/" &&
+    !item.path.startsWith("/reports") &&
+    !item.path.startsWith("/support"),
 );
 
 // ============================================================
@@ -62208,6 +63122,8 @@ function CustomerDetailPage() {
           cn_order_payment_wallet: "CN order payment (wallet)",
           shop_order_payment_wallet: "Shop order payment (wallet)",
           shop_order_refund_wallet: "Shop order refund (wallet)",
+          cn_order_refund: "CN order refund",
+          cn_order_refund_reversal: "CN order refund reversed",
         })[r.type] || r.type,
     },
     {
@@ -74875,6 +75791,15 @@ function AdminApp() {
               />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/reports" element={<ReportsHubPage />} />
+              <Route path="/support" element={<SupportHubPage />} />
+              <Route
+                path="/support/rollback-completed"
+                element={<RollbackCompletedPage />}
+              />
+              <Route
+                path="/support/rollback-refund"
+                element={<RollbackRefundPage />}
+              />
               <Route path="/customers/:code" element={<CustomerDetailPage />} />
               <Route path="/users/:id" element={<StaffDetailPage />} />
               <Route
