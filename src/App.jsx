@@ -4992,14 +4992,28 @@ function whIsActive(list, code, type) {
 
 // Every active order needs an ACTIVE China Warehouse and an ACTIVE
 // Cambodia Branch. Returns "" when valid, otherwise a message.
-function validateOrderRoute(china, kh, list) {
-  if (!china) return "សូមជ្រើសរើស China Warehouse";
-  if (!kh) return "សូមជ្រើសរើស Cambodia Receiving Branch";
+// `tr` is optional: pass useAdminTr()'s tr to get the message in the chosen
+// language; without it callers keep the original Khmer text.
+function validateOrderRoute(china, kh, list, tr) {
+  const T = tr || ((en, km) => km);
+  if (!china)
+    return T("Please select a China Warehouse", "សូមជ្រើសរើស China Warehouse");
+  if (!kh)
+    return T(
+      "Please select a Cambodia Receiving Branch",
+      "សូមជ្រើសរើស Cambodia Receiving Branch",
+    );
   if (list.length) {
     if (!whIsActive(list, china, "china"))
-      return `China Warehouse "${china}" មិន Active`;
+      return T(
+        `China Warehouse "${china}" is not Active`,
+        `China Warehouse "${china}" មិន Active`,
+      );
     if (!whIsActive(list, kh, "cambodia"))
-      return `Cambodia Branch "${kh}" មិន Active`;
+      return T(
+        `Cambodia Branch "${kh}" is not Active`,
+        `Cambodia Branch "${kh}" មិន Active`,
+      );
   }
   return "";
 }
@@ -5435,6 +5449,7 @@ function WarehouseSelect({
   list,
   disabled,
 }) {
+  const tr = useAdminTr();
   const options = list.filter(
     (w) => w.type === type && (w.status === "Active" || w.code === value),
   );
@@ -5450,11 +5465,11 @@ function WarehouseSelect({
         onChange={(e) => onChange(e.target.value)}
         className={INPUT_CLS}
       >
-        <option value="">— ជ្រើសរើស —</option>
+        <option value="">{tr("— Select —", "— ជ្រើសរើស —")}</option>
         {options.map((w) => (
           <option key={w.code} value={w.code} disabled={w.status !== "Active"}>
             {w.code} · {w.name}
-            {w.status !== "Active" ? " (Disabled)" : ""}
+            {w.status !== "Active" ? tr(" (Disabled)", " (បានបិទ)") : ""}
           </option>
         ))}
       </select>
@@ -6923,12 +6938,13 @@ function useCustomerSearch(query) {
 function CustomerPicker({
   value,
   onChange,
-  label = "Customer",
+  label,
   strict = false,
   // locked: Customer was set automatically (e.g. Assisted Purchase TK) and
   // must not be changed or cleared by staff.
   locked = false,
 }) {
+  const tr = useAdminTr();
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const { results, loading } = useCustomerSearch(query);
@@ -6945,7 +6961,8 @@ function CustomerPicker({
   return (
     <div ref={boxRef} className="relative">
       <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-        {label} <span className="text-signal-red">*</span>
+        {label ?? tr("Customer", "អតិថិជន")}{" "}
+        <span className="text-signal-red">*</span>
       </label>
       {value ? (
         <div className="flex items-center justify-between border border-mist-200 rounded-md px-3 py-2 text-sm bg-mist-50">
@@ -6954,7 +6971,7 @@ function CustomerPicker({
             {strict && (
               <span className="flex items-center gap-1 text-xs font-normal text-signal-teal mt-0.5">
                 <Check size={12} strokeWidth={3} />
-                Customer verified
+                {tr("Customer verified", "បានផ្ទៀងផ្ទាត់អតិថិជន")}
                 {value.phone ? (
                   <span className="text-ink-600/50"> · {value.phone}</span>
                 ) : null}
@@ -6964,7 +6981,7 @@ function CustomerPicker({
           {locked ? (
             <span className="flex items-center gap-1 text-[11px] font-medium text-ink-600/60 shrink-0">
               <Icons.Lock size={12} />
-              Auto Assigned · Locked
+              {tr("Auto Assigned · Locked", "កំណត់ស្វ័យប្រវត្តិ · ចាក់សោ")}
             </span>
           ) : (
             <button
@@ -7012,8 +7029,11 @@ function CustomerPicker({
               ) : (
                 <p className="px-3 py-2 text-xs text-ink-600/45">
                   {strict
-                    ? "Customer Not Found"
-                    : "Customer not found — សូមបង្កើតនៅ Customers page សិន"}
+                    ? tr("Customer Not Found", "រកមិនឃើញអតិថិជន")
+                    : tr(
+                        "Customer not found — please create it on the Customers page first",
+                        "រកមិនឃើញអតិថិជន — សូមបង្កើតនៅទំព័រអតិថិជនសិន",
+                      )}
                 </p>
               )}
             </div>
@@ -7277,14 +7297,17 @@ function OrderPicker({ customer, value, onChange }) {
 // to create the customer first.
 function CustomerNotFound({ query }) {
   const { user } = useAuth();
+  const tr = useAdminTr();
   const [copied, setCopied] = useState(false);
   const canOpenCustomers =
     user?.allowedPaths === "*" ||
     (Array.isArray(user?.allowedPaths) &&
       user.allowedPaths.includes("/customers"));
-  const message = `សូមបង្កើត New Customer — Customer ID "${query.trim()}" រកមិនឃើញក្នុងប្រព័ន្ធ (ស្នើដោយ ${
-    user?.name || "China Warehouse"
-  })`;
+  const who = user?.name || "China Warehouse";
+  const message = tr(
+    `Please create a new Customer — Customer ID "${query.trim()}" was not found in the system (requested by ${who})`,
+    `សូមបង្កើតអតិថិជនថ្មី — Customer ID "${query.trim()}" រកមិនឃើញក្នុងប្រព័ន្ធ (ស្នើដោយ ${who})`,
+  );
 
   async function copyRequest() {
     try {
@@ -7292,7 +7315,13 @@ function CustomerNotFound({ query }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2500);
     } catch {
-      window.prompt("Copy សារនេះផ្ញើទៅ Admin / Customer Service:", message);
+      window.prompt(
+        tr(
+          "Copy this message and send it to Admin / Customer Service:",
+          "Copy សារនេះផ្ញើទៅ Admin / Customer Service:",
+        ),
+        message,
+      );
     }
   }
 
@@ -7301,11 +7330,14 @@ function CustomerNotFound({ query }) {
       <div className="flex items-start gap-2 text-sm text-signal-red">
         <Icons.UserX size={16} className="shrink-0 mt-0.5" />
         <div>
-          <div className="font-semibold">Customer Not Found</div>
+          <div className="font-semibold">
+            {tr("Customer Not Found", "រកមិនឃើញអតិថិជន")}
+          </div>
           <div className="text-signal-red/80 mt-0.5">
-            មិនអាចបង្កើត TK បានទេ — TK ត្រូវភ្ជាប់ជាមួយ Customer ID
-            ដែលមានស្រាប់។ សូមទាក់ទង Admin ឬ Customer Service ឱ្យបង្កើត Customer
-            សិន។
+            {tr(
+              "Cannot create the TK — a TK must be linked to an existing Customer ID. Please contact Admin or Customer Service to create the Customer first.",
+              "មិនអាចបង្កើត TK បានទេ — TK ត្រូវភ្ជាប់ជាមួយ Customer ID ដែលមានស្រាប់។ សូមទាក់ទង Admin ឬ Customer Service ឱ្យបង្កើតអតិថិជនសិន។",
+            )}
           </div>
         </div>
       </div>
@@ -7316,7 +7348,9 @@ function CustomerNotFound({ query }) {
           className="flex items-center gap-1.5 bg-white border border-mist-200 text-sm font-medium text-ink-700 px-3 py-2 rounded-md hover:bg-mist-50"
         >
           {copied ? <Check size={14} /> : <Copy size={14} />}
-          {copied ? "បាន Copy សារហើយ" : "Copy សារស្នើសុំ Admin"}
+          {copied
+            ? tr("Message copied", "បាន Copy សារហើយ")
+            : tr("Copy request for Admin", "Copy សារស្នើសុំ Admin")}
         </button>
         {canOpenCustomers && (
           <Link
@@ -7324,7 +7358,7 @@ function CustomerNotFound({ query }) {
             className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3 py-2 rounded-md hover:bg-signal-blue/90"
           >
             <Icons.Users size={14} />
-            បើក Customers
+            {tr("Open Customers", "បើកទំព័រអតិថិជន")}
           </Link>
         )}
       </div>
@@ -7339,8 +7373,15 @@ function PhotoUploader({
   photos,
   setPhotos,
   categories = PHOTO_CATEGORIES,
-  emptyHint = "No images yet — ត្រូវការយ៉ាងតិច ១ សន្លឹក",
+  emptyHint,
 }) {
+  const tr = useAdminTr();
+  const hint =
+    emptyHint ??
+    tr(
+      "No images yet — at least 1 photo required",
+      "មិនទាន់មានរូបភាព — ត្រូវការយ៉ាងតិច ១ សន្លឹក",
+    );
   const [category, setCategory] = useState(categories[0]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -7367,7 +7408,10 @@ function PhotoUploader({
       }
       setPhotos((prev) => [...prev, ...added]);
     } catch (err) {
-      setError(err.message || "Unable to upload image.");
+      setError(
+        err.message ||
+          tr("Unable to upload image.", "មិនអាចផ្ទុករូបភាពឡើងបានទេ។"),
+      );
     } finally {
       setBusy(false);
     }
@@ -7377,14 +7421,18 @@ function PhotoUploader({
     <div className="space-y-3">
       <div className="flex flex-wrap items-end gap-2">
         <div className="flex-1 min-w-[160px]">
-          <label className={LABEL_CLS}>ប្រភេទរូបភាព</label>
+          <label className={LABEL_CLS}>
+            {tr("Photo Type", "ប្រភេទរូបភាព")}
+          </label>
           <select
             value={category}
             onChange={(e) => setCategory(e.target.value)}
             className={INPUT_CLS}
           >
             {categories.map((c) => (
-              <option key={c}>{c}</option>
+              <option key={c} value={c}>
+                {tr.v(c)}
+              </option>
             ))}
           </select>
         </div>
@@ -7395,7 +7443,7 @@ function PhotoUploader({
           className="flex items-center justify-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-4 py-2.5 rounded-md hover:bg-signal-blue/90 disabled:opacity-60 min-h-[42px]"
         >
           <Icons.Camera size={16} />
-          Take photo
+          {tr("Take photo", "ថតរូប")}
         </button>
         <button
           type="button"
@@ -7404,7 +7452,7 @@ function PhotoUploader({
           className="flex items-center justify-center gap-1.5 bg-white border border-mist-200 text-ink-700 text-sm font-medium px-4 py-2.5 rounded-md hover:bg-mist-50 disabled:opacity-60 min-h-[42px]"
         >
           <Icons.ImagePlus size={16} />
-          Upload Photo
+          {tr("Upload Photo", "ផ្ទុករូបភាពឡើង")}
         </button>
         <input
           ref={camRef}
@@ -7431,12 +7479,16 @@ function PhotoUploader({
       </div>
 
       {error && <p className="text-xs text-signal-red">{error}</p>}
-      {busy && <p className="text-xs text-ink-600/50">Processing image...</p>}
+      {busy && (
+        <p className="text-xs text-ink-600/50">
+          {tr("Processing image...", "កំពុងដំណើរការរូបភាព...")}
+        </p>
+      )}
 
       {photos.length === 0 ? (
         <div className="border border-dashed border-mist-200 rounded-md py-8 flex flex-col items-center text-center">
           <Icons.ImagePlus size={28} className="text-ink-600/20 mb-2" />
-          <p className="text-sm text-ink-600/45">{emptyHint}</p>
+          <p className="text-sm text-ink-600/45">{hint}</p>
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
@@ -7457,7 +7509,7 @@ function PhotoUploader({
                     setPhotos((prev) => prev.filter((x) => x.id !== p.id))
                   }
                   className="absolute top-1.5 right-1.5 w-7 h-7 rounded-md bg-ink-900/70 text-white flex items-center justify-center hover:bg-signal-red"
-                  aria-label="លុបរូបភាព"
+                  aria-label={tr("Remove photo", "លុបរូបភាព")}
                 >
                   <Icons.Trash2 size={14} />
                 </button>
@@ -7474,7 +7526,9 @@ function PhotoUploader({
                 className="w-full text-[11px] px-2 py-1.5 outline-none bg-mist-50 text-ink-700"
               >
                 {categories.map((c) => (
-                  <option key={c}>{c}</option>
+                  <option key={c} value={c}>
+                    {tr.v(c)}
+                  </option>
                 ))}
               </select>
             </div>
@@ -7508,6 +7562,7 @@ function CargoCalculator({
   override,
   setOverride,
 }) {
+  const tr = useAdminTr();
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
   const policy =
     getSystemSettings().shipping || DEFAULT_SYSTEM_SETTINGS.shipping;
@@ -7520,13 +7575,16 @@ function CargoCalculator({
   const dimensionMode = form.packageType === "dimension_based";
   const isAir = normShipMethod(form.shippingMethod) === "Air";
   const airItems = [
-    { label: "Shipping Method", value: "Air" },
     {
-      label: "Rate",
+      label: tr("Shipping Method", "វិធីដឹកជញ្ជូន"),
+      value: tr.v("Air"),
+    },
+    {
+      label: tr("Rate", "តម្លៃ"),
       value: calc.ok ? `${displayMoney(calc.rate)} / KG` : "—",
     },
     {
-      label: "Freight Fee",
+      label: tr("Freight Fee", "ថ្លៃដឹក"),
       value: finalFee != null ? displayMoney(finalFee) : "—",
     },
   ];
@@ -7550,7 +7608,9 @@ function CargoCalculator({
   return (
     <div className="space-y-5">
       <div>
-        <label className={LABEL_CLS}>Shipping Method</label>
+        <label className={LABEL_CLS}>
+          {tr("Shipping Method", "វិធីដឹកជញ្ជូន")}
+        </label>
         <div className="grid grid-cols-3 gap-2.5">
           {CN_SHIP_METHODS.map((m) => (
             <button
@@ -7560,28 +7620,38 @@ function CargoCalculator({
               className={`${segBtn(normShipMethod(form.shippingMethod) === m)} inline-flex items-center justify-center gap-2`}
             >
               <ShipMethodIcon m={m} size={16} />
-              {m}
+              {tr.v(m)}
             </button>
           ))}
         </div>
         <p className="text-xs text-ink-600/50 mt-1.5">
-          Land / Sea: freight by Size S/M/L or CBM. Air: freight by KG.
+          {tr(
+            "Land / Sea: freight by Size S/M/L or CBM. Air: freight by KG.",
+            "ផ្លូវគោក / ផ្លូវទឹក៖ ថ្លៃដឹកតាមទំហំ S/M/L ឬ CBM។ ផ្លូវអាកាស៖ ថ្លៃដឹកតាម KG។",
+          )}
         </p>
       </div>
 
       {!isAir && (
         <>
           <div>
-            <label className={LABEL_CLS}>Package Type</label>
+            <label className={LABEL_CLS}>
+              {tr("Package Type", "ប្រភេទកញ្ចប់")}
+            </label>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <button
                 type="button"
                 onClick={() => selectPackageType("small_package")}
                 className={`${segBtn(form.packageType === "small_package")} text-left px-4`}
               >
-                <span className="block font-semibold">📦 Small Package</span>
+                <span className="block font-semibold">
+                  📦 {tr("Small Package", "កញ្ចប់តូច")}
+                </span>
                 <span className="block text-[11px] font-normal opacity-75 mt-0.5">
-                  Select Size S / M / L — fixed price
+                  {tr(
+                    "Select Size S / M / L — fixed price",
+                    "ជ្រើសរើសទំហំ S / M / L — តម្លៃថេរ",
+                  )}
                 </span>
               </button>
               <button
@@ -7589,9 +7659,14 @@ function CargoCalculator({
                 onClick={() => selectPackageType("dimension_based")}
                 className={`${segBtn(form.packageType === "dimension_based")} text-left px-4`}
               >
-                <span className="block font-semibold">📐 Dimension Based</span>
+                <span className="block font-semibold">
+                  📐 {tr("Dimension Based", "គិតតាមវិមាត្រ")}
+                </span>
                 <span className="block text-[11px] font-normal opacity-75 mt-0.5">
-                  Measure actual size and calculate by CBM
+                  {tr(
+                    "Measure actual size and calculate by CBM",
+                    "វាស់ទំហំពិត ហើយគណនាតាម CBM",
+                  )}
                 </span>
               </button>
             </div>
@@ -7599,7 +7674,9 @@ function CargoCalculator({
 
           {dimensionMode && (
             <div>
-              <label className={LABEL_CLS}>Cargo Type</label>
+              <label className={LABEL_CLS}>
+                {tr("Cargo Type", "ប្រភេទទំនិញ")}
+              </label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 {CARGO_TYPES.map((t) => (
                   <button
@@ -7608,7 +7685,9 @@ function CargoCalculator({
                     onClick={() => selectCargoType(t)}
                     className={`${segBtn(form.cargoType === t)} text-left px-4`}
                   >
-                    <span className="block font-semibold">{t} Cargo</span>
+                    <span className="block font-semibold">
+                      {tr(`${t} Cargo`, `ទំនិញ${tr.v(t)}`)}
+                    </span>
                     <span className="block text-[11px] font-normal opacity-75 mt-0.5">
                       {displayMoney(cargoPolicyFor(t, policy).cbmRate)} / CBM
                     </span>
@@ -7620,7 +7699,9 @@ function CargoCalculator({
 
           {!dimensionMode ? (
             <div>
-              <label className={LABEL_CLS}>Package Size</label>
+              <label className={LABEL_CLS}>
+                {tr("Package Size", "ទំហំកញ្ចប់")}
+              </label>
               <div className="grid grid-cols-3 gap-2.5">
                 {["S", "M", "L"].map((s) => (
                   <button
@@ -7629,7 +7710,9 @@ function CargoCalculator({
                     onClick={() => setForm((f) => ({ ...f, sizeClass: s }))}
                     className={`${segBtn(form.sizeClass === s)} min-h-[62px]`}
                   >
-                    <span className="block text-base font-bold">Size {s}</span>
+                    <span className="block text-base font-bold">
+                      {tr(`Size ${s}`, `ទំហំ ${s}`)}
+                    </span>
                     <span className="block text-[11px] font-normal opacity-75 mt-0.5">
                       {displayMoney(cargoPolicy.sizeRates?.[s])}
                     </span>
@@ -7645,19 +7728,21 @@ function CargoCalculator({
                 </div>
                 <div>
                   <div className="font-bold text-sm text-slate-900">
-                    Actual dimensions
+                    {tr("Actual dimensions", "វិមាត្រពិត")}
                   </div>
                   <div className="text-xs text-slate-500 mt-0.5">
-                    CBM is calculated from the real package size and uses the{" "}
-                    {type} CBM rate.
+                    {tr(
+                      `CBM is calculated from the real package size and uses the ${type} CBM rate.`,
+                      `CBM គណនាពីទំហំកញ្ចប់ពិត ហើយប្រើតម្លៃ CBM សម្រាប់ទំនិញ${tr.v(type)}។`,
+                    )}
                   </div>
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mt-4">
                 {[
-                  ["length", "Length (cm)"],
-                  ["width", "Width (cm)"],
-                  ["height", "Height (cm)"],
+                  ["length", tr("Length (cm)", "ប្រវែង (cm)")],
+                  ["width", tr("Width (cm)", "ទទឹង (cm)")],
+                  ["height", tr("Height (cm)", "កម្ពស់ (cm)")],
                 ].map(([key, label]) => (
                   <div key={key}>
                     <label className={LABEL_CLS}>{label}</label>
@@ -7679,7 +7764,7 @@ function CargoCalculator({
       )}
 
       <div>
-        <label className={LABEL_CLS}>Weight (KG)</label>
+        <label className={LABEL_CLS}>{tr("Weight (KG)", "ទម្ងន់ (KG)")}</label>
         <input
           type="number"
           inputMode="decimal"
@@ -7694,11 +7779,11 @@ function CargoCalculator({
       <div className="border border-mist-200 rounded-xl bg-mist-50/60 p-4">
         <div className="flex items-center justify-between mb-3">
           <h4 className="font-display font-bold text-sm text-ink-900">
-            Freight Calculation
+            {tr("Freight Calculation", "ការគណនាថ្លៃដឹក")}
           </h4>
           <span className="flex items-center gap-1 text-[11px] text-ink-600/45">
             <Icons.Lock size={12} />
-            Auto-calculate
+            {tr("Auto-calculate", "គណនាស្វ័យប្រវត្តិ")}
           </span>
         </div>
         <InfoGrid
@@ -7707,16 +7792,23 @@ function CargoCalculator({
               ? airItems
               : [
                   ...(dimensionMode
-                    ? [{ label: "Cargo Type", value: form.cargoType || "—" }]
+                    ? [
+                        {
+                          label: tr("Cargo Type", "ប្រភេទទំនិញ"),
+                          value: form.cargoType ? tr.v(form.cargoType) : "—",
+                        },
+                      ]
                     : []),
                   {
-                    label: "Package Type",
-                    value: dimensionMode ? "Dimension Based" : "Small Package",
+                    label: tr("Package Type", "ប្រភេទកញ្ចប់"),
+                    value: dimensionMode
+                      ? tr("Dimension Based", "គិតតាមវិមាត្រ")
+                      : tr("Small Package", "កញ្ចប់តូច"),
                   },
                   {
-                    label: "Size",
+                    label: tr("Size", "ទំហំ"),
                     value: dimensionMode
-                      ? "Actual Dimensions"
+                      ? tr("Actual Dimensions", "វិមាត្រពិត")
                       : form.sizeClass || "—",
                   },
                   ...(dimensionMode
@@ -7733,16 +7825,22 @@ function CargoCalculator({
                   ...(dimensionMode && calc.ok && calc.kgPerCbm
                     ? [
                         {
-                          label: "Charged CBM",
+                          label: tr("Charged CBM", "CBM ដែលគិតថ្លៃ"),
                           value:
                             calc.basis === "weight"
-                              ? `${calc.chargeCbm.toFixed(3)} m³ (by weight: ${calc.weightKg} KG ÷ ${calc.kgPerCbm})`
-                              : `${calc.chargeCbm.toFixed(3)} m³ (by volume)`,
+                              ? tr(
+                                  `${calc.chargeCbm.toFixed(3)} m³ (by weight: ${calc.weightKg} KG ÷ ${calc.kgPerCbm})`,
+                                  `${calc.chargeCbm.toFixed(3)} m³ (តាមទម្ងន់៖ ${calc.weightKg} KG ÷ ${calc.kgPerCbm})`,
+                                )
+                              : tr(
+                                  `${calc.chargeCbm.toFixed(3)} m³ (by volume)`,
+                                  `${calc.chargeCbm.toFixed(3)} m³ (តាមមាឌ)`,
+                                ),
                         },
                       ]
                     : []),
                   {
-                    label: "Rate",
+                    label: tr("Rate", "តម្លៃ"),
                     value: calc.ok
                       ? calc.method === "CBM"
                         ? `${displayMoney(calc.rate)} / CBM`
@@ -7752,16 +7850,16 @@ function CargoCalculator({
                   ...(dimensionMode
                     ? [
                         {
-                          label: "Minimum Freight",
+                          label: tr("Minimum Freight", "ថ្លៃដឹកអប្បបរមា"),
                           value:
                             cargoPolicy.applyMinimumFreight === true
-                              ? `${displayMoney(cargoPolicy.minimumFreight)} · Applied`
-                              : "Not Applied",
+                              ? `${displayMoney(cargoPolicy.minimumFreight)} · ${tr("Applied", "អនុវត្ត")}`
+                              : tr("Not Applied", "មិនអនុវត្ត"),
                         },
                       ]
                     : []),
                   {
-                    label: "Freight Fee",
+                    label: tr("Freight Fee", "ថ្លៃដឹក"),
                     value: finalFee != null ? displayMoney(finalFee) : "—",
                   },
                 ]
@@ -7780,7 +7878,7 @@ function CargoCalculator({
               }
               className="h-4 w-4 accent-blue-600"
             />{" "}
-            Allow freight override
+            {tr("Allow freight override", "អនុញ្ញាតកែថ្លៃដឹក")}
           </label>
           {override.on && (
             <input
@@ -7854,6 +7952,7 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const canOverride = hasPermission(user, "tk.freight_override");
+  const tr = useAdminTr();
 
   const [f, setF] = useState(() => blankInboundForm(user));
   const [photos, setPhotos] = useState([]);
@@ -8029,15 +8128,30 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
     e.preventDefault();
     if (saving) return; // a double-click must never create two Orders
     setError("");
-    if (!tkTrim) return setError("សូមស្កែន ឬបញ្ចូល TK Number");
-    if (duplicateTk) return setError(`TK "${tkTrim}" មានរួចហើយក្នុងប្រព័ន្ធ`);
+    if (!tkTrim)
+      return setError(
+        tr("Please scan or enter the TK Number", "សូមស្កែន ឬបញ្ចូលលេខ TK"),
+      );
+    if (duplicateTk)
+      return setError(
+        tr(
+          `TK "${tkTrim}" already exists in the system`,
+          `TK "${tkTrim}" មានរួចហើយក្នុងប្រព័ន្ធ`,
+        ),
+      );
     if (!f.customer)
       return setError(
-        "Customer Not Found — សូមផ្ទៀងផ្ទាត់ Customer ID ដែលមានក្នុងប្រព័ន្ធ",
+        tr(
+          "Customer Not Found — please verify a Customer ID that exists in the system",
+          "រកមិនឃើញអតិថិជន — សូមផ្ទៀងផ្ទាត់ Customer ID ដែលមានក្នុងប្រព័ន្ធ",
+        ),
       );
     if (cnCustomer && f.customer.id !== cnCustomer.id)
       return setError(
-        `TK នេះជារបស់ ${cnCustomer.customer_code} (Assisted Purchase) — មិនអាចប្តូរទៅ Customer ផ្សេងបានទេ`,
+        tr(
+          `This TK belongs to ${cnCustomer.customer_code} (Assisted Purchase) — it cannot be changed to another Customer`,
+          `TK នេះជារបស់ ${cnCustomer.customer_code} (Assisted Purchase) — មិនអាចប្តូរទៅអតិថិជនផ្សេងបានទេ`,
+        ),
       );
     // Photos and Size/Freight are OPTIONAL at Inbound — staff can enter them
     // later when the TK is scanned at Arrive (Cambodia). "cargoBlank" = the
@@ -8058,17 +8172,28 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
         // Cargo Type (Normal/Sensitive) only applies to Dimension Based; the
         // Small Package form has no such selector, so never require it there.
         if (f.packageType === "dimension_based" && !f.cargoType)
-          return setError("Please select Cargo Type");
+          return setError(
+            tr("Please select Cargo Type", "សូមជ្រើសរើសប្រភេទទំនិញ"),
+          );
         if (
           f.packageType === "small_package" &&
           !["S", "M", "L"].includes(f.sizeClass)
         )
-          return setError("Please select Size S, M or L");
+          return setError(
+            tr("Please select Size S, M or L", "សូមជ្រើសរើសទំហំ S, M ឬ L"),
+          );
         if (f.packageType === "dimension_based" && calc.cbm == null)
-          return setError("Length, Width and Height must be positive numbers");
+          return setError(
+            tr(
+              "Length, Width and Height must be positive numbers",
+              "ប្រវែង ទទឹង និងកម្ពស់ ត្រូវតែជាលេខវិជ្ជមាន",
+            ),
+          );
       }
       if (f.weight !== "" && !(Number(f.weight) > 0))
-        return setError("Weight ត្រូវតែជាលេខវិជ្ជមាន");
+        return setError(
+          tr("Weight must be a positive number", "ទម្ងន់ត្រូវតែជាលេខវិជ្ជមាន"),
+        );
       if (
         f.packageCount !== "" &&
         !(
@@ -8076,14 +8201,22 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
           Number(f.packageCount) >= 1
         )
       )
-        return setError("ចំនួនPackageត្រូវតែជាចំនួនគត់ ចាប់ពី 1 ឡើង");
-      if (!cargoBlank && !calc.ok) return setError(calc.message);
+        return setError(
+          tr(
+            "Package Qty must be a whole number from 1 upward",
+            "ចំនួនកញ្ចប់ត្រូវតែជាចំនួនគត់ ចាប់ពី 1 ឡើង",
+          ),
+        );
+      if (!cargoBlank && !calc.ok)
+        return setError(trCalcMessage(tr, calc.message));
       if (
         !cargoBlank &&
         override.on &&
         !(override.value !== "" && overrideNum >= 0)
       )
-        return setError("តម្លៃ Override មិនត្រឹមត្រូវ");
+        return setError(
+          tr("Invalid override amount", "តម្លៃ Override មិនត្រឹមត្រូវ"),
+        );
     }
 
     // Only create the fallback location after all Inbound validation passes,
@@ -8097,13 +8230,20 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
         user?.name || "System",
       );
     } catch (err) {
-      return setError(err?.message || "មិនអាចកំណត់ Customer Location បាន");
+      return setError(
+        err?.message ||
+          tr(
+            "Unable to set the Customer Location",
+            "មិនអាចកំណត់ទីតាំងអតិថិជនបានទេ",
+          ),
+      );
     }
     const resolvedKhBranch = resolvedLocation.branchCode;
     const routeProblem = validateOrderRoute(
       f.warehouse,
       resolvedKhBranch,
       whList,
+      tr,
     );
     if (routeProblem) return setError(routeProblem);
 
@@ -8203,14 +8343,17 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
       onCreated?.(saved);
       emitCBToast(
         "ok",
-        "TK created successfully",
-        `${tkTrim} has been created and added to Packages / TK.`,
+        tr("TK created successfully", "បានបង្កើត TK ដោយជោគជ័យ"),
+        tr(
+          `${tkTrim} has been created and added to Packages / TK.`,
+          `${tkTrim} ត្រូវបានបង្កើត ហើយបន្ថែមទៅ Packages / TK។`,
+        ),
       );
       setDone({ saved, photoWarning, order: newOrder });
     } catch (err) {
       // TK not saved → don't leave an empty Order behind.
       if (!saved) await rollbackNewOrder(newOrder);
-      setError(err.message || "មិនអាចSaveបានទេ");
+      setError(err.message || tr("Unable to save", "មិនអាចរក្សាទុកបានទេ"));
     } finally {
       setSaving(false);
     }
@@ -8244,7 +8387,7 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
             <Check size={15} strokeWidth={3} />
           </span>
           <h3 className="font-display font-bold text-base text-ink-900">
-            Inbound បានSave
+            {tr("Inbound saved", "បានរក្សាទុកការទទួលចូល")}
           </h3>
         </div>
         <div className="p-5 space-y-4">
@@ -8256,15 +8399,21 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
           )}
           <InfoGrid
             items={[
-              { label: "TK Number", value: done.saved.tk },
-              { label: "Order ID", value: done.order?.order_no || "—" },
+              { label: tr("TK Number", "លេខ TK"), value: done.saved.tk },
               {
-                label: "Customer",
+                label: tr("Order ID", "លេខ Order"),
+                value: done.order?.order_no || "—",
+              },
+              {
+                label: tr("Customer", "អតិថិជន"),
                 value: `${f.customer.customer_code} · ${f.customer.name}`,
                 span: true,
               },
-              { label: "Freight Fee", value: money(finalFee) },
-              { label: "Inbound Status", value: f.inboundStatus },
+              { label: tr("Freight Fee", "ថ្លៃដឹក"), value: money(finalFee) },
+              {
+                label: tr("Inbound Status", "ស្ថានភាពទទួលចូល"),
+                value: tr.v(f.inboundStatus),
+              },
             ]}
           />
         </div>
@@ -8274,14 +8423,14 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
             onClick={onClose}
             className="text-sm font-medium text-ink-700 px-3.5 py-2.5 rounded-md hover:bg-mist-50"
           >
-            Close
+            {tr("Close", "បិទ")}
           </button>
           <button
             type="button"
             onClick={resetForNext}
             className="text-sm font-medium bg-white border border-mist-200 text-ink-700 px-3.5 py-2.5 rounded-md hover:bg-mist-50"
           >
-            Scan TK Next
+            {tr("Scan TK Next", "ស្កែន TK បន្ទាប់")}
           </button>
           <button
             type="button"
@@ -8291,7 +8440,7 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
             }}
             className="text-sm font-medium bg-signal-blue text-white px-3.5 py-2.5 rounded-md hover:bg-signal-blue/90"
           >
-            មើល TK Detail
+            {tr("View TK Detail", "មើលព័ត៌មាន TK")}
           </button>
         </div>
       </div>,
@@ -8301,22 +8450,29 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
   // Same modal shell as New CN Purchase Order (AppModal).
   return (
     <AppModal
-      title="New TK — Inbound Origin"
-      subtitle="Scan TK, pick the customer, then set cargo & freight (optional)."
+      title={tr("New TK — Inbound Origin", "TK ថ្មី — ទទួលចូលនៅប្រភព")}
+      subtitle={tr(
+        "Scan TK, pick the customer, then set cargo & freight (optional).",
+        "ស្កែន TK ជ្រើសរើសអតិថិជន រួចកំណត់ទំនិញ និងថ្លៃដឹក (មិនចាំបាច់)។",
+      )}
       maxW="max-w-2xl"
       onClose={onClose}
       onSubmit={handleSubmit}
       busy={saving}
       error={error}
-      submitLabel="Save Inbound"
-      busyLabel="កំពុងSave..."
+      cancelLabel={tr("Cancel", "បោះបង់")}
+      submitLabel={tr("Save Inbound", "រក្សាទុកការទទួលចូល")}
+      busyLabel={tr("Saving...", "កំពុងរក្សាទុក...")}
     >
       <div className="space-y-5">
         <section className="space-y-3.5">
-          <h4 className="text-sm font-bold text-slate-900">TK និង Customer</h4>
+          <h4 className="text-sm font-bold text-slate-900">
+            {tr("TK & Customer", "TK និងអតិថិជន")}
+          </h4>
           <div>
             <label className={LABEL_CLS}>
-              TK Number <span className="text-signal-red">*</span>
+              {tr("TK Number", "លេខ TK")}{" "}
+              <span className="text-signal-red">*</span>
             </label>
             <div className="flex items-center gap-2 border border-mist-200 rounded-md px-3 py-2 focus-within:border-signal-blue">
               <Icons.ScanLine size={16} className="text-ink-600/40 shrink-0" />
@@ -8336,23 +8492,36 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
             </div>
             {cnMatch && !duplicateTk && (
               <div className="mt-2 rounded-md bg-violet-50 text-violet-800 px-3 py-2 text-xs">
-                TK នេះជារបស់ <b>{cnMatch.order_id}</b> (Assisted Purchase
+                {tr("This TK belongs to ", "TK នេះជារបស់ ")}
+                <b>{cnMatch.order_id}</b> (Assisted Purchase
                 {cnMatch.customer ? ` · ${cnMatch.customer}` : ""}) —{" "}
                 {cnCustomer
-                  ? `Customer ${cnCustomer.customer_code} ត្រូវបានជ្រើសដោយស្វ័យប្រវត្តិ (មិនអាចប្តូរបាន)។ អាចបញ្ចូល Cargo/ទំហំ ដើម្បីកំណត់ថ្លៃដឹកនៅទីនេះបានដូច Shipment (ឬទុកទទេ ដើម្បីគិតពេល Arrive)។ ចុច Enter (បើទទេ) ឬ Save Inbound ដើម្បីបញ្ចប់។`
-                  : "សូមជ្រើស Customer ឲ្យត្រូវ។"}{" "}
-                ពេល Save វានឹងភ្ជាប់ និងអាប់ដេត CN Order ដោយស្វ័យប្រវត្តិ។
+                  ? tr(
+                      `Customer ${cnCustomer.customer_code} was selected automatically (cannot be changed). You can enter Cargo / size here to set the freight like a Shipment (or leave it blank to price it on Arrive). Press Enter (when empty) or Save Inbound to finish.`,
+                      `អតិថិជន ${cnCustomer.customer_code} ត្រូវបានជ្រើសដោយស្វ័យប្រវត្តិ (មិនអាចប្តូរបាន)។ អាចបញ្ចូលទំនិញ/ទំហំ ដើម្បីកំណត់ថ្លៃដឹកនៅទីនេះបានដូច Shipment (ឬទុកទទេ ដើម្បីគិតពេល Arrive)។ ចុច Enter (បើទទេ) ឬ រក្សាទុកការទទួលចូល ដើម្បីបញ្ចប់។`,
+                    )
+                  : tr(
+                      "Please select the correct Customer.",
+                      "សូមជ្រើសអតិថិជនឲ្យត្រូវ។",
+                    )}{" "}
+                {tr(
+                  "On save it will be linked and the CN Order updated automatically.",
+                  "ពេលរក្សាទុក វានឹងភ្ជាប់ និងអាប់ដេត CN Order ដោយស្វ័យប្រវត្តិ។",
+                )}
               </div>
             )}
             {duplicateTk && (
               <p className="text-xs text-signal-red mt-1">
-                TK នេះមានរួចហើយក្នុងប្រព័ន្ធ (
+                {tr(
+                  "This TK already exists in the system (",
+                  "TK នេះមានរួចហើយក្នុងប្រព័ន្ធ (",
+                )}
                 <Link
                   to={`/packages/${duplicateTk.tk}`}
                   className="underline"
                   onClick={onClose}
                 >
-                  មើល TK Detail
+                  {tr("View TK Detail", "មើលព័ត៌មាន TK")}
                 </Link>
                 )
               </p>
@@ -8360,13 +8529,13 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
           </div>
           <CustomerPicker
             strict
-            label="Customer ID"
+            label={tr("Customer ID", "លេខអតិថិជន (Customer ID)")}
             value={f.customer}
             locked={!!cnCustomer}
             onChange={(c) => setF((x) => ({ ...x, customer: c }))}
           />
           <div>
-            <label className={LABEL_CLS}>Order ID</label>
+            <label className={LABEL_CLS}>{tr("Order ID", "លេខ Order")}</label>
             <div className="flex items-center justify-between gap-2 border border-mist-200 rounded-md px-3 py-2.5 bg-mist-50">
               <span className="font-display font-bold text-sm text-ink-900">
                 {cnOrderNo || orderPreview || "…"}
@@ -8374,37 +8543,56 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
               <span className="flex items-center gap-1 text-[11px] font-medium text-ink-600/60">
                 <Icons.Lock size={12} />
                 {cnOrderNo
-                  ? "CN Order · Existing ID · Read Only"
-                  : "Auto Generated · Read Only"}
+                  ? tr(
+                      "CN Order · Existing ID · Read Only",
+                      "CN Order · លេខដែលមានស្រាប់ · មើលតែប៉ុណ្ណោះ",
+                    )
+                  : tr(
+                      "Auto Generated · Read Only",
+                      "បង្កើតស្វ័យប្រវត្តិ · មើលតែប៉ុណ្ណោះ",
+                    )}
               </span>
             </div>
             <p className="text-[11px] text-ink-600/50 mt-1">
               {cnOrderNo
-                ? "TK នេះជារបស់ CN Order — ប្រើ Order ID ចាស់ដែលបានបង្កើតរួច មិនបង្កើត Order ថ្មីទេ។"
-                : "រាល់ Inbound ថ្មី ទទួល Order ID ថ្មីជានិច្ច — Customer ដដែលបាន Order ច្រើន។ លេខពិតត្រូវបានកំណត់ពេល Save។"}
+                ? tr(
+                    "This TK belongs to a CN Order — the existing Order ID is reused; no new Order is created.",
+                    "TK នេះជារបស់ CN Order — ប្រើលេខ Order ចាស់ដែលបានបង្កើតរួច មិនបង្កើត Order ថ្មីទេ។",
+                  )
+                : tr(
+                    "Every new inbound gets a brand-new Order ID — one Customer can have many Orders. The final number is assigned on Save.",
+                    "រាល់ការទទួលចូលថ្មី ទទួលលេខ Order ថ្មីជានិច្ច — អតិថិជនម្នាក់អាចមាន Order ច្រើន។ លេខពិតត្រូវបានកំណត់ពេលរក្សាទុក។",
+                  )}
             </p>
           </div>
           <WarehouseSelect
-            label="Cambodia Receiving Branch"
-            hint="បើ Customer មិនទាន់មាន Location ប្រព័ន្ធនឹងបង្កើត Location ស្វ័យប្រវត្តិ ដោយយកសាខាកណ្តាលជាគោល"
+            label={tr("Cambodia Receiving Branch", "សាខាទទួលនៅកម្ពុជា")}
+            hint={tr(
+              "If the Customer has no Location yet, the system creates one automatically using the main branch by default.",
+              "បើអតិថិជនមិនទាន់មានទីតាំង ប្រព័ន្ធនឹងបង្កើតទីតាំងស្វ័យប្រវត្តិ ដោយយកសាខាកណ្តាលជាគោល",
+            )}
             type="cambodia"
             value={f.khBranch}
             onChange={(v) => setF((x) => ({ ...x, khBranch: v }))}
             list={whList}
           />
           <p className="text-[11px] text-ink-600/55 -mt-1">
-            Location របស់ Customer នឹងត្រូវរក្សាទុកជាមួយ Order
-            ដើម្បីរក្សាប្រវត្តិទីតាំងឲ្យត្រឹមត្រូវ។
+            {tr(
+              "The Customer's location is saved with the Order to keep an accurate location history.",
+              "ទីតាំងរបស់អតិថិជននឹងត្រូវរក្សាទុកជាមួយ Order ដើម្បីរក្សាប្រវត្តិទីតាំងឲ្យត្រឹមត្រូវ។",
+            )}
           </p>
         </section>
 
         <section className="space-y-3.5 border-t border-slate-100 pt-5">
           <h4 className="text-sm font-bold text-slate-900">
-            ទំនិញ និង Warehouse
+            {tr("Goods & Warehouse", "ទំនិញ និងឃ្លាំង")}
           </h4>
           {!cnMode && (
             <div>
-              <label className={LABEL_CLS}>Product Name</label>
+              <label className={LABEL_CLS}>
+                {tr("Product Name", "ឈ្មោះទំនិញ")}
+              </label>
               <input
                 value={f.product}
                 onChange={(e) =>
@@ -8418,7 +8606,10 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
             <>
               <div>
                 <label className={LABEL_CLS}>
-                  ចំនួនPackageក្នុង TK (Package Qty)
+                  {tr(
+                    "Packages in this TK (Package Qty)",
+                    "ចំនួនកញ្ចប់ក្នុង TK (Package Qty)",
+                  )}
                 </label>
                 <input
                   type="number"
@@ -8431,14 +8622,19 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
                   className={INPUT_CLS}
                 />
                 <p className="text-[11px] text-ink-600/50 mt-1">
-                  ទំនិញជាឈុត មាន 2 Packageឡើងទៅ → ស្លាក Print បាន 1/2, 2/2 …
+                  {tr(
+                    "For sets with 2 or more packages → labels print as 1/2, 2/2 …",
+                    "ទំនិញជាឈុតមាន 2 កញ្ចប់ឡើងទៅ → ស្លាកបោះពុម្ពបាន 1/2, 2/2 …",
+                  )}
                 </p>
               </div>
             </>
           }
           <div className="grid sm:grid-cols-2 gap-3">
             <div>
-              <label className={LABEL_CLS}>China Warehouse</label>
+              <label className={LABEL_CLS}>
+                {tr("China Warehouse", "ឃ្លាំងនៅចិន")}
+              </label>
               <select
                 value={f.warehouse}
                 onChange={(e) =>
@@ -8446,7 +8642,7 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
                 }
                 className={INPUT_CLS}
               >
-                <option value="">— ជ្រើសរើស —</option>
+                <option value="">{tr("— Select —", "— ជ្រើសរើស —")}</option>
                 {(whList.filter((w) => w.type === "china").length
                   ? whList.filter(
                       (w) =>
@@ -8462,7 +8658,9 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
               </select>
             </div>
             <div>
-              <label className={LABEL_CLS}>Inbound Status</label>
+              <label className={LABEL_CLS}>
+                {tr("Inbound Status", "ស្ថានភាពទទួលចូល")}
+              </label>
               <select
                 value={f.inboundStatus}
                 onChange={(e) =>
@@ -8471,7 +8669,9 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
                 className={INPUT_CLS}
               >
                 {INBOUND_STATUSES.map((s) => (
-                  <option key={s}>{s}</option>
+                  <option key={s} value={s}>
+                    {tr.v(s)}
+                  </option>
                 ))}
               </select>
             </div>
@@ -8482,23 +8682,32 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
           <>
             <section className="space-y-3.5 border-t border-slate-100 pt-5">
               <h4 className="text-sm font-bold text-slate-900">
-                Product Photos{" "}
+                {tr("Product Photos", "រូបភាពទំនិញ")}{" "}
                 <span className="text-ink-600/45 font-normal text-xs">
-                  (មិនចាំបាច់ — អាចបន្ថែមពេល Scan Arrive)
+                  {tr(
+                    "(optional — can be added at Scan Arrive)",
+                    "(មិនចាំបាច់ — អាចបន្ថែមពេល Scan Arrive)",
+                  )}
                 </span>
               </h4>
               <PhotoUploader
                 photos={photos}
                 setPhotos={setPhotos}
-                emptyHint="No images yet — មិនចាំបាច់ (optional)"
+                emptyHint={tr(
+                  "No images yet — optional",
+                  "មិនទាន់មានរូបភាព — មិនចាំបាច់",
+                )}
               />
             </section>
 
             <section className="space-y-3.5 border-t border-slate-100 pt-5">
               <h4 className="text-sm font-bold text-slate-900">
-                Cargo និង Freight{" "}
+                {tr("Cargo & Freight", "ទំនិញ និងថ្លៃដឹក")}{" "}
                 <span className="text-ink-600/45 font-normal text-xs">
-                  (មិនចាំបាច់ — អាចបញ្ចូលពេល Scan Arrive)
+                  {tr(
+                    "(optional — can be entered at Scan Arrive)",
+                    "(មិនចាំបាច់ — អាចបញ្ចូលពេល Scan Arrive)",
+                  )}
                 </span>
               </h4>
               <CargoCalculator
@@ -14400,6 +14609,57 @@ const ADMIN_PREFS_FALLBACK = {
 };
 function useAdminPrefs() {
   return useContext(AdminPrefsCtx) || ADMIN_PREFS_FALLBACK;
+}
+
+// Display labels (Khmer) for values that are STORED in English — the stored
+// value never changes, only what the person reads.
+const ADMIN_KM_VALUES = {
+  "Product Front": "ខាងមុខទំនិញ",
+  "Product Back": "ខាងក្រោយទំនិញ",
+  "Product Label / Barcode": "ស្លាក / បារកូដទំនិញ",
+  Package: "កញ្ចប់",
+  "Damage / Exception": "ខូចខាត / ករណីមិនប្រក្រតី",
+  Pending: "កំពុងរង់ចាំ",
+  Received: "បានទទួល",
+  Measuring: "កំពុងវាស់",
+  Checked: "បានត្រួតពិនិត្យ",
+  "Ready for Shipment": "រួចរាល់សម្រាប់ដឹកជញ្ជូន",
+  Exception: "ករណីមិនប្រក្រតី",
+  Land: "ផ្លូវគោក",
+  Sea: "ផ្លូវទឹក",
+  Air: "ផ្លូវអាកាស",
+  Normal: "ធម្មតា",
+  Sensitive: "រសើប",
+};
+
+// tr(english, khmer) → the text for the language chosen in the top bar.
+// tr.v(value) → display label for a stored English value (status, photo type…).
+// Chinese keeps the English source: the admin DOM translator converts it.
+function useAdminTr() {
+  const { lang } = useAdminPrefs();
+  const tr = (en, km) => (lang === "km" && km != null ? km : en);
+  tr.v = (value) => (lang === "km" && ADMIN_KM_VALUES[value]) || value;
+  tr.lang = lang;
+  return tr;
+}
+
+// calcFreight() returns English messages; show them in the chosen language.
+function trCalcMessage(tr, m) {
+  const KM = {
+    "Air freight needs a Weight (KG)": "ដឹកតាមអាកាសត្រូវការទម្ងន់ (KG)",
+    "Air rate per KG is not configured (Settings → Shipping & Pricing)":
+      "មិនទាន់កំណត់តម្លៃអាកាសក្នុង 1 KG (Settings → Shipping & Pricing)",
+    "Please select Size S, M or L": "សូមជ្រើសរើសទំហំ S, M ឬ L",
+    "Small Package size rate is not configured":
+      "មិនទាន់កំណត់តម្លៃទំហំកញ្ចប់តូច",
+    "Please select a Package Type": "សូមជ្រើសរើសប្រភេទកញ្ចប់",
+    "Please select Normal or Sensitive": "សូមជ្រើសរើសទំនិញធម្មតា ឬរសើប",
+    "Please enter Length, Width and Height as positive numbers":
+      "សូមបញ្ចូលប្រវែង ទទឹង និងកម្ពស់ជាលេខវិជ្ជមាន",
+  };
+  const cbm = /^(Normal|Sensitive) CBM rate is not configured$/.exec(m || "");
+  if (cbm) return tr(m, `មិនទាន់កំណត់តម្លៃ CBM សម្រាប់ទំនិញ${tr.v(cbm[1])}`);
+  return tr(m, KM[m] ?? m);
 }
 
 function AdminPrefsProvider({ children }) {
