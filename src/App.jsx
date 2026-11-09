@@ -33261,6 +33261,137 @@ const CustomerApp = (() => {
     );
   }
 
+  // ---------- Pull-to-refresh (mobile customer portal) ----------
+  // Pull the page down while scrolled to the very top → release → refetch.
+  // Works with the normal window scroll (no inner scroll container needed).
+  function PullToRefresh({ onRefresh, children }) {
+    const { tr } = useApp();
+    const [pull, setPull] = useState(0); // px the content is pulled down
+    const [refreshing, setRefreshing] = useState(false);
+    const wrapRef = useRef(null);
+    const st = useRef({ y0: 0, x0: 0, active: false, dist: 0, busy: false });
+    const cbRef = useRef(onRefresh);
+    cbRef.current = onRefresh;
+    const THRESHOLD = 70;
+    const MAX = 120;
+    const HOLD = 52;
+
+    useEffect(() => {
+      const el = wrapRef.current;
+      if (!el) return undefined;
+      const s = st.current;
+      const atTop = () =>
+        (window.scrollY || document.documentElement.scrollTop || 0) <= 0;
+
+      const onStart = (e) => {
+        if (s.busy || e.touches.length !== 1 || !atTop()) {
+          s.active = false;
+          return;
+        }
+        s.y0 = e.touches[0].clientY;
+        s.x0 = e.touches[0].clientX;
+        s.dist = 0;
+        s.active = true;
+      };
+      const onMove = (e) => {
+        if (!s.active || s.busy) return;
+        const dy = e.touches[0].clientY - s.y0;
+        const dx = e.touches[0].clientX - s.x0;
+        // Scrolling up, sideways, or page already moved → not a pull.
+        if (dy <= 0 || Math.abs(dx) > Math.abs(dy) || !atTop()) {
+          if (s.dist > 0) {
+            s.dist = 0;
+            setPull(0);
+          }
+          if (dy <= 0) s.active = false;
+          return;
+        }
+        s.dist = Math.min(MAX, dy * 0.5); // rubber-band resistance
+        if (e.cancelable) e.preventDefault(); // stop iOS bounce while pulling
+        setPull(s.dist);
+      };
+      const onEnd = async () => {
+        if (!s.active) return;
+        s.active = false;
+        if (s.dist >= THRESHOLD && !s.busy) {
+          s.busy = true;
+          setRefreshing(true);
+          setPull(HOLD);
+          try {
+            await Promise.all([
+              Promise.resolve(cbRef.current && cbRef.current()),
+              new Promise((r) => setTimeout(r, 700)), // avoid a flicker
+            ]);
+          } catch {
+            /* individual loaders report their own errors */
+          }
+          s.busy = false;
+          setRefreshing(false);
+        }
+        s.dist = 0;
+        setPull(0);
+      };
+
+      el.addEventListener("touchstart", onStart, { passive: true });
+      el.addEventListener("touchmove", onMove, { passive: false });
+      el.addEventListener("touchend", onEnd, { passive: true });
+      el.addEventListener("touchcancel", onEnd, { passive: true });
+      return () => {
+        el.removeEventListener("touchstart", onStart);
+        el.removeEventListener("touchmove", onMove);
+        el.removeEventListener("touchend", onEnd);
+        el.removeEventListener("touchcancel", onEnd);
+      };
+    }, []);
+
+    const ready = pull >= THRESHOLD;
+    const progress = Math.min(1, pull / THRESHOLD);
+    const label = refreshing
+      ? tr("Refreshing…", "កំពុងផ្ទុកឡើងវិញ…")
+      : ready
+        ? tr("Release to refresh", "លែងដើម្បីផ្ទុកឡើងវិញ")
+        : tr("Pull down to refresh", "ទាញចុះដើម្បីផ្ទុកឡើងវិញ");
+    const dragging = pull > 0 && !refreshing;
+
+    return (
+      <div ref={wrapRef} className="relative">
+        <div
+          aria-live="polite"
+          className="pointer-events-none absolute inset-x-0 flex items-center justify-center gap-2 text-xs font-medium text-slate-500"
+          style={{
+            top: 0,
+            height: HOLD,
+            transform: `translateY(${pull - HOLD}px)`,
+            opacity: refreshing ? 1 : progress,
+            transition: dragging ? "none" : "transform .25s ease, opacity .2s",
+          }}
+        >
+          {refreshing ? (
+            <Icons.Loader2 size={18} className="animate-spin text-blue-500" />
+          ) : (
+            <Icons.ArrowDown
+              size={18}
+              className="text-blue-500"
+              style={{
+                transform: `rotate(${ready ? 180 : 0}deg)`,
+                transition: "transform .2s",
+              }}
+            />
+          )}
+          <span>{label}</span>
+        </div>
+        <div
+          style={{
+            transform: pull > 0 ? `translateY(${pull}px)` : "none",
+            transition: dragging ? "none" : "transform .25s ease",
+          }}
+        >
+          {children}
+        </div>
+      </div>
+    );
+  }
+
   // ---------- Shell (bottom nav) ----------
   function Shell() {
     const { me, toast, loading, refreshMoney, tr } = useApp();
@@ -33433,6 +33564,20 @@ const CustomerApp = (() => {
         </div>
       );
     }
+    // Pull-to-refresh: refetch money/shipments/orders + permissions now, and
+    // wake every screen that already listens to focus/visibility events.
+    const handlePullRefresh = async () => {
+      await Promise.allSettled([
+        Promise.resolve(refreshMoney && refreshMoney()),
+        supabase
+          ? Promise.resolve(syncCustomerFeaturesFromServer())
+          : Promise.resolve(),
+      ]);
+      try {
+        window.dispatchEvent(new Event("focus"));
+        document.dispatchEvent(new Event("visibilitychange"));
+      } catch {}
+    };
     const tabs = [
       [P(), Home, tr("Home", "ទំព័រដើម"), true],
       [
@@ -33500,7 +33645,9 @@ const CustomerApp = (() => {
               {tr("Loading account permissions…", "កំពុងទាញយកសិទ្ធិគណនី…")}
             </div>
           )}
-          <Outlet />
+          <PullToRefresh onRefresh={handlePullRefresh}>
+            <Outlet />
+          </PullToRefresh>
           {toast && (
             <div className="jz-toast fixed bottom-24 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-sm px-4 py-2 rounded-full shadow-lg z-50">
               {toast}
