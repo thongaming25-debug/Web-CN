@@ -33355,16 +33355,26 @@ const CustomerApp = (() => {
           setReady(v);
         }
       };
+      const layer = (on) => {
+        // Promote to a GPU layer only for the duration of a pull.
+        const v = on ? "transform" : "";
+        if (bodyRef.current) bodyRef.current.style.willChange = v;
+        if (hintRef.current)
+          hintRef.current.style.willChange = on ? "transform, opacity" : "";
+      };
       const lockBounce = (on) => {
         // Only while a pull is in progress → normal scrolling keeps iOS momentum.
         de.style.overscrollBehaviorY = on ? "none" : "";
       };
 
+      const detach = () => el.removeEventListener("touchmove", onMove);
       const onStart = (e) => {
+        detach();
         if (s.busy || e.touches.length !== 1 || !atTop()) {
           s.active = false;
           return;
         }
+        el.addEventListener("touchmove", onMove, { passive: false });
         stopAnim();
         s.y0 = e.touches[0].clientY;
         s.x0 = e.touches[0].clientX;
@@ -33388,6 +33398,7 @@ const CustomerApp = (() => {
             return;
           }
           s.pulling = true;
+          layer(true);
           lockBounce(true);
         }
         if (dy <= 0) {
@@ -33406,6 +33417,7 @@ const CustomerApp = (() => {
         }
       };
       const onEnd = async () => {
+        detach();
         if (!s.active) return;
         s.active = false;
         if (s.raf) {
@@ -33435,16 +33447,17 @@ const CustomerApp = (() => {
           await animateTo(0, false, 260);
         }
         s.target = 0;
+        layer(false);
         lockBounce(false);
       };
 
       el.addEventListener("touchstart", onStart, { passive: true });
-      el.addEventListener("touchmove", onMove, { passive: false });
       el.addEventListener("touchend", onEnd, { passive: true });
       el.addEventListener("touchcancel", onEnd, { passive: true });
       return () => {
         if (s.raf) cancelAnimationFrame(s.raf);
         stopAnim();
+        layer(false);
         lockBounce(false);
         el.removeEventListener("touchstart", onStart);
         el.removeEventListener("touchmove", onMove);
@@ -33470,7 +33483,6 @@ const CustomerApp = (() => {
             height: HOLD,
             transform: `translate3d(0,${-HOLD}px,0)`,
             opacity: 0,
-            willChange: "transform, opacity",
           }}
         >
           {refreshing ? (
@@ -33487,9 +33499,7 @@ const CustomerApp = (() => {
           )}
           <span>{label}</span>
         </div>
-        <div ref={bodyRef} style={{ willChange: "transform" }}>
-          {children}
-        </div>
+        <div ref={bodyRef}>{children}</div>
       </div>
     );
   }
