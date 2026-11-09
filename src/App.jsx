@@ -3823,21 +3823,225 @@ function CreatedAtCell({ iso }) {
 }
 
 function DateRangeFilter({ label = "Created At", value, onChange }) {
+  const val = value || EMPTY_DATE_RANGE;
   const [open, setOpen] = useState(false);
+  const [calOpen, setCalOpen] = useState(false);
+  const [alignRight, setAlignRight] = useState(false);
+  const popRef = useRef(null);
+  const calRef = useRef(null);
+  const [calPos, setCalPos] = useState(null);
+  const [month, setMonth] = useState(() => {
+    const key = val.from || localDayKey(new Date());
+    const d = key ? new Date(`${key}T12:00:00`) : new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [draftStart, setDraftStart] = useState(""); // first click, waiting for the end date
+  const [hover, setHover] = useState("");
   const ref = useRef(null);
+  const closeAll = () => {
+    setOpen(false);
+    setCalOpen(false);
+    setDraftStart("");
+    setHover("");
+  };
   useEffect(() => {
     function onClickOutside(e) {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target)) closeAll();
     }
     document.addEventListener("mousedown", onClickOutside);
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
-  const active = dateRangeLabel(value);
+  // Keep the calendar on screen when the button sits near the right edge.
+  useLayoutEffect(() => {
+    if (!open || !ref.current) return;
+    const r = ref.current.getBoundingClientRect();
+    setAlignRight(r.left + 560 > window.innerWidth - 8 && r.right - 560 > 8);
+  }, [open, calOpen]);
+  // The calendar is fixed-positioned and kept fully inside the window: below
+  // the popover if it fits, else above the button, else slid up to fit.
+  useLayoutEffect(() => {
+    if (!open || !calOpen) {
+      setCalPos(null);
+      return undefined;
+    }
+    const place = () => {
+      const pop = popRef.current?.getBoundingClientRect();
+      const btn = ref.current?.getBoundingClientRect();
+      if (!pop || !btn) return;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const calH = calRef.current?.offsetHeight || 330;
+      const calW = Math.min(calRef.current?.offsetWidth || 520, vw - 16);
+      let top = pop.bottom + 4;
+      if (top + calH > vh - 8) {
+        top =
+          btn.top - calH - 4 >= 8
+            ? btn.top - calH - 4
+            : Math.max(8, vh - calH - 8);
+      }
+      const left = Math.max(8, Math.min(pop.left, vw - calW - 8));
+      setCalPos({ top, left });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, calOpen, month]);
+  const active = dateRangeLabel(val);
+  const resolved = resolveDateRange(val);
+  const shownFrom = draftStart || resolved.from;
+  const shownTo = draftStart ? "" : resolved.to;
+  const todayKey = localDayKey(new Date());
+  const fmt = (key) =>
+    key
+      ? new Date(`${key}T12:00:00`).toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        })
+      : "";
+  const pickDay = (key) => {
+    if (!draftStart) {
+      setDraftStart(key);
+      setHover(key);
+      return;
+    }
+    const from = draftStart <= key ? draftStart : key;
+    const to = draftStart <= key ? key : draftStart;
+    onChange({ preset: "", from, to });
+    closeAll();
+  };
+  const shift = (months) =>
+    setMonth(new Date(month.getFullYear(), month.getMonth() + months, 1));
+  const renderMonth = (monthDate, showPrev, showNext) => {
+    const y = monthDate.getFullYear();
+    const m = monthDate.getMonth();
+    const offset = (new Date(y, m, 1).getDay() + 6) % 7;
+    const cells = Array.from({ length: 42 }, (_, i) => {
+      const d = new Date(y, m, i - offset + 1);
+      return { d, key: localDayKey(d), inMonth: d.getMonth() === m };
+    });
+    const rs = draftStart
+      ? hover && hover < draftStart
+        ? hover
+        : draftStart
+      : resolved.from;
+    const re = draftStart
+      ? hover && hover > draftStart
+        ? hover
+        : draftStart
+      : resolved.to;
+    const navBtn =
+      "grid h-7 w-7 place-items-center rounded-md text-ink-600/70 hover:bg-mist-50";
+    return (
+      <div className="min-w-0 w-[236px]" key={`${y}-${m}`}>
+        <div className="mb-2 flex h-7 items-center justify-between text-sm font-semibold text-ink-800">
+          <span className="flex">
+            {showPrev && (
+              <>
+                <button
+                  type="button"
+                  aria-label="Previous year"
+                  onClick={() => shift(-12)}
+                  className={navBtn}
+                >
+                  «
+                </button>
+                <button
+                  type="button"
+                  aria-label="Previous month"
+                  onClick={() => shift(-1)}
+                  className={navBtn}
+                >
+                  <Icons.ChevronLeft size={15} />
+                </button>
+              </>
+            )}
+          </span>
+          <span>
+            {y}{" "}
+            <span className="font-medium">
+              {monthDate.toLocaleDateString("en-US", { month: "long" })}
+            </span>
+          </span>
+          <span className="flex">
+            {showNext && (
+              <>
+                <button
+                  type="button"
+                  aria-label="Next month"
+                  onClick={() => shift(1)}
+                  className={navBtn}
+                >
+                  <Icons.ChevronRight size={15} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Next year"
+                  onClick={() => shift(12)}
+                  className={navBtn}
+                >
+                  »
+                </button>
+              </>
+            )}
+          </span>
+        </div>
+        <div className="grid grid-cols-7 text-center text-[11px] font-medium text-ink-600/60">
+          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((w) => (
+            <div key={w} className="py-1.5">
+              {w}
+            </div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7">
+          {cells.map(({ d, key, inMonth }) => {
+            const inRange = !!rs && !!re && key >= rs && key <= re;
+            const edge = inRange && (key === rs || key === re);
+            const isToday = key === todayKey;
+            return (
+              <button
+                key={key}
+                type="button"
+                onMouseEnter={() => draftStart && setHover(key)}
+                onClick={() => pickDay(key)}
+                className={`relative h-8 text-xs transition-colors ${
+                  inRange && !edge ? "bg-signal-blue/10 text-ink-800" : ""
+                } ${key === rs && rs !== re ? "rounded-l-full" : ""} ${key === re && rs !== re ? "rounded-r-full" : ""} ${
+                  edge
+                    ? "bg-signal-blue text-white font-semibold"
+                    : inMonth
+                      ? inRange
+                        ? ""
+                        : "text-ink-800 hover:bg-mist-100 rounded-full"
+                      : inRange
+                        ? "text-ink-600/50"
+                        : "text-ink-600/30 hover:bg-mist-100 rounded-full"
+                } ${isToday && !edge ? "font-bold text-signal-blue" : ""}`}
+              >
+                {d.getDate()}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+  const field = (text, placeholder, on) => (
+    <span
+      className={`flex-1 min-w-0 truncate px-1 text-sm ${text ? "text-ink-800" : "text-ink-600/40"} ${on ? "font-medium" : ""}`}
+    >
+      {text || placeholder}
+    </span>
+  );
   return (
     <div className="relative" ref={ref}>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => (open ? closeAll() : setOpen(true))}
         className={`cbx-chip${active ? " is-active" : ""}`}
       >
         <Icons.CalendarDays size={16} />
@@ -3849,6 +4053,7 @@ function DateRangeFilter({ label = "Created At", value, onChange }) {
             onClick={(e) => {
               e.stopPropagation();
               onChange(EMPTY_DATE_RANGE);
+              closeAll();
             }}
             className="ml-0.5 rounded-sm hover:bg-signal-blue/10"
           >
@@ -3859,386 +4064,91 @@ function DateRangeFilter({ label = "Created At", value, onChange }) {
         )}
       </button>
       {open && (
-        <div className="absolute left-0 mt-1 w-64 bg-white border border-mist-200 rounded-md shadow-lg py-1 z-20">
-          {DATE_PRESETS.map((p) => (
-            <button
-              key={p.key}
-              type="button"
-              onClick={() => {
-                onChange({ preset: p.key, from: "", to: "" });
-                setOpen(false);
-              }}
-              className={`w-full text-left px-3 py-1.5 text-sm hover:bg-mist-50 ${
-                value.preset === p.key
-                  ? "text-signal-blue font-medium"
-                  : "text-ink-800"
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
-          <div className="border-t border-mist-200 mt-1 pt-2 px-3 pb-2 space-y-2">
-            <div className="text-[11px] uppercase tracking-wide text-ink-600/40 font-semibold">
-              Custom range
+        <div
+          ref={popRef}
+          className={`jenz-date-pop absolute z-30 mt-1 ${alignRight ? "right-0" : "left-0"}`}
+        >
+          <div className="flex w-[min(92vw,420px)] rounded-xl border border-mist-200 bg-white shadow-xl">
+            <div className="w-[130px] shrink-0 border-r border-mist-100 p-2">
+              {DATE_PRESETS.map((pr) => (
+                <button
+                  key={pr.key}
+                  type="button"
+                  onClick={() => {
+                    onChange({ preset: pr.key, from: "", to: "" });
+                    closeAll();
+                  }}
+                  className={`block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-mist-50 ${
+                    val.preset === pr.key
+                      ? "text-signal-blue font-semibold bg-signal-blue/5"
+                      : "text-ink-800"
+                  }`}
+                >
+                  {pr.label}
+                </button>
+              ))}
             </div>
-            <div>
-              <label className={LABEL_CLS}>ចាប់ពីថ្ងៃ</label>
-              <input
-                type="date"
-                value={value.preset ? "" : value.from}
-                onChange={(e) =>
-                  onChange({
-                    preset: "",
-                    from: e.target.value,
-                    to: value.preset ? "" : value.to,
-                  })
-                }
-                className={INPUT_CLS}
-              />
+            <div className="min-w-0 flex-1 p-3">
+              <div className="mb-1.5 text-[11px] font-medium text-ink-600/60">
+                Custom date
+              </div>
+              <button
+                type="button"
+                onClick={() => setCalOpen((v) => !v)}
+                className={`flex w-full items-center gap-1.5 rounded-lg border bg-white px-2.5 py-2 text-left ${
+                  calOpen
+                    ? "border-signal-blue ring-2 ring-signal-blue/15"
+                    : "border-mist-200 hover:border-mist-300"
+                }`}
+              >
+                <Icons.CalendarDays
+                  size={15}
+                  className="shrink-0 text-ink-600/50"
+                />
+                {field(fmt(shownFrom), "Start date", !!draftStart)}
+                <span className="text-ink-600/40">–</span>
+                {field(fmt(shownTo), "End date", !!draftStart)}
+              </button>
+              <p className="mt-2 text-[11px] text-ink-600/50">
+                {draftStart
+                  ? "Now pick the end date"
+                  : "Click to pick a start and end date"}
+              </p>
             </div>
-            <div>
-              <label className={LABEL_CLS}>ដល់ថ្ងៃ</label>
-              <input
-                type="date"
-                value={value.preset ? "" : value.to}
-                onChange={(e) =>
-                  onChange({
-                    preset: "",
-                    from: value.preset ? "" : value.from,
-                    to: e.target.value,
-                  })
-                }
-                className={INPUT_CLS}
-              />
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                onChange(EMPTY_DATE_RANGE);
-                setOpen(false);
-              }}
-              className="w-full text-sm text-ink-700 border border-mist-200 px-3 py-1.5 rounded-md hover:bg-mist-50"
-            >
-              Clear
-            </button>
           </div>
+          {calOpen && (
+            <div
+              ref={calRef}
+              className="fixed z-40 rounded-xl border border-mist-200 bg-white p-3 shadow-xl"
+              style={{
+                width: "max-content",
+                maxWidth: "calc(100vw - 16px)",
+                ...(calPos || { top: 8, left: 8 }),
+                visibility: calPos ? "visible" : "hidden",
+              }}
+            >
+              <div className="flex flex-col gap-4 sm:flex-row">
+                {renderMonth(month, true, false)}
+                <div className="hidden sm:block">
+                  {renderMonth(
+                    new Date(month.getFullYear(), month.getMonth() + 1, 1),
+                    false,
+                    true,
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-// Advanced date range picker for CN Purchase Orders only. Keeps the shared
-// DateRangeFilter used by other modules unchanged.
+// CN Purchase Orders uses the same shared picker as every other list.
 function CNDateRangeFilter({ value, onChange }) {
-  const [open, setOpen] = useState(false);
-  const [month, setMonth] = useState(() => {
-    const key = value?.from || localDayKey(new Date());
-    const d = key ? new Date(`${key}T12:00:00`) : new Date();
-    return new Date(d.getFullYear(), d.getMonth(), 1);
-  });
-  const [draftStart, setDraftStart] = useState("");
-  const [hoverDate, setHoverDate] = useState("");
-  const [draftRange, setDraftRange] = useState({
-    from: value?.from || "",
-    to: value?.to || "",
-  });
-  const rootRef = useRef(null);
-  const btnRef = useRef(null);
-  const [pos, setPos] = useState(null);
-  // Keep the calendar inside the screen: it used to hang off the right edge
-  // when the "Created At" button sat far to the right.
-  useLayoutEffect(() => {
-    if (!open) return undefined;
-    const place = () => {
-      const r = btnRef.current?.getBoundingClientRect();
-      if (!r) return;
-      const vw = window.innerWidth;
-      const vh = window.innerHeight;
-      const m = 8;
-      const width = Math.min(vw - m * 2, 760);
-      const left = Math.max(m, Math.min(r.left, vw - width - m));
-      const below = vh - r.bottom - m - 8;
-      const above = r.top - m - 8;
-      const placeAbove = below < 420 && above > below;
-      const maxHeight = Math.max(280, placeAbove ? above : below);
-      setPos(
-        placeAbove
-          ? { left, width, maxHeight, bottom: vh - r.top + 8 }
-          : { left, width, maxHeight, top: r.bottom + 8 },
-      );
-    };
-    place();
-    window.addEventListener("resize", place);
-    window.addEventListener("scroll", place, true);
-    return () => {
-      window.removeEventListener("resize", place);
-      window.removeEventListener("scroll", place, true);
-    };
-  }, [open]);
-  useEffect(() => {
-    const closeOutside = (event) => {
-      if (rootRef.current && !rootRef.current.contains(event.target)) {
-        setOpen(false);
-        setDraftStart("");
-        setHoverDate("");
-      }
-    };
-    document.addEventListener("mousedown", closeOutside);
-    return () => document.removeEventListener("mousedown", closeOutside);
-  }, []);
-  const dayKey = (d) => localDayKey(d);
-  const fmt = (key) =>
-    key
-      ? new Date(`${key}T12:00:00`).toLocaleDateString("en-GB", {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-        })
-      : "Select date";
-  const active = dateRangeLabel(value || EMPTY_DATE_RANGE);
-  const presetClick = (key) => {
-    onChange({ preset: key, from: "", to: "" });
-    setDraftStart("");
-    setHoverDate("");
-    setOpen(false);
-  };
-  const selectDay = (key) => {
-    if (!draftStart) {
-      setDraftStart(key);
-      setHoverDate(key);
-      setDraftRange({ from: key, to: "" });
-      return;
-    }
-    const from = draftStart <= key ? draftStart : key;
-    const to = draftStart <= key ? key : draftStart;
-    setDraftRange({ from, to });
-    setDraftStart("");
-    setHoverDate("");
-  };
-  const renderMonth = (monthDate) => {
-    const y = monthDate.getFullYear();
-    const m = monthDate.getMonth();
-    const first = new Date(y, m, 1);
-    const offset = (first.getDay() + 6) % 7;
-    const cells = Array.from({ length: 42 }, (_, i) => {
-      const d = new Date(y, m, i - offset + 1);
-      return { d, key: dayKey(d), inMonth: d.getMonth() === m };
-    });
-    const tentativeEnd =
-      draftStart && hoverDate
-        ? draftStart < hoverDate
-          ? hoverDate
-          : draftStart
-        : draftRange.to;
-    const tentativeStart =
-      draftStart && hoverDate
-        ? draftStart < hoverDate
-          ? draftStart
-          : hoverDate
-        : draftRange.from || value?.from || "";
-    return (
-      <div className="min-w-0 flex-1" key={`${y}-${m}`}>
-        <div className="mb-3 text-center text-sm font-semibold text-ink-800">
-          {monthDate.toLocaleDateString("en-US", {
-            month: "long",
-            year: "numeric",
-          })}
-        </div>
-        <div className="mb-2 grid grid-cols-7 border-b border-mist-100 pb-2">
-          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) => (
-            <div
-              key={d}
-              className="text-center text-[11px] font-semibold text-ink-600/55"
-            >
-              {d}
-            </div>
-          ))}
-        </div>
-        <div className="grid grid-cols-7 gap-y-1">
-          {cells.map(({ d, key, inMonth }) => {
-            const between =
-              !!tentativeStart &&
-              !!tentativeEnd &&
-              key >= tentativeStart &&
-              key <= tentativeEnd;
-            const endpoint =
-              (key === tentativeStart || key === tentativeEnd) && between;
-            const today = key === dayKey(new Date());
-            return (
-              <button
-                key={key}
-                type="button"
-                onMouseEnter={() => draftStart && setHoverDate(key)}
-                onClick={() => selectDay(key)}
-                className={`mx-auto grid h-8 w-8 place-items-center rounded-full text-xs transition-all duration-150 hover:scale-105 hover:bg-signal-blue/10 hover:text-signal-blue ${between ? "!rounded-lg bg-signal-blue/10 text-signal-blue" : ""} ${endpoint ? "!rounded-full !bg-signal-blue !text-white shadow-sm" : today ? "ring-1 ring-signal-blue/30" : inMonth ? "text-ink-800" : "text-ink-600/25"}`}
-              >
-                {d.getDate()}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
   return (
-    <div className="relative" ref={rootRef}>
-      <button
-        type="button"
-        ref={btnRef}
-        onClick={() => {
-          setOpen((v) => !v);
-          setDraftStart("");
-          setHoverDate("");
-          setDraftRange({ from: value?.from || "", to: value?.to || "" });
-        }}
-        className={`cbx-chip${active ? " is-active" : ""}`}
-      >
-        <Icons.CalendarDays size={16} />
-        <span>{active ? active : "Created At"}</span>
-        <Icons.ChevronDown size={14} />
-      </button>
-      {open && (
-        <>
-          <button
-            type="button"
-            aria-label="Close date range picker"
-            className="fixed inset-0 z-[70] cursor-default"
-            onClick={() => {
-              setOpen(false);
-              setDraftStart("");
-            }}
-          />
-          <div
-            className="fixed z-[80] overflow-x-hidden overflow-y-auto overscroll-contain rounded-2xl border border-mist-200 bg-white shadow-2xl shadow-slate-900/15"
-            style={{
-              ...(pos || { left: 8, top: 8, width: "calc(100vw - 16px)" }),
-              visibility: pos ? "visible" : "hidden",
-              animation: "jenzCalendarIn .18s cubic-bezier(.2,.8,.2,1)",
-            }}
-          >
-            <div className="flex items-center justify-between gap-3 border-b border-mist-100 px-4 py-3 sm:px-5">
-              <div>
-                <p className="text-sm font-semibold text-ink-800">
-                  Select date range
-                </p>
-                <p className="mt-0.5 text-xs text-ink-600/50">
-                  Choose a preset or select start and end dates
-                </p>
-              </div>
-              <span className="max-w-[45%] truncate text-xs text-ink-600/60">
-                {draftStart
-                  ? `Start: ${fmt(draftStart)} · choose end date`
-                  : draftRange.from && draftRange.to
-                    ? `${fmt(draftRange.from)} – ${fmt(draftRange.to)}`
-                    : "Custom range"}
-              </span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-[150px_minmax(0,1fr)]">
-              <div className="border-b border-mist-100 p-2 sm:border-b-0 sm:border-r sm:p-3">
-                {DATE_PRESETS.map((p) => (
-                  <button
-                    key={p.key}
-                    type="button"
-                    onClick={() => presetClick(p.key)}
-                    className={`block w-full rounded-lg px-3 py-2.5 text-left text-sm transition-colors hover:bg-signal-blue/5 hover:text-signal-blue ${value?.preset === p.key ? "bg-signal-blue/5 font-medium text-signal-blue" : "text-ink-700"}`}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-                <div className="mt-2 border-t border-mist-100 px-3 pt-3 text-[10px] font-semibold uppercase tracking-[.12em] text-ink-600/40">
-                  Custom date
-                </div>
-                <div className="px-3 pb-2 pt-1 text-xs text-ink-600/60">
-                  {draftStart
-                    ? `Start: ${fmt(draftStart)}`
-                    : draftRange.from && draftRange.to
-                      ? `${fmt(draftRange.from)} – ${fmt(draftRange.to)}`
-                      : "Select start and end"}
-                </div>
-              </div>
-              <div className="min-w-0 p-3 sm:p-4">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    aria-label="Previous month"
-                    onClick={() =>
-                      setMonth(
-                        new Date(month.getFullYear(), month.getMonth() - 1, 1),
-                      )
-                    }
-                    className="grid h-8 w-8 place-items-center rounded-lg text-ink-600/70 transition hover:bg-mist-50"
-                  >
-                    <Icons.ChevronLeft size={17} />
-                  </button>
-                  <span className="text-xs text-ink-600/50">
-                    {draftStart ? "Select the end date" : "Select a date range"}
-                  </span>
-                  <button
-                    type="button"
-                    aria-label="Next month"
-                    onClick={() =>
-                      setMonth(
-                        new Date(month.getFullYear(), month.getMonth() + 1, 1),
-                      )
-                    }
-                    className="grid h-8 w-8 place-items-center rounded-lg text-ink-600/70 transition hover:bg-mist-50"
-                  >
-                    <Icons.ChevronRight size={17} />
-                  </button>
-                </div>
-                <div className="flex flex-col gap-5 md:flex-row">
-                  {renderMonth(month)}
-                  {renderMonth(
-                    new Date(month.getFullYear(), month.getMonth() + 1, 1),
-                  )}
-                </div>
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-mist-100 pt-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onChange(EMPTY_DATE_RANGE);
-                      setDraftRange({ from: "", to: "" });
-                      setDraftStart("");
-                      setOpen(false);
-                    }}
-                    className="rounded-lg px-3 py-2 text-sm text-ink-600/70 transition hover:bg-mist-50"
-                  >
-                    Clear
-                  </button>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => presetClick("today")}
-                      className="rounded-lg px-3 py-2 text-sm font-medium text-signal-blue transition hover:bg-signal-blue/5"
-                    >
-                      Today
-                    </button>
-                    <button
-                      type="button"
-                      disabled={!draftRange.from || !draftRange.to}
-                      onClick={() => {
-                        onChange({
-                          preset: "",
-                          from: draftRange.from,
-                          to: draftRange.to,
-                        });
-                        setOpen(false);
-                        setDraftStart("");
-                        setHoverDate("");
-                      }}
-                      className="rounded-lg bg-signal-blue px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      Apply
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-    </div>
+    <DateRangeFilter label="Created At" value={value} onChange={onChange} />
   );
 }
 
@@ -15906,6 +15816,184 @@ function exportRowsToCSV(filename, columns, rows) {
 }
 
 // ------------------------------------------------------------
+// Real .xlsx export (no extra library): builds a minimal OOXML workbook and
+// packs it in an uncompressed ZIP. Opens in Excel / Sheets / LibreOffice with
+// no "format mismatch" warning. Numbers stay numeric; everything else is text
+// (inline strings are never evaluated as formulas), so Khmer / Chinese and
+// long tracking numbers are preserved exactly.
+// ------------------------------------------------------------
+const XLSX_CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function xlsxCrc32(bytes) {
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++)
+    c = XLSX_CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function xlsxZip(files) {
+  const enc = new TextEncoder();
+  const now = new Date();
+  const dosTime =
+    (now.getHours() << 11) |
+    (now.getMinutes() << 5) |
+    Math.floor(now.getSeconds() / 2);
+  const dosDate =
+    ((Math.max(1980, now.getFullYear()) - 1980) << 9) |
+    ((now.getMonth() + 1) << 5) |
+    now.getDate();
+  const parts = [];
+  const central = [];
+  let offset = 0;
+  files.forEach((f) => {
+    const name = enc.encode(f.name);
+    const data = enc.encode(f.content);
+    const crc = xlsxCrc32(data);
+    const lh = new DataView(new ArrayBuffer(30));
+    lh.setUint32(0, 0x04034b50, true);
+    lh.setUint16(4, 20, true);
+    lh.setUint16(6, 0x0800, true); // UTF-8 names
+    lh.setUint16(8, 0, true); // stored
+    lh.setUint16(10, dosTime, true);
+    lh.setUint16(12, dosDate, true);
+    lh.setUint32(14, crc, true);
+    lh.setUint32(18, data.length, true);
+    lh.setUint32(22, data.length, true);
+    lh.setUint16(26, name.length, true);
+    lh.setUint16(28, 0, true);
+    parts.push(new Uint8Array(lh.buffer), name, data);
+    const ch = new DataView(new ArrayBuffer(46));
+    ch.setUint32(0, 0x02014b50, true);
+    ch.setUint16(4, 20, true);
+    ch.setUint16(6, 20, true);
+    ch.setUint16(8, 0x0800, true);
+    ch.setUint16(10, 0, true);
+    ch.setUint16(12, dosTime, true);
+    ch.setUint16(14, dosDate, true);
+    ch.setUint32(16, crc, true);
+    ch.setUint32(20, data.length, true);
+    ch.setUint32(24, data.length, true);
+    ch.setUint16(28, name.length, true);
+    ch.setUint32(42, offset, true);
+    central.push(new Uint8Array(ch.buffer), name);
+    offset += 30 + name.length + data.length;
+  });
+  const cdSize = central.reduce((n, p) => n + p.length, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true);
+  end.setUint16(8, files.length, true);
+  end.setUint16(10, files.length, true);
+  end.setUint32(12, cdSize, true);
+  end.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, new Uint8Array(end.buffer)], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+}
+
+function buildXlsxBlob(sheetName, columns, rows) {
+  const xmlEsc = (v) =>
+    String(v ?? "")
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  const colName = (i) => {
+    let s = "";
+    for (let n = i + 1; n > 0; n = Math.floor((n - 1) / 26))
+      s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+    return s;
+  };
+  const cell = (r, c, v, style) => {
+    const ref = `${colName(c)}${r}`;
+    const s = style ? ` s="${style}"` : "";
+    if (typeof v === "number" && Number.isFinite(v))
+      return `<c r="${ref}"${s}><v>${v}</v></c>`;
+    const text = v === null || v === undefined ? "" : String(v);
+    if (text === "") return `<c r="${ref}"${s}/>`;
+    return `<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${xmlEsc(text)}</t></is></c>`;
+  };
+  const table = rows.map((row) =>
+    columns.map((c) => (c.csv ? c.csv(row) : row[c.key])),
+  );
+  const widths = columns.map((c, i) => {
+    let w = String(c.label ?? "").length;
+    for (let r = 0; r < Math.min(table.length, 200); r++)
+      w = Math.max(w, String(table[r][i] ?? "").length);
+    return Math.min(50, Math.max(10, w + 2));
+  });
+  const lastCol = colName(Math.max(0, columns.length - 1));
+  const lastRow = table.length + 1;
+  const sheetRows = [
+    `<row r="1">${columns.map((c, i) => cell(1, i, c.label, 1)).join("")}</row>`,
+    ...table.map(
+      (vals, r) =>
+        `<row r="${r + 2}">${vals.map((v, i) => cell(r + 2, i, v, 0)).join("")}</row>`,
+    ),
+  ].join("");
+  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join("")}</cols><sheetData>${sheetRows}</sheetData><autoFilter ref="A1:${lastCol}${lastRow}"/></worksheet>`;
+  const safeSheet = xmlEsc(
+    String(sheetName || "Sheet1")
+      .replace(/[\\/?*[\]:]/g, " ")
+      .slice(0, 31),
+  );
+  return xlsxZip([
+    {
+      name: "[Content_Types].xml",
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
+    },
+    {
+      name: "_rels/.rels",
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
+    },
+    {
+      name: "xl/workbook.xml",
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${safeSheet}" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+    },
+    {
+      name: "xl/_rels/workbook.xml.rels",
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
+    },
+    {
+      name: "xl/styles.xml",
+      content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFEEF1F5"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`,
+    },
+    { name: "xl/worksheets/sheet1.xml", content: sheet },
+  ]);
+}
+
+function exportRowsToExcel(filename, columns, rows, sheetName) {
+  const blob = buildXlsxBlob(
+    sheetName || filename.replace(/\.xlsx$/i, ""),
+    columns,
+    rows,
+  );
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename.endsWith(".xlsx") ? filename : `${filename}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// ------------------------------------------------------------
 // components/CreateRowModal.jsx
 // ------------------------------------------------------------
 function CreateRowModal({
@@ -18080,6 +18168,8 @@ function AdvancedTkFilters({ adv, setAdv, rows, hideDates = false }) {
   );
 }
 
+const PKG_SERVER_PATHS = ["/packages", "/inbound-origin", "/outbound-origin"];
+
 function ListPage({
   title,
   subtitle,
@@ -18294,11 +18384,6 @@ function ListPage({
     });
   }
 
-  const displayRows = isLinkedTk
-    ? linkedRows
-    : isExceptionsModule
-      ? exceptionRows
-      : tableRows;
   const addRow = (values) => {
     if (!canCreate) throw new Error(NO_PERM_MSG); // guard the action itself
     return (isLinkedTk ? addLinkedRow : addTableRow)(values);
@@ -18311,6 +18396,17 @@ function ListPage({
   const sawLoad = useRef(false);
   useEffect(() => {
     if (!isLinkedTk) {
+      setEnterLoading(false);
+      return undefined;
+    }
+    // Packages / TK pages itself from the server and needs no registry
+    // refetch (1000 rows + 3000 history rows) just to open.
+    if (
+      PKG_SERVER_PATHS.includes(path) &&
+      supabase &&
+      user &&
+      user.role !== "Customer"
+    ) {
       setEnterLoading(false);
       return undefined;
     }
@@ -18336,34 +18432,9 @@ function ListPage({
     const t = setTimeout(() => setEnterLoading(false), 250);
     return () => clearTimeout(t);
   }, [packagesLoading, enterLoading]);
-  // Skeleton while the page is (re)loading its data.
-  const listLoading = isLinkedTk
-    ? enterLoading || !packagesReady
-    : isExceptionsModule
-      ? !packagesReady
-      : !tableReady;
-  // Real numbers only: TKs this user may see (customers: only their own).
-  const visiblePackages = packages.filter(
-    (p) =>
-      user?.role !== "Customer" ||
-      (user?.customerId && customerIdOf(p) === user.customerId),
-  );
-  const liveStats = (stats || []).map((s) => ({
-    ...s,
-    value: computeListStat(s.metric, {
-      packages: visiblePackages,
-      stageRows: linkedRows,
-      rows: isLinkedTk ? linkedRows : tableRows,
-    }),
-  }));
   // A freshly scanned TK should default to "Inbound Origin" / a real
   // outbound status, not whatever status happens to be first among
   // whatever's already in the registry.
-  const statusSeedRows = isLinkedTk
-    ? stageForThisPage
-      ? [{ status: stageForThisPage }]
-      : [{ status: "Inbound Origin" }, { status: "Hold" }]
-    : displayRows;
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [showFilterMenu, setShowFilterMenu] = useState(false);
@@ -18401,11 +18472,167 @@ function ListPage({
 
   const statusColumn = columns.find((c) => c.status);
   const dateCol = columns.find((c) => c.dateFilter);
-  const statusOptions = statusColumn
-    ? [...new Set(displayRows.map((r) => r[statusColumn.key]).filter(Boolean))]
-    : [];
 
   const advCount = Object.values(adv).filter(Boolean).length;
+  // ── Server-side paging (Packages / TK, no filters) ───────────────────────
+  // Opens with ONE page (pageSize rows) from the server, shows the skeleton
+  // while the next page loads, and reads the 4 stat numbers with cheap
+  // head-only counts. Search / status / advanced / date filters (and the
+  // Customer role) fall back to the full shared registry as before.
+  const pkgServerMode =
+    !!supabase &&
+    PKG_SERVER_PATHS.includes(path) &&
+    user?.role !== "Customer" &&
+    !search &&
+    !statusFilter &&
+    advCount === 0 &&
+    !dateRangeLabel(dateRange);
+  const [pkgRows, setPkgRows] = useState([]);
+  const [pkgTotal, setPkgTotal] = useState(0);
+  const [pkgLoading, setPkgLoading] = useState(true);
+  const [pkgError, setPkgError] = useState("");
+  const [pkgCounts, setPkgCounts] = useState(null);
+  const [pkgNonce, setPkgNonce] = useState(0);
+  const pkgSilent = useRef(false); // background refresh: no skeleton flash
+  useEffect(() => {
+    if (!pkgServerMode) return undefined;
+    let cancelled = false;
+    (async () => {
+      if (!pkgSilent.current) setPkgLoading(true);
+      pkgSilent.current = false;
+      setPkgError("");
+      const from = page * pageSize;
+      let pq = supabase.from("packages").select("*", { count: "exact" });
+      if (stageForThisPage) pq = pq.eq("status", stageForThisPage);
+      const { data, error, count } = await pq
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (cancelled) return;
+      if (error) {
+        setPkgError(error.message || "Unable to load packages.");
+        setPkgRows([]);
+        setPkgLoading(false);
+        return;
+      }
+      const total = count ?? 0;
+      if (!(data || []).length && total > 0 && page > 0) {
+        setPage(Math.max(0, Math.ceil(total / pageSize) - 1));
+        return;
+      }
+      // "CN000001"-style order numbers for just this page's TKs.
+      const need = [
+        ...new Set((data || []).map((r) => r.cn_order_id).filter(Boolean)),
+      ].filter((id) => !CN_ORDER_NO_BY_ID[id]);
+      if (need.length) {
+        const { data: cns } = await supabase
+          .from("cn_orders")
+          .select("id,order_id,shipping_method")
+          .in("id", need);
+        if (cancelled) return;
+        (cns || []).forEach((c) => {
+          CN_ORDER_NO_BY_ID[c.id] = c.order_id;
+          CN_SHIP_METHOD_BY_ID[c.id] = c.shipping_method || "";
+        });
+      }
+      setPkgRows((data || []).map(decoratePackageRow));
+      setPkgTotal(total);
+      setPkgLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pkgServerMode, path, page, pageSize, pkgNonce]);
+  useEffect(() => {
+    if (!pkgServerMode || path !== "/packages") return undefined;
+    let cancelled = false;
+    (async () => {
+      const head = () =>
+        supabase.from("packages").select("id", { count: "exact", head: true });
+      const res = await Promise.all([
+        head(),
+        head().or("status.is.null,status.eq.Inbound Origin"),
+        head().in("status", IN_TRANSIT_STATUSES),
+        head().eq("status", "Completed"),
+      ]);
+      if (cancelled) return;
+      if (res.some((r) => r.error)) return setPkgCounts(null);
+      setPkgCounts({
+        total: res[0].count ?? 0,
+        atChina: res[1].count ?? 0,
+        inTransit: res[2].count ?? 0,
+        delivered: res[3].count ?? 0,
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pkgServerMode, path, pkgNonce]);
+  const refreshPkgPage = () => setPkgNonce((n) => n + 1);
+  // Scans / status changes (here, on other pages, or from other users via
+  // realtime) update the shared registry: re-read the current page quietly.
+  const pkgFirstSync = useRef(true);
+  useEffect(() => {
+    if (!pkgServerMode) return undefined;
+    if (pkgFirstSync.current) {
+      pkgFirstSync.current = false;
+      return undefined;
+    }
+    const tm = setTimeout(() => {
+      pkgSilent.current = true;
+      setPkgNonce((n) => n + 1);
+    }, 600);
+    return () => clearTimeout(tm);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [packages]);
+  const listLoading = pkgServerMode
+    ? pkgLoading
+    : isLinkedTk
+      ? enterLoading || !packagesReady
+      : isExceptionsModule
+        ? !packagesReady
+        : !tableReady;
+  const visiblePackages = packages.filter(
+    (p) =>
+      user?.role !== "Customer" ||
+      (user?.customerId && customerIdOf(p) === user.customerId),
+  );
+  const liveStats = (stats || []).map((s) => ({
+    ...s,
+    value:
+      pkgServerMode &&
+      path === "/packages" &&
+      ["total", "atChina", "inTransit", "delivered"].includes(s.metric)
+        ? pkgCounts
+          ? STAT_NUM(pkgCounts[s.metric])
+          : "—"
+        : computeListStat(s.metric, {
+            packages: visiblePackages,
+            stageRows: linkedRows,
+            rows: isLinkedTk ? linkedRows : tableRows,
+          }),
+  }));
+  const displayRows = pkgServerMode
+    ? pkgRows
+    : isLinkedTk
+      ? linkedRows
+      : isExceptionsModule
+        ? exceptionRows
+        : tableRows;
+  const statusSeedRows = isLinkedTk
+    ? stageForThisPage
+      ? [{ status: stageForThisPage }]
+      : [{ status: "Inbound Origin" }, { status: "Hold" }]
+    : displayRows;
+  const statusOptions = statusColumn
+    ? [
+        ...new Set([
+          ...displayRows.map((r) => r[statusColumn.key]).filter(Boolean),
+          ...(path === "/packages" ? PACKAGE_STAGES : []),
+        ]),
+      ]
+    : [];
   const filteredRows = displayRows.filter((row) => {
     const q = search.toLowerCase();
     // TK lists search Customer ID / Name, Order ID, TK and Container even
@@ -18444,12 +18671,15 @@ function ListPage({
     return matchesSearch && matchesStatus && matchesAdv && matchesDate;
   });
 
-  const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
+  const listTotalRows = pkgServerMode ? pkgTotal : filteredRows.length;
+  const totalPages = Math.max(1, Math.ceil(listTotalRows / pageSize));
   const currentPage = Math.min(page, totalPages - 1);
-  const pagedRows = filteredRows.slice(
-    currentPage * pageSize,
-    currentPage * pageSize + pageSize,
-  );
+  const pagedRows = pkgServerMode
+    ? pkgRows
+    : filteredRows.slice(
+        currentPage * pageSize,
+        currentPage * pageSize + pageSize,
+      );
 
   // Only warehouse/admin roles create TKs and outbound scans; Customer
   // Service, Customer and the rest get the list read-only.
@@ -18523,7 +18753,7 @@ function ListPage({
       </div>
 
       {liveStats.length > 0 &&
-        (listLoading ? (
+        (listLoading || (pkgServerMode && !packagesReady) ? (
           <StatCardsSkeleton
             count={liveStats.length}
             className="grid grid-cols-2 lg:grid-cols-4 gap-3"
@@ -18685,9 +18915,33 @@ function ListPage({
           )}
           <div className="flex-1" />
           <button
-            onClick={() =>
-              exportRowsToCSV(`${title}.csv`, columns, filteredRows)
-            }
+            onClick={async () => {
+              if (!pkgServerMode) {
+                exportRowsToCSV(`${title}.csv`, columns, filteredRows);
+                return;
+              }
+              // Only one page is in memory: fetch every package for the file.
+              const all = await fetchAllRows(
+                ({ count, stable }) => {
+                  let qb = supabase
+                    .from("packages")
+                    .select("*", count ? { count: "exact" } : undefined);
+                  if (stageForThisPage) qb = qb.eq("status", stageForThisPage);
+                  qb = qb.order("created_at", { ascending: false });
+                  return stable ? qb.order("id", { ascending: false }) : qb;
+                },
+                { cap: FETCH_ALL_CAP },
+              );
+              if (all.error) {
+                emitCBToast("err", "Export failed", all.error.message || "");
+                return;
+              }
+              exportRowsToCSV(
+                `${title}.csv`,
+                columns,
+                (all.data || []).map(decoratePackageRow),
+              );
+            }}
             className="cbx-chip"
           >
             <Download size={16} />
@@ -18723,8 +18977,16 @@ function ListPage({
                         navigateTo(`/customers/${encodeURIComponent(row.id)}`)
                     : undefined
           }
-          error={displayRows.length === 0 ? errorInfo : null}
-          onRetry={() => refetch()}
+          error={
+            pkgServerMode
+              ? pkgError
+                ? { title: "Couldn't load packages", hint: pkgError }
+                : null
+              : displayRows.length === 0
+                ? errorInfo
+                : null
+          }
+          onRetry={() => (pkgServerMode ? refreshPkgPage() : refetch())}
           emptyTitle={hasActiveFilters ? "No matching results" : undefined}
           emptyHint={
             hasActiveFilters
@@ -18835,6 +19097,7 @@ function ListPage({
               const res = await (isLinkedTk
                 ? deletePackage(deletingRow.tk)
                 : deleteRow(deletingRow, reason));
+              if (pkgServerMode) refreshPkgPage();
               emitCBToast(
                 "ok",
                 path === "/customers" ? "Archived" : "Deleted",
@@ -18855,7 +19118,7 @@ function ListPage({
           <PaginationBar
             page={currentPage}
             pageCount={totalPages}
-            total={filteredRows.length}
+            total={listTotalRows}
             shown={pagedRows.length}
             onPage={setPage}
             pageSize={pageSize}
@@ -18914,6 +19177,7 @@ function ListPage({
           onClose={() => {
             setShowCreate(false);
             setFormTk("");
+            if (pkgServerMode) refreshPkgPage();
           }}
         />
       ) : path === "/outbound-origin" ? null : path === "/arrival" ? (
@@ -20343,414 +20607,49 @@ function FinancialRevenueChart({ points, currency = "USD", onSelectPoint }) {
   );
 }
 
+// Dashboard reporting period: the same picker as every list page, mapped onto
+// the dashboard's own (range, from, to) state.
 function FinancialPeriodPicker({ range, from, to, setRange, setFrom, setTo }) {
-  const [open, setOpen] = useState(false);
-  const [calendarMonth, setCalendarMonth] = useState(() => {
-    const d = from ? new Date(`${from.slice(0, 10)}T12:00:00`) : new Date();
-    return new Date(d.getFullYear(), d.getMonth(), 1);
-  });
-  const [draftStart, setDraftStart] = useState("");
-  const [hoverDate, setHoverDate] = useState("");
-  const today = new Date();
-  const dayMs = 86400000;
-  const toIso = (d) =>
-    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  const fromIso = (value) =>
-    value ? new Date(`${value}T12:00:00`) : new Date();
-  const shiftDays = (d, n) =>
-    new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
-  const fmt = (value) =>
-    value
-      ? fromIso(value).toLocaleDateString("en-GB", {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-        })
-      : "Select date range";
-  const startValue = range === "month" && from ? `${from}-01` : from;
-  const endValue = range === "date" ? from : to || from;
-  const displayText =
-    range === "week"
-      ? (() => {
-          const d = fromIso(from);
-          d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-          return `${fmt(toIso(d))} – ${fmt(toIso(shiftDays(d, 6)))}`;
-        })()
-      : range === "month"
-        ? fromIso(`${from || toIso(today).slice(0, 7)}-01`).toLocaleDateString(
-            "en-GB",
-            { month: "long", year: "numeric" },
-          )
-        : range === "custom"
-          ? `${fmt(from)} – ${fmt(to)}`
-          : range === "last7"
-            ? `Last 7 days · ${fmt(toIso(shiftDays(today, -6)))} – ${fmt(toIso(today))}`
-            : range === "last30"
-              ? `Last 30 days · ${fmt(toIso(shiftDays(today, -29)))} – ${fmt(toIso(today))}`
-              : range === "yesterday"
-                ? fmt(toIso(shiftDays(today, -1)))
-                : fmt(from || toIso(today));
-  const applyPreset = (preset) => {
-    const now = new Date();
-    const todayIso = toIso(now);
-    if (preset === "today") {
-      setRange("date");
-      setFrom(todayIso);
-      setTo("");
-    }
-    if (preset === "yesterday") {
-      setRange("date");
-      setFrom(toIso(shiftDays(now, -1)));
-      setTo("");
-    }
-    if (preset === "last7") {
-      setRange("custom");
-      setFrom(toIso(shiftDays(now, -6)));
-      setTo(todayIso);
-    }
-    if (preset === "last30") {
-      setRange("custom");
-      setFrom(toIso(shiftDays(now, -29)));
-      setTo(todayIso);
-    }
-    if (preset === "thisMonth") {
-      setRange("month");
-      setFrom(todayIso.slice(0, 7));
-      setTo("");
-    }
-    if (preset === "lastMonth") {
-      const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      setRange("custom");
-      setFrom(toIso(d));
-      setTo(toIso(new Date(now.getFullYear(), now.getMonth(), 0)));
-    }
-    setDraftStart("");
-    if (
-      [
-        "today",
-        "yesterday",
-        "last7",
-        "last30",
-        "thisMonth",
-        "lastMonth",
-      ].includes(preset)
-    )
-      setOpen(false);
-  };
-  const selectDay = (value) => {
-    if (range === "date") {
-      setFrom(value);
-      setTo("");
-      setOpen(false);
-      return;
-    }
-    if (range === "week") {
-      setFrom(value);
-      setTo("");
-      setOpen(false);
-      return;
-    }
-    if (range === "month") {
-      setFrom(value.slice(0, 7));
-      setTo("");
-      setOpen(false);
-      return;
-    }
-    if (!draftStart) {
-      setDraftStart(value);
-      setFrom(value);
-      setTo("");
-      setHoverDate("");
-      return;
-    }
-    const a = draftStart <= value ? draftStart : value;
-    const b = draftStart <= value ? value : draftStart;
-    setRange("custom");
-    setFrom(a);
-    setTo(b);
-    setDraftStart("");
-    setHoverDate("");
-    setOpen(false);
-  };
-  const calendar = (monthDate) => {
-    const year = monthDate.getFullYear(),
-      month = monthDate.getMonth();
-    const first = new Date(year, month, 1);
-    const offset = (first.getDay() + 6) % 7;
-    const cells = Array.from({ length: 42 }, (_, i) => {
-      const d = new Date(year, month, i - offset + 1);
-      return { d, value: toIso(d), inMonth: d.getMonth() === month };
-    });
-    const rangeEnd =
-      to ||
-      (draftStart && hoverDate
-        ? draftStart < hoverDate
-          ? hoverDate
-          : draftStart
-        : "");
-    const rangeStart =
-      draftStart && hoverDate
-        ? draftStart < hoverDate
-          ? draftStart
-          : hoverDate
-        : draftStart || from;
-    return (
-      <div className="min-w-0 flex-1" key={`${year}-${month}`}>
-        <div className="mb-2 text-center text-[13px] font-semibold text-slate-800">
-          {monthDate.toLocaleDateString("en-US", {
-            month: "long",
-            year: "numeric",
-          })}
-        </div>
-        <div className="mb-2 grid grid-cols-7 border-b border-slate-100 pb-2">
-          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((x) => (
-            <div
-              key={x}
-              className="text-center text-[10px] font-semibold text-slate-400"
-            >
-              {x}
-            </div>
-          ))}
-        </div>
-        <div className="grid grid-cols-7 gap-y-0.5">
-          {cells.map(({ d, value, inMonth }) => {
-            const selectedSingle = range === "date" && value === from;
-            const isStart =
-              value === (draftStart || from) &&
-              (range === "custom" || range === "last7" || range === "last30");
-            const isEnd = value === to && !!to;
-            const between =
-              !!rangeEnd &&
-              !!rangeStart &&
-              value >= rangeStart &&
-              value <= rangeEnd;
-            const isToday = value === toIso(today);
-            return (
-              <button
-                key={value}
-                type="button"
-                onMouseEnter={() => draftStart && setHoverDate(value)}
-                onClick={() => selectDay(value)}
-                className={`relative mx-auto grid h-8 w-8 place-items-center rounded-full text-[12px] transition-all duration-150 hover:scale-105 hover:bg-blue-50 hover:text-blue-700 ${between ? "!rounded-lg bg-blue-50 text-blue-700" : ""} ${selectedSingle || isStart || isEnd ? "!bg-blue-600 !text-white shadow-md shadow-blue-600/20" : isToday ? "ring-1 ring-blue-200 text-blue-700" : inMonth ? "text-slate-700" : "text-slate-300"}`}
-              >
-                {d.getDate()}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
+  const dayKey = (d) => localDayKey(d);
+  const today = dayKey(new Date());
+  const [start, end] = financialRangeBounds(range, from, to);
+  const startKey = start ? dayKey(start) : "";
+  const endKey = end ? dayKey(new Date(end.getTime() - 86400000)) : "";
+  let value;
+  if (range === "date" && startKey === today)
+    value = { preset: "today", from: "", to: "" };
+  else if (["yesterday", "last7", "last30"].includes(range))
+    value = { preset: range, from: "", to: "" };
+  else value = { preset: "", from: startKey, to: endKey };
   return (
-    <div className="relative">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => {
-          setOpen((v) => !v);
-          setDraftStart("");
-          setHoverDate("");
-          const d = from
-            ? fromIso(from.length === 7 ? `${from}-01` : from)
-            : today;
-          setCalendarMonth(new Date(d.getFullYear(), d.getMonth(), 1));
-        }}
-        className={`flex h-11 min-w-[250px] max-w-full items-center gap-2 rounded-xl border bg-white px-3 text-left text-sm font-medium text-slate-700 shadow-sm transition-all hover:border-blue-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${open ? "border-blue-500 ring-2 ring-blue-500/10" : "border-slate-200"}`}
-      >
-        <Icon
-          name="CalendarDays"
-          size={16}
-          className="shrink-0 text-slate-400"
-        />
-        <span className="min-w-0 flex-1 truncate">{displayText}</span>
-        <Icon
-          name={open ? "ChevronUp" : "ChevronDown"}
-          size={15}
-          className="shrink-0 text-slate-400"
-        />
-      </button>
-      {open && (
-        <>
-          <button
-            type="button"
-            aria-label="Close date picker"
-            className="fixed inset-0 z-[80] cursor-default"
-            onClick={() => {
-              setOpen(false);
-              setDraftStart("");
-            }}
-          />
-          <div
-            className="jenz-period-pop absolute right-0 z-[90] mt-2 w-[min(94vw,500px)] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl shadow-slate-900/15"
-            style={{
-              animation: "jenzCalendarIn .18s cubic-bezier(.2,.8,.2,1)",
-            }}
-          >
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-3 sm:px-5">
-              <div>
-                <p className="text-sm font-semibold text-slate-800">
-                  Select reporting period
-                </p>
-                <p className="mt-0.5 text-xs text-slate-400">
-                  {draftStart
-                    ? "Choose an end date"
-                    : "Choose a preset or select dates"}
-                </p>
-              </div>
-              <select
-                aria-label="Calendar period type"
-                value={
-                  range === "custom" ||
-                  range === "last7" ||
-                  range === "last30" ||
-                  range === "yesterday"
-                    ? "custom"
-                    : range
-                }
-                onChange={(e) => {
-                  const next = e.target.value;
-                  setRange(next);
-                  setDraftStart("");
-                  if (next === "date") {
-                    setFrom(toIso(today));
-                    setTo("");
-                  } else if (next === "week") {
-                    setFrom(toIso(today));
-                    setTo("");
-                  } else if (next === "month") {
-                    setFrom(toIso(today).slice(0, 7));
-                    setTo("");
-                  } else {
-                    setRange("custom");
-                    setFrom("");
-                    setTo("");
-                  }
-                }}
-                className="h-9 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-blue-500"
-              >
-                <option value="date">Date</option>
-                <option value="week">Week</option>
-                <option value="month">Month</option>
-                <option value="custom">Custom range</option>
-              </select>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-[112px_minmax(0,1fr)]">
-              <div className="border-b border-slate-100 p-2 sm:border-b-0 sm:border-r sm:p-2">
-                {[
-                  ["today", "Today"],
-                  ["yesterday", "Yesterday"],
-                  ["last7", "Last 7 days"],
-                  ["last30", "Last 30 days"],
-                  ["thisMonth", "This month"],
-                  ["lastMonth", "Last month"],
-                ].map(([key, label]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => applyPreset(key)}
-                    className="block w-full rounded-lg px-2.5 py-2 text-left text-[13px] text-slate-600 transition-colors hover:bg-blue-50 hover:text-blue-700"
-                  >
-                    {label}
-                  </button>
-                ))}
-                <div className="mt-1.5 border-t border-slate-100 px-2 pt-2 text-[9px] font-semibold uppercase tracking-[.12em] text-slate-400">
-                  Custom range
-                </div>
-                <div className="px-2 pb-1 pt-1 text-[11px] text-slate-500">
-                  {from && to
-                    ? `${fmt(from)} – ${fmt(to)}`
-                    : draftStart
-                      ? `Start: ${fmt(draftStart)}`
-                      : "Select start and end"}
-                </div>
-              </div>
-              <div className="min-w-0 p-3">
-                <div className="mb-3 flex items-center justify-between gap-2">
-                  <button
-                    type="button"
-                    aria-label="Previous month"
-                    onClick={() =>
-                      setCalendarMonth(
-                        new Date(
-                          calendarMonth.getFullYear(),
-                          calendarMonth.getMonth() - 1,
-                          1,
-                        ),
-                      )
-                    }
-                    className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition hover:bg-blue-50 hover:text-blue-700"
-                  >
-                    <Icon name="ChevronLeft" size={17} />
-                  </button>
-                  <div className="text-xs text-slate-400">
-                    {draftStart ? "Select the end date" : "Select a date"}
-                  </div>
-                  <button
-                    type="button"
-                    aria-label="Next month"
-                    onClick={() =>
-                      setCalendarMonth(
-                        new Date(
-                          calendarMonth.getFullYear(),
-                          calendarMonth.getMonth() + 1,
-                          1,
-                        ),
-                      )
-                    }
-                    className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition hover:bg-blue-50 hover:text-blue-700"
-                  >
-                    <Icon name="ChevronRight" size={17} />
-                  </button>
-                </div>
-                <div className="mx-auto w-full max-w-[280px]">
-                  {calendar(calendarMonth)}
-                </div>
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRange("date");
-                      setFrom("");
-                      setTo("");
-                      setDraftStart("");
-                    }}
-                    className="rounded-lg px-3 py-2 text-sm text-slate-500 transition hover:bg-slate-100"
-                  >
-                    Clear
-                  </button>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => applyPreset("today")}
-                      className="rounded-lg px-3 py-2 text-sm font-medium text-blue-600 transition hover:bg-blue-50"
-                    >
-                      Today
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (range === "custom" && from && to) setOpen(false);
-                        else if (draftStart && to) setOpen(false);
-                        else if (draftStart) {
-                          setFrom(draftStart);
-                          setTo(draftStart);
-                          setRange("custom");
-                          setDraftStart("");
-                          setOpen(false);
-                        }
-                      }}
-                      className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
-                    >
-                      Apply
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </>
-      )}
-    </div>
+    <DateRangeFilter
+      label="Period"
+      value={value}
+      onChange={(v) => {
+        if (v.preset === "today") {
+          setRange("date");
+          setFrom(today);
+          setTo("");
+        } else if (["yesterday", "last7", "last30"].includes(v.preset)) {
+          setRange(v.preset);
+          setFrom("");
+          setTo("");
+        } else if (v.preset) {
+          const r = resolveDateRange(v);
+          setRange("custom");
+          setFrom(r.from);
+          setTo(r.to);
+        } else if (v.from || v.to) {
+          setRange("custom");
+          setFrom(v.from);
+          setTo(v.to);
+        } else {
+          setRange("date");
+          setFrom(today);
+          setTo("");
+        }
+      }}
+    />
   );
 }
 
@@ -50806,6 +50705,8 @@ function CnOrdersPage() {
   const [quick, setQuick] = useState(""); // clickable stat / quick-tab filter
   const [rowsMeta, setRowsMeta] = useState({ total: null, truncated: false });
   const coverTried = useRef(new Set()); // order ids whose cover was already looked up
+  const [exporting, setExporting] = useState(false);
+  const coverCache = useRef(new Map()); // order id -> { cover_url, image_count }
   // ── Server-side paging (Orders tab) ─────────────────────────────────────
   // With no search text and no status-dropdown filter, the table asks the
   // server for ONE page (pageSize rows) and shows a skeleton while another
@@ -51006,7 +50907,11 @@ function CnOrdersPage() {
         setTkRows([]);
         setParcelRows([]);
       }
-      setPageRows(list);
+      const withCache = list.map((r) => {
+        const c = coverCache.current.get(r.id);
+        return c ? { ...r, ...c } : r;
+      });
+      setPageRows(withCache);
       setPageTotal(total);
       setPageLoading(false);
     })();
@@ -51342,7 +51247,10 @@ function CnOrdersPage() {
   useEffect(() => {
     if (!supabase || activeTab !== "orders") return;
     const need = pagedOrders.filter(
-      (r) => !r.cover_url && !coverTried.current.has(r.id),
+      (r) =>
+        !r.cover_url &&
+        !coverCache.current.has(r.id) &&
+        !coverTried.current.has(r.id),
     );
     if (!need.length) return;
     need.forEach((r) => coverTried.current.add(r.id));
@@ -51351,12 +51259,21 @@ function CnOrdersPage() {
         const byId = new Map(
           withCovers.filter((r) => r.cover_url).map((r) => [r.id, r]),
         );
+        // Remember covers so going back to a page restores them.
+        byId.forEach((r, id) =>
+          coverCache.current.set(id, {
+            cover_url: r.cover_url,
+            image_count: r.image_count,
+          }),
+        );
         if (byId.size) {
           setRows((prev) => prev.map((r) => byId.get(r.id) || r));
           setPageRows((prev) => prev.map((r) => byId.get(r.id) || r));
         }
       },
-      () => {},
+      () => {
+        need.forEach((r) => coverTried.current.delete(r.id));
+      },
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageIdKey, activeTab]);
@@ -51375,10 +51292,19 @@ function CnOrdersPage() {
     setQuick("");
     setDateRange(EMPTY_DATE_RANGE);
   };
+  const exportCount =
+    activeTab === "tks"
+      ? filteredTks.length
+      : activeTab === "orders" && serverMode
+        ? pageTotal
+        : filtered.length;
+  const refreshBusy = serverMode ? pageLoading : loading || tkLoading;
   const refreshAll = () => {
     if (serverMode) {
       // Re-fetch the current page + counts; the full cache (if any) is stale.
       fullLoadedRef.current = false;
+      coverCache.current.clear();
+      coverTried.current.clear();
       setServerNonce((n) => n + 1);
       return;
     }
@@ -51389,8 +51315,8 @@ function CnOrdersPage() {
   const exportCurrent = () => {
     const stamp = localDayKey(new Date());
     if (activeTab === "tks") {
-      exportRowsToCSV(
-        `cn-linked-tks-${stamp}.csv`,
+      exportRowsToExcel(
+        `cn-linked-tks-${stamp}.xlsx`,
         [
           { label: "Tracking Number", key: "tk" },
           {
@@ -51438,8 +51364,8 @@ function CnOrdersPage() {
         if (m < -0.005) return "Loss";
         return "Break-even";
       };
-      exportRowsToCSV(
-        `cn-finance-${stamp}.csv`,
+      exportRowsToExcel(
+        `cn-finance-${stamp}.xlsx`,
         [
           { label: "CN Order", key: "order_id" },
           { label: "Customer", key: "customer" },
@@ -51485,8 +51411,8 @@ function CnOrdersPage() {
       return;
     }
     const orderCsv = (list, tkMap, linkedMap) =>
-      exportRowsToCSV(
-        `cn-orders-${stamp}.csv`,
+      exportRowsToExcel(
+        `cn-orders-${stamp}.xlsx`,
         [
           { label: "Order ID", key: "order_id" },
           { label: "Customer", key: "customer" },
@@ -51532,6 +51458,7 @@ function CnOrdersPage() {
     // Server mode only holds one page in memory: fetch everything that matches
     // the current filters (and all tracking numbers) just for this download.
     (async () => {
+      setExporting(true);
       try {
         const all = await fetchAllRows(
           ({ count, stable }) => {
@@ -51595,6 +51522,8 @@ function CnOrdersPage() {
         orderCsv(all.data || [], tkMap, linked);
       } catch (e) {
         setLoadError(e?.message || "Download failed.");
+      } finally {
+        setExporting(false);
       }
     })();
   };
@@ -52270,18 +52199,22 @@ function CnOrdersPage() {
               <button
                 type="button"
                 onClick={exportCurrent}
-                disabled={
-                  !(activeTab === "tks" ? filteredTks : filtered).length
-                }
+                disabled={exporting || !exportCount}
+                title="Download Excel (.xlsx)"
                 className="cbx-chip"
               >
-                <Download size={16} /> Download
+                {exporting ? (
+                  <Icons.Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <Download size={16} />
+                )}{" "}
+                {exporting ? "Exporting…" : "Download"}
               </button>
             }
             <button
               type="button"
               onClick={refreshAll}
-              disabled={loading || tkLoading}
+              disabled={refreshBusy}
               title="Refresh"
               aria-label="Refresh"
               className="cbx-chip justify-center"
@@ -52289,7 +52222,7 @@ function CnOrdersPage() {
             >
               <Icons.RefreshCw
                 size={16}
-                className={loading || tkLoading ? "animate-spin" : ""}
+                className={refreshBusy ? "animate-spin" : ""}
               />
             </button>
           </div>
