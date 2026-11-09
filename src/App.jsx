@@ -30571,15 +30571,22 @@ function notifyCustomerFeatures() {
   customerFeatureStore.subs.forEach((fn) => fn());
 }
 function commitCustomerFeatures(disabled, persistLocal = true) {
+  const changed =
+    JSON.stringify(customerFeatureStore.disabled) !== JSON.stringify(disabled);
   customerFeatureStore.disabled = { ...disabled };
   if (persistLocal)
     lsWrite(CUSTOMER_FEATURES_KEY, customerFeatureStore.disabled);
-  notifyCustomerFeatures();
+  // The background poll (every 15s) must not re-render the whole portal while
+  // the customer is scrolling when nothing actually changed.
+  if (persistLocal || changed) notifyCustomerFeatures();
 }
 function commitCustomerRoles(roles, persistLocal = true) {
-  customerFeatureStore.roles = ensureDefaultCustomerRole(roles);
+  const next = ensureDefaultCustomerRole(roles);
+  const changed =
+    JSON.stringify(customerFeatureStore.roles) !== JSON.stringify(next);
+  customerFeatureStore.roles = next;
   if (persistLocal) lsWrite(CUSTOMER_ROLES_KEY, customerFeatureStore.roles);
-  notifyCustomerFeatures();
+  if (persistLocal || changed) notifyCustomerFeatures();
 }
 // Called by the customer app when the signed-in customer changes.
 function setCurrentCustomerRole(name) {
@@ -30669,9 +30676,12 @@ async function syncCustomerFeaturesFromServer() {
     customerFeatureStore.rolesServer = false;
   }
   if (featureOk && rolesOk) {
+    const wasReady =
+      customerFeatureStore.serverStatus === "ready" &&
+      !customerFeatureStore.serverError;
     customerFeatureStore.serverStatus = "ready";
     customerFeatureStore.serverError = "";
-    notifyCustomerFeatures();
+    if (!wasReady) notifyCustomerFeatures();
     return true;
   }
   customerFeatureStore.serverStatus = "error";
@@ -33886,6 +33896,7 @@ const CustomerApp = (() => {
           <p className="text-slate-500">
             {tr("Welcome back!", "សូមស្វាគមន៍ការត្រឡប់មកវិញ!")}
           </p>
+          <InstallBanner />
           {feat("home_search") && (
             <div className="mt-4 flex items-center gap-2 h-12 bg-white rounded-xl px-3.5 text-slate-900 shadow-[0_2px_12px_-4px_rgba(15,40,90,.12)]">
               <Search size={18} className="text-slate-400" />
@@ -36261,6 +36272,302 @@ const CustomerApp = (() => {
     </button>
   );
 
+  // =====================================================================
+  // PWA — "Install app / Add to Home Screen" (Customer Portal only)
+  // Files live in public/customer/ (manifest.webmanifest, sw.js, icons/).
+  // Scope is /customer/ so Admin/Staff are never touched by the service worker.
+  // =====================================================================
+  const pwaIsStandalone = () =>
+    typeof window !== "undefined" &&
+    (window.matchMedia?.("(display-mode: standalone)")?.matches ||
+      window.navigator.standalone === true);
+  const pwaIsIOS = () =>
+    typeof navigator !== "undefined" &&
+    (/iphone|ipad|ipod/i.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
+  // Android/Chrome fires this once, often before React mounts → capture early.
+  if (typeof window !== "undefined") {
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();
+      window.__jenzInstallEvt = e;
+      window.dispatchEvent(new Event("jenz-pwa-ready"));
+    });
+    window.addEventListener("appinstalled", () => {
+      window.__jenzInstallEvt = null;
+      window.dispatchEvent(new Event("jenz-pwa-ready"));
+    });
+  }
+  function usePwaInstall() {
+    const [, bump] = useState(0);
+    useEffect(() => {
+      const f = () => bump((n) => n + 1);
+      window.addEventListener("jenz-pwa-ready", f);
+      return () => window.removeEventListener("jenz-pwa-ready", f);
+    }, []);
+    const installed = pwaIsStandalone();
+    const evt = typeof window !== "undefined" ? window.__jenzInstallEvt : null;
+    const install = async () => {
+      if (!evt) return false;
+      evt.prompt();
+      try {
+        await evt.userChoice;
+      } catch {
+        /* ignore */
+      }
+      window.__jenzInstallEvt = null;
+      bump((n) => n + 1);
+      return true;
+    };
+    return { installed, canPrompt: !!evt, ios: pwaIsIOS(), install };
+  }
+
+  // Mounted once inside CustomerApp: manifest + iOS meta + service worker.
+  function PwaSetup() {
+    useEffect(() => {
+      const added = [];
+      const add = (tag, attrs) => {
+        const el = document.createElement(tag);
+        Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+        document.head.appendChild(el);
+        added.push(el);
+      };
+      add("link", { rel: "manifest", href: "/customer/manifest.webmanifest" });
+      add("link", {
+        rel: "apple-touch-icon",
+        href: "/customer/icons/apple-touch-icon.png",
+      });
+      add("meta", { name: "apple-mobile-web-app-capable", content: "yes" });
+      add("meta", { name: "mobile-web-app-capable", content: "yes" });
+      add("meta", {
+        name: "apple-mobile-web-app-status-bar-style",
+        content: "default",
+      });
+      add("meta", {
+        name: "apple-mobile-web-app-title",
+        content: "Jen-Z Express",
+      });
+      add("meta", { name: "theme-color", content: "#ffffff" });
+      // notch / home-indicator safe areas when opened as an app
+      const vp = document.querySelector('meta[name="viewport"]');
+      const oldVp = vp?.getAttribute("content");
+      if (vp && oldVp && !/viewport-fit/.test(oldVp))
+        vp.setAttribute("content", oldVp + ", viewport-fit=cover");
+      // Customer app scrolls the page itself: allow normal iOS momentum/bounce
+      // (global "overscroll-behavior:none" feels stuck on iPhone).
+      const de = document.documentElement;
+      const oldOsb = [
+        de.style.overscrollBehavior,
+        document.body.style.overscrollBehavior,
+      ];
+      de.style.overscrollBehavior = "auto";
+      document.body.style.overscrollBehavior = "auto";
+      // Service worker only in production builds (keeps Vite HMR clean).
+      if ("serviceWorker" in navigator && import.meta.env?.PROD) {
+        navigator.serviceWorker
+          .register("/customer/sw.js", { scope: "/customer/" })
+          .catch(() => {});
+      }
+      return () => {
+        added.forEach((el) => el.remove());
+        if (vp && oldVp) vp.setAttribute("content", oldVp);
+        de.style.overscrollBehavior = oldOsb[0];
+        document.body.style.overscrollBehavior = oldOsb[1];
+      };
+    }, []);
+    return null;
+  }
+
+  function InstallSheet({ open, onClose }) {
+    const { tr } = useApp();
+    const pwa = usePwaInstall();
+    if (!open) return null;
+    const Step = ({ n, icon: I, children }) => (
+      <div className="flex items-start gap-3">
+        <span className="w-7 h-7 rounded-full bg-orange-100 text-orange-600 grid place-items-center text-[13px] font-bold shrink-0">
+          {n}
+        </span>
+        <p className="flex-1 text-[14.5px] leading-snug text-slate-700 pt-0.5">
+          {children}
+          {I && (
+            <I
+              size={16}
+              className="inline-block ml-1.5 -mt-0.5 text-slate-500"
+            />
+          )}
+        </p>
+      </div>
+    );
+    return (
+      <div
+        className="fixed inset-0 z-[80] bg-black/40 flex items-end justify-center"
+        onClick={onClose}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="cb-fade-in bg-white w-full max-w-md rounded-t-3xl p-5 space-y-4"
+          style={{ paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}
+        >
+          <div className="flex items-center justify-between">
+            <h2 className="font-bold text-lg">
+              {tr("Install Jen-Z Express", "ដំឡើង Jen-Z Express")}
+            </h2>
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-9 h-9 grid place-items-center rounded-full active:bg-slate-100"
+              aria-label="Close"
+            >
+              <Icons.X size={20} />
+            </button>
+          </div>
+          <p className="text-[13.5px] text-slate-500">
+            {tr(
+              "Open it from your home screen like a normal app — no browser needed.",
+              "បើកពី Home Screen ដូចកម្មវិធីធម្មតា — មិនបាច់បើក Browser ម្តងទៀតទេ។",
+            )}
+          </p>
+          {pwa.installed ? (
+            <p className="text-[14px] font-semibold text-emerald-600">
+              {tr("Already installed ✓", "បានដំឡើងរួចរាល់ ✓")}
+            </p>
+          ) : pwa.canPrompt ? (
+            <button
+              type="button"
+              onClick={async () => {
+                await pwa.install();
+                onClose();
+              }}
+              className="w-full h-12 rounded-xl bg-orange-500 text-white font-bold active:scale-[.98] transition"
+            >
+              {tr("Install now", "ដំឡើងឥឡូវនេះ")}
+            </button>
+          ) : pwa.ios ? (
+            <div className="space-y-3">
+              <Step n={1} icon={Icons.Share}>
+                {tr(
+                  "Open this page in Safari, then tap the Share button",
+                  "បើកទំព័រនេះក្នុង Safari រួចចុចប៊ូតុង Share",
+                )}
+              </Step>
+              <Step n={2} icon={Icons.PlusSquare}>
+                {tr(
+                  "Scroll down and tap “Add to Home Screen”",
+                  "អូសចុះក្រោម រួចចុច “Add to Home Screen”",
+                )}
+              </Step>
+              <Step n={3}>
+                {tr("Tap “Add” — done!", "ចុច “Add” — ចប់ហើយ!")}
+              </Step>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <Step n={1} icon={Icons.MoreVertical}>
+                {tr(
+                  "In Chrome, tap the ⋮ menu (top right)",
+                  "ក្នុង Chrome ចុចម៉ឺនុយ ⋮ (ខាងលើស្តាំ)",
+                )}
+              </Step>
+              <Step n={2}>
+                {tr(
+                  "Tap “Install app” or “Add to Home screen”",
+                  "ចុច “Install app” ឬ “Add to Home screen”",
+                )}
+              </Step>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Dismissible card on the Home page (hidden once installed).
+  function InstallBanner() {
+    const { tr } = useApp();
+    const pwa = usePwaInstall();
+    const [open, setOpen] = useState(false);
+    const [hidden, setHidden] = useState(() => {
+      try {
+        const t = Number(localStorage.getItem("jenz_pwa_banner_until") || 0);
+        return t > Date.now();
+      } catch {
+        return false;
+      }
+    });
+    if (pwa.installed || hidden) return null;
+    return (
+      <>
+        <div className="mt-4 flex items-center gap-3 rounded-2xl bg-gradient-to-r from-orange-500 to-orange-400 p-3.5 text-white shadow-[0_6px_18px_-8px_rgba(249,115,22,.7)]">
+          <span className="w-10 h-10 rounded-xl bg-white/20 grid place-items-center shrink-0">
+            <Icons.Smartphone size={20} />
+          </span>
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-[14.5px] leading-tight">
+              {tr("Add to Home Screen", "បន្ថែមទៅ Home Screen")}
+            </p>
+            <p className="text-[12px] text-white/90 leading-snug">
+              {tr(
+                "Open like an app — faster, no browser.",
+                "បើកដូចកម្មវិធី — លឿន មិនបាច់ Browser។",
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              if (pwa.canPrompt) await pwa.install();
+              else setOpen(true);
+            }}
+            className="h-9 px-3.5 rounded-lg bg-white text-orange-600 text-[13px] font-bold active:scale-95 transition shrink-0"
+          >
+            {tr("Install", "ដំឡើង")}
+          </button>
+          <button
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => {
+              try {
+                // hide for 7 days
+                localStorage.setItem(
+                  "jenz_pwa_banner_until",
+                  String(Date.now() + 7 * 864e5),
+                );
+              } catch {
+                /* ignore */
+              }
+              setHidden(true);
+            }}
+            className="w-7 h-7 grid place-items-center rounded-full active:bg-white/20 shrink-0"
+          >
+            <Icons.X size={16} />
+          </button>
+        </div>
+        <InstallSheet open={open} onClose={() => setOpen(false)} />
+      </>
+    );
+  }
+
+  // Row for Settings (hidden once installed).
+  function InstallMenuRow() {
+    const { tr } = useApp();
+    const pwa = usePwaInstall();
+    const [open, setOpen] = useState(false);
+    if (pwa.installed) return null;
+    return (
+      <>
+        <MenuRow
+          icon={Icons.Download}
+          tone="amber"
+          label={tr("Install app", "ដំឡើងកម្មវិធី")}
+          onClick={async () => {
+            if (pwa.canPrompt) await pwa.install();
+            else setOpen(true);
+          }}
+        />
+        <InstallSheet open={open} onClose={() => setOpen(false)} />
+      </>
+    );
+  }
+
   // ---------- Profile ----------
   // Account overview only. Language / Appearance / Change Password / Log Out
   // live on the Settings page (gear icon, top right).
@@ -36506,6 +36813,7 @@ const CustomerApp = (() => {
               }
               onClick={() => setThemeOpen(true)}
             />
+            <InstallMenuRow />
           </Card>
           {feat("profile_password") && (
             <>
@@ -40154,6 +40462,7 @@ const CustomerApp = (() => {
   function CustomerApp() {
     return (
       <Provider>
+        <PwaSetup />
         <Routes>
           <Route path="login" element={<Auth />} />
           <Route element={<Shell />}>
@@ -76936,7 +77245,7 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .jz-customer.cb-cust-dark{--jz-c-page:#0b1323;--jz-c-card:#131f33;--jz-c-text:#e8eef8;--jz-c-muted:#a1b1ca;--jz-c-border:#28384f;--jz-c-glass:rgba(19,31,51,.94);}
 .jz-customer .bg-slate-50{background-color:var(--jz-c-page);}
 .jz-customer .bg-white{background-color:var(--jz-c-card);}
-.jz-customer .bg-white.rounded-2xl{border-radius:20px;border-color:var(--jz-c-border);box-shadow:0 5px 24px -16px rgba(15,30,60,.2);}
+.jz-customer .bg-white.rounded-2xl{border-radius:20px;border-color:var(--jz-c-border);box-shadow:0 2px 10px -6px rgba(15,30,60,.18);}
 .jz-customer.cb-cust-dark header.bg-blue-600{background:linear-gradient(135deg,#153358,#2458a0);border-radius:0 0 28px 28px;}
 .jz-customer:not(.cb-cust-dark) header.bg-blue-600{position:sticky;top:0;z-index:30;background:#fff;color:#14284b;border-radius:0;padding-bottom:.875rem;box-shadow:0 2px 10px -4px rgba(15,40,90,.15);}
 .jz-customer:not(.cb-cust-dark) header.bg-blue-600 h1{color:#14284b;font-weight:800;}
@@ -76944,7 +77253,11 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .jz-customer:not(.cb-cust-dark) header.bg-blue-600 button.bg-white{background:#f47c20;color:#fff;}
 .cb-cust-dark .jz-brand-j{fill:#e8eef8;}.cb-cust-dark .jz-brand-text{color:#e8eef8;}
 .jz-customer .jz-customer-content{padding-bottom:calc(108px + env(safe-area-inset-bottom));}
-.jz-customer .jz-bottom-nav{left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));max-width:448px;margin-inline:auto;background:var(--jz-c-glass)!important;border:1px solid var(--jz-c-border);border-radius:22px;box-shadow:0 8px 36px -14px rgba(5,20,45,.3);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);overflow:hidden;}
+.jz-customer .jz-bottom-nav{left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));max-width:448px;margin-inline:auto;background:var(--jz-c-glass)!important;border:1px solid var(--jz-c-border);border-radius:22px;box-shadow:0 4px 16px -8px rgba(5,20,45,.28);overflow:hidden;transform:translateZ(0);-webkit-transform:translateZ(0);}
+/* iPhone scroll performance: no live blur behind sticky/fixed bars, lighter card shadows. */
+.jz-customer .backdrop-blur,.jz-customer [class*="backdrop-blur"]{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
+.jz-customer .bg-white\\/95{background-color:var(--jz-c-card)!important;}
+.jz-customer .jz-customer-content{-webkit-overflow-scrolling:touch;}
 .jz-customer .jz-bottom-nav>div{display:flex;overflow-x:auto;scrollbar-width:thin;}
 .jz-customer .jz-bottom-nav a{flex:1 0 60px;min-width:0;min-height:62px;padding:10px 4px;font-size:11px;line-height:1.4;color:var(--jz-c-muted);}
 .jz-customer .jz-bottom-nav a[aria-current="page"]{color:#3b82f6;background:rgba(59,130,246,.1);box-shadow:inset 0 3px 0 #3b82f6;}
