@@ -33577,6 +33577,34 @@ const CustomerApp = (() => {
     const { me, toast, loading, refreshMoney, tr } = useApp();
     const { pathname } = useLocation();
     const first = useRef(true);
+    const shellRef = useRef(null);
+    const bottomNavRef = useRef(null);
+    // Use the actual dock height: language, enabled tabs and screen size can
+    // change it. This shared clearance keeps every shop action above the dock.
+    useLayoutEffect(() => {
+      const shell = shellRef.current;
+      const dock = bottomNavRef.current;
+      if (!shell || !dock) return undefined;
+      const measure = () => {
+        const bottom = parseFloat(window.getComputedStyle(dock).bottom) || 0;
+        const clearance = Math.ceil(
+          dock.getBoundingClientRect().height + bottom + 12,
+        );
+        shell.style.setProperty("--jz-nav-clearance", `${clearance}px`);
+      };
+      measure();
+      const observer =
+        typeof ResizeObserver !== "undefined"
+          ? new ResizeObserver(measure)
+          : null;
+      observer?.observe(dock);
+      window.addEventListener("resize", measure, { passive: true });
+      return () => {
+        observer?.disconnect();
+        window.removeEventListener("resize", measure);
+        shell.style.removeProperty("--jz-nav-clearance");
+      };
+    }, [loading, me?.id, me?.must_change_password, pathname]);
     const feat = useCustomerFeatures();
     // Refresh permissions on route changes, focus/visibility return and at a
     // short interval so an Admin's saved feature switches reach already-open
@@ -33793,6 +33821,7 @@ const CustomerApp = (() => {
     ].filter((t) => t[3]);
     return (
       <div
+        ref={shellRef}
         className="min-h-screen bg-slate-50 text-slate-900"
         style={{
           ...FONT,
@@ -33838,7 +33867,11 @@ const CustomerApp = (() => {
             </div>
           )}
         </div>
-        <nav className="jz-bottom-nav fixed bottom-0 inset-x-0 z-40">
+        <nav
+          ref={bottomNavRef}
+          aria-label={tr("Main navigation", "ម៉ឺនុយមេ")}
+          className="jz-bottom-nav fixed bottom-0 inset-x-0 z-40"
+        >
           <div
             className="grid"
             style={{
@@ -38661,7 +38694,9 @@ const CustomerApp = (() => {
       /* ignore */
     }
   };
-  const SHOP_C_BAR = { bottom: "calc(56px + env(safe-area-inset-bottom))" };
+  const SHOP_C_BAR = {
+    bottom: "var(--jz-nav-clearance, calc(90px + env(safe-area-inset-bottom)))",
+  };
   function ShopCCheck({ size = 18 }) {
     return (
       <svg
@@ -39401,7 +39436,7 @@ const CustomerApp = (() => {
         </>
       );
     const chip = (active, disabled, soldOut) =>
-      `cb-shop-press min-w-[48px] h-11 px-4 rounded-xl border text-[14px] font-semibold ${active ? "bg-blue-600 text-white border-blue-600 shadow-[0_6px_16px_-8px_rgba(37,99,235,.8)]" : "bg-white text-slate-700 border-slate-200 active:bg-slate-50"} ${disabled ? "opacity-30 pointer-events-none" : ""} ${soldOut && !active ? "line-through text-slate-400 opacity-70" : ""}`;
+      `cb-shop-press min-w-[48px] min-h-[44px] px-4 py-2.5 rounded-xl border text-[14px] font-semibold ${active ? "bg-blue-600 text-white border-blue-600 shadow-[0_6px_16px_-8px_rgba(37,99,235,.8)]" : "bg-white text-slate-700 border-slate-200 active:bg-slate-50"} ${disabled ? "opacity-30 pointer-events-none" : ""} ${soldOut && !active ? "line-through text-slate-400 opacity-70" : ""}`;
     const pct =
       sel && sel.unit_discount > 0
         ? Math.round((sel.unit_discount / sel.unit_price) * 100)
@@ -39447,7 +39482,7 @@ const CustomerApp = (() => {
               ))}
             </div>
           )}
-          <div className="px-4 pt-4 pb-4 space-y-5 cb-shop-up">
+          <div className="jz-shop-product-options px-4 pt-4 pb-4 space-y-5 cb-shop-up">
             <div>
               {p.brand && (
                 <p className="text-xs text-slate-400 font-semibold uppercase tracking-wide">
@@ -39479,7 +39514,7 @@ const CustomerApp = (() => {
                   {tr("Color", "ពណ៌")}:{" "}
                   <span className="font-normal text-slate-500">{color}</span>
                 </p>
-                <div className="flex flex-wrap gap-2">
+                <div className="jz-shop-option-list flex flex-wrap gap-2">
                   {colors.map((c) => {
                     const anyStock = vars.some(
                       (v) => v.color === c && v.in_stock,
@@ -39504,7 +39539,7 @@ const CustomerApp = (() => {
                   {tr("Size", "ទំហំ")}:{" "}
                   <span className="font-normal text-slate-500">{size}</span>
                 </p>
-                <div className="flex flex-wrap gap-2">
+                <div className="jz-shop-option-list flex flex-wrap gap-2">
                   {sizes.map((s) => {
                     const match = vars.filter(
                       (v) =>
@@ -39535,7 +39570,7 @@ const CustomerApp = (() => {
                 <p className="text-[13px] font-semibold mb-2">
                   {tr("Option", "ជម្រើស")}
                 </p>
-                <div className="flex flex-wrap gap-2">
+                <div className="jz-shop-option-list flex flex-wrap gap-2">
                   {vars.map((v) => (
                     <button
                       key={v.id}
@@ -39625,11 +39660,11 @@ const CustomerApp = (() => {
           </div>
           {/* Always-visible action bar: the buttons never scroll out of reach. */}
           <div
-            className="sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100 flex items-center gap-2.5"
+            className="jz-shop-action-bar jz-shop-product-actions sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100 flex items-center gap-2.5"
             style={SHOP_C_BAR}
           >
             {sel && (
-              <div className="shrink-0 pr-1 leading-tight">
+              <div className="jz-shop-action-total shrink-0 pr-1 leading-tight">
                 <p className="text-[11px] text-slate-400">
                   {tr("Total", "សរុប")}
                 </p>
@@ -39901,7 +39936,7 @@ const CustomerApp = (() => {
         </div>
         {items.length > 0 && (
           <div
-            className="sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100 flex items-center gap-3"
+            className="jz-shop-action-bar sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100 flex items-center gap-3"
             style={SHOP_C_BAR}
           >
             <div className="shrink-0 leading-tight">
@@ -40069,7 +40104,7 @@ const CustomerApp = (() => {
     return (
       <>
         <Top title={tr("Checkout", "ទូទាត់")} back />
-        <div className="px-4 pt-4 space-y-3 pb-4 cb-shop-fade">
+        <div className="jz-shop-checkout-content px-4 pt-4 space-y-3 pb-4 cb-shop-fade">
           {noMethod && (
             <p
               role="alert"
@@ -40248,7 +40283,7 @@ const CustomerApp = (() => {
           )}
         </div>
         <div
-          className="sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100"
+          className="jz-shop-action-bar sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100"
           style={SHOP_C_BAR}
         >
           <Btn
@@ -40787,7 +40822,7 @@ const CustomerApp = (() => {
         </div>
         {need && (
           <div
-            className="sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100"
+            className="jz-shop-action-bar sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100"
             style={SHOP_C_BAR}
           >
             <Btn
@@ -77597,7 +77632,7 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .jz-customer:not(.cb-cust-dark) header.bg-blue-600 .bg-white\\/15,.jz-customer:not(.cb-cust-dark) header.bg-blue-600 .bg-white\\/30{background:#eef2fa;color:#14284b;}
 .jz-customer:not(.cb-cust-dark) header.bg-blue-600 button.bg-white{background:#f47c20;color:#fff;}
 .cb-cust-dark .jz-brand-j{fill:#e8eef8;}.cb-cust-dark .jz-brand-text{color:#e8eef8;}
-.jz-customer .jz-customer-content{padding-bottom:calc(108px + env(safe-area-inset-bottom));}
+.jz-customer .jz-customer-content{padding-bottom:calc(var(--jz-nav-clearance, calc(92px + env(safe-area-inset-bottom))) + 16px);}
 .jz-customer .jz-bottom-nav{left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));max-width:448px;margin-inline:auto;background:var(--jz-c-glass)!important;border:1px solid var(--jz-c-border);border-radius:22px;box-shadow:0 4px 16px -8px rgba(5,20,45,.28);overflow:hidden;transform:translateZ(0);-webkit-transform:translateZ(0);}
 /* iPhone scroll performance: no live blur behind sticky/fixed bars, lighter card shadows. */
 .jz-customer .backdrop-blur,.jz-customer [class*="backdrop-blur"]{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
@@ -77608,6 +77643,25 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .jz-customer .jz-bottom-nav a[aria-current="page"]{color:#3b82f6;background:rgba(59,130,246,.1);box-shadow:inset 0 3px 0 #3b82f6;}
 .jz-customer .jz-bottom-nav a[aria-current="page"] svg{stroke-width:2.3;}
 .jz-customer .jz-toast{max-width:calc(100vw - 32px);width:max-content;bottom:calc(100px + env(safe-area-inset-bottom));border:1px solid #3c506c;border-radius:16px;background:#142945;color:#fff;box-shadow:0 12px 28px -12px #071327;padding:12px 18px;}
+
+/* Separate shopping actions from the floating navigation, in both themes. */
+.jz-customer .jz-shop-action-bar{margin:16px 16px 0;padding:14px;gap:12px;border:1px solid var(--jz-c-border);border-radius:20px;background:var(--jz-c-card)!important;color:var(--jz-c-text);box-shadow:0 6px 24px -10px rgba(15,30,60,.24);}
+.jz-customer .jz-shop-action-bar>button{min-width:0;min-height:48px;height:auto;padding:12px 14px;line-height:1.45;white-space:normal;overflow-wrap:anywhere;border-radius:13px;flex:1;}
+.jz-customer .jz-shop-action-bar>button:focus-visible,.jz-customer .jz-shop-option-list>button:focus-visible{outline:3px solid #60a5fa;outline-offset:3px;}
+.jz-customer .jz-shop-product-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
+.jz-customer .jz-shop-action-total{grid-column:1/-1;display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:0 2px 10px;border-bottom:1px solid var(--jz-c-border);}
+.jz-customer .jz-shop-action-total>p:first-child{font-size:12px;color:var(--jz-c-muted);}
+.jz-customer .jz-shop-action-total>p:last-child{color:var(--jz-c-text);font-size:20px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;}
+.jz-customer .jz-shop-product-options{padding-top:24px;padding-bottom:24px;}
+.jz-customer .jz-shop-product-options>div+div{margin-top:24px;}
+.jz-customer .jz-shop-option-list{gap:10px;}
+.jz-customer .jz-shop-option-list>button{max-width:100%;white-space:normal;overflow-wrap:anywhere;line-height:1.5;}
+.jz-customer .jz-shop-option-list>button[aria-pressed="true"]{background:#eff6ff;color:#1d4ed8;border-color:#2563eb;box-shadow:inset 0 0 0 1px #2563eb;}
+.jz-customer.cb-cust-dark .jz-shop-option-list>button[aria-pressed="true"]{background:#172d50;color:#bfdbfe;border-color:#60a5fa;box-shadow:inset 0 0 0 1px #60a5fa;}
+.jz-customer .jz-shop-checkout-content{padding-top:20px;padding-bottom:20px;}
+.jz-customer .jz-shop-checkout-content>*+*{margin-top:16px;}
+@media(min-width:640px){.jz-customer .jz-shop-action-bar{margin-inline:auto;max-width:608px;}}
+
 /* Motion: fade-only page entry avoids creating containing blocks for fixed UI. */
 @keyframes jz-fade{from{opacity:0}to{opacity:1}}
 @keyframes jz-dialog{from{opacity:0;transform:translateY(8px) scale(.99)}to{opacity:1;transform:none}}
