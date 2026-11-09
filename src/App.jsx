@@ -33262,18 +33262,8 @@ const CustomerApp = (() => {
   }
 
   // ---------- Pull-to-refresh (mobile customer portal) ----------
-  // Pull the page down while scrolled to the very top → release → refetch.
-  //
-  // Why it is built this way (iOS Safari):
-  //  • The FIRST downward touchmove at scrollTop 0 must call preventDefault().
-  //    If we wait (dead-zone), iOS starts its own rubber-band bounce, the
-  //    touchmove becomes non-cancelable and the page moves twice (native
-  //    bounce + our translate) → the "not smooth" feeling.
-  //  • While dragging we write transform straight to the DOM (no setState per
-  //    touchmove), via requestAnimationFrame + translate3d.
-  //  • The release / snap-back is a JS tween, NOT a CSS transition, because the
-  //    app has `prefers-reduced-motion { .jz-customer * { transition:none!important } }`
-  //    which would otherwise make the snap-back jump instantly.
+  // Native document scrolling; only a downward gesture starting at the top
+  // is intercepted. Drag writes are frame-batched; settling is serialized.
   function PullToRefresh({ onRefresh, children }) {
     const { tr } = useApp();
     const [refreshing, setRefreshing] = useState(false);
@@ -33306,163 +33296,241 @@ const CustomerApp = (() => {
       if (!el) return undefined;
       const s = st.current;
       const de = document.documentElement;
-      const atTop = () =>
-        (window.scrollY || document.documentElement.scrollTop || 0) <= 0;
-
+      const oldBounce = de.style.overscrollBehaviorY;
+      const reducedMotion = window.matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      );
+      let disposed = false;
+      let attached = false;
+      let finishAnimation = null;
+      let generation = 0;
+      const atTop = () => (window.scrollY || de.scrollTop || 0) <= 0;
       const paint = (px, spinning) => {
-        const body = bodyRef.current;
-        const hint = hintRef.current;
-        if (!body || !hint) return;
+        if (disposed || !bodyRef.current || !hintRef.current) return;
         s.cur = px;
-        body.style.transform = px > 0.5 ? `translate3d(0,${px}px,0)` : "";
-        hint.style.transform = `translate3d(0,${px - HOLD}px,0)`;
-        hint.style.opacity = spinning
+        bodyRef.current.style.transform =
+          px > 0.5 ? `translate3d(0,${px}px,0)` : "";
+        hintRef.current.style.transform = `translate3d(0,${px - HOLD}px,0)`;
+        hintRef.current.style.opacity = spinning
           ? "1"
-          : String(Math.max(0, Math.min(1, px / THRESHOLD)));
+          : String(Math.min(1, px / THRESHOLD));
       };
       const stopAnim = () => {
-        if (s.anim) {
-          cancelAnimationFrame(s.anim);
-          s.anim = 0;
-        }
+        if (s.anim) cancelAnimationFrame(s.anim);
+        s.anim = 0;
+        const finish = finishAnimation;
+        finishAnimation = null;
+        if (finish) finish(false);
       };
-      // Smooth JS tween (ease-out cubic) — unaffected by CSS !important rules.
-      const animateTo = (to, spinning, ms = 280) =>
+      const animateTo = (to, spinning, ms = 240) =>
         new Promise((resolve) => {
           stopAnim();
-          const from = s.cur;
-          if (Math.abs(from - to) < 0.5) {
-            paint(to, spinning);
-            resolve();
+          if (disposed) {
+            resolve(false);
             return;
           }
-          const t0 = performance.now();
+          if (reducedMotion.matches || Math.abs(s.cur - to) < 0.5) {
+            paint(to, spinning);
+            resolve(true);
+            return;
+          }
+          finishAnimation = resolve;
+          const from = s.cur;
+          const start = performance.now();
           const tick = (now) => {
-            const k = Math.min(1, (now - t0) / ms);
-            const e = 1 - Math.pow(1 - k, 3);
-            paint(from + (to - from) * e, spinning);
+            const k = Math.min(1, (now - start) / ms);
+            paint(from + (to - from) * (1 - Math.pow(1 - k, 3)), spinning);
             if (k < 1) s.anim = requestAnimationFrame(tick);
             else {
               s.anim = 0;
-              resolve();
+              finishAnimation = null;
+              resolve(true);
             }
           };
           s.anim = requestAnimationFrame(tick);
         });
-      const setReadyOnce = (v) => {
-        if (s.ready !== v) {
-          s.ready = v;
-          setReady(v);
+      const setReadyOnce = (value) => {
+        if (s.ready !== value) {
+          s.ready = value;
+          setReady(value);
         }
       };
       const layer = (on) => {
-        // Promote to a GPU layer only for the duration of a pull.
-        const v = on ? "transform" : "";
-        if (bodyRef.current) bodyRef.current.style.willChange = v;
+        if (bodyRef.current)
+          bodyRef.current.style.willChange = on ? "transform" : "";
         if (hintRef.current)
           hintRef.current.style.willChange = on ? "transform, opacity" : "";
+        de.style.overscrollBehaviorY = on ? "none" : oldBounce;
       };
-      const lockBounce = (on) => {
-        // Only while a pull is in progress → normal scrolling keeps iOS momentum.
-        de.style.overscrollBehaviorY = on ? "none" : "";
+      const detach = () => {
+        if (attached) el.removeEventListener("touchmove", onMove);
+        attached = false;
       };
-
-      const detach = () => el.removeEventListener("touchmove", onMove);
-      const onStart = (e) => {
+      const syncListener = () => {
+        if (s.active || s.pulling) return;
+        if (atTop() && !s.busy) {
+          if (!attached)
+            el.addEventListener("touchmove", onMove, { passive: false });
+          attached = true;
+        } else detach();
+      };
+      // A sheet, editable field, map or nested scroller owns its own gesture.
+      const ownsGesture = (target) => {
+        for (
+          let node = target instanceof Element ? target : target?.parentElement;
+          node && node !== el;
+          node = node.parentElement
+        ) {
+          if (
+            node.matches(
+              'input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="dialog"],[aria-modal="true"],[data-no-pull-refresh]',
+            )
+          )
+            return true;
+          const style = window.getComputedStyle(node);
+          if (style.position === "fixed" || style.touchAction === "none")
+            return true;
+          if (
+            /(auto|scroll)/.test(style.overflowY) &&
+            node.scrollHeight > node.clientHeight + 1
+          )
+            return true;
+          if (
+            /(auto|scroll)/.test(style.overflowX) &&
+            node.scrollWidth > node.clientWidth + 1
+          )
+            return true;
+        }
+        return false;
+      };
+      const reset = () => {
+        s.active = false;
+        s.pulling = false;
+        s.busy = false;
+        s.target = 0;
+        setReadyOnce(false);
+        layer(false);
+        syncListener();
+      };
+      const settle = async (refresh) => {
+        const run = ++generation;
+        s.active = false;
+        s.pulling = false;
+        s.busy = true; // Includes snap-back, so a second gesture cannot race it.
         detach();
-        if (s.busy || e.touches.length !== 1 || !atTop()) {
+        if (s.raf) cancelAnimationFrame(s.raf);
+        s.raf = 0;
+        // Flush the latest finger position before starting the release animation.
+        paint(s.target, false);
+        setReadyOnce(false);
+        if (refresh) {
+          setRefreshing(true);
+          const held = animateTo(HOLD, true, 180);
+          try {
+            // Start loading immediately; don't add a forced 900ms delay.
+            await Promise.all([
+              held,
+              Promise.resolve().then(() => cbRef.current?.()),
+            ]);
+          } catch {
+            // Existing loaders report request errors; always release the UI.
+          }
+          if (disposed || run !== generation) return;
+          // Finish the hold before returning, even when the request rejects.
+          await held;
+          if (disposed || run !== generation) return;
+          setRefreshing(false);
+        }
+        const finished = await animateTo(0, false, 240);
+        if (!finished || disposed || run !== generation) return;
+        reset();
+      };
+      const onStart = (e) => {
+        if (s.busy) return;
+        if (s.active && e.touches.length !== 1) {
+          void settle(false);
+          return;
+        }
+        syncListener();
+        if (e.touches.length !== 1 || !atTop() || ownsGesture(e.target)) {
           s.active = false;
           return;
         }
-        el.addEventListener("touchmove", onMove, { passive: false });
-        stopAnim();
-        s.y0 = e.touches[0].clientY;
         s.x0 = e.touches[0].clientX;
+        s.y0 = e.touches[0].clientY;
+        s.target = 0;
         s.pulling = false;
         s.active = true;
       };
       const onMove = (e) => {
         if (!s.active || s.busy) return;
+        if (e.touches.length !== 1) {
+          void settle(false);
+          return;
+        }
         const dy = e.touches[0].clientY - s.y0;
         const dx = e.touches[0].clientX - s.x0;
         if (!s.pulling) {
-          // Not (yet) a pull: scrolling up, sideways (chips row), or page moved.
-          if (dy <= 0 || Math.abs(dx) > Math.abs(dy) || !atTop()) {
-            if (dy <= 0 || Math.abs(dx) > Math.abs(dy)) s.active = false;
-            return;
-          }
-          // The browser already took this gesture (not cancelable) → don't
-          // fight the native bounce, just leave it alone.
-          if (!e.cancelable) {
+          if (dy === 0 && dx === 0) return;
+          if (dy <= 0 || Math.abs(dx) >= dy || !atTop() || !e.cancelable) {
             s.active = false;
+            // Hand ordinary scrolling to the browser for the entire gesture.
+            detach();
             return;
           }
           s.pulling = true;
           layer(true);
-          lockBounce(true);
         }
-        if (dy <= 0) {
-          // finger went back above the start point
-          s.target = 0;
-        } else {
-          s.target = rubber(dy);
+        if (!e.cancelable) {
+          void settle(false);
+          return;
         }
-        if (e.cancelable) e.preventDefault();
+        e.preventDefault();
+        s.target = rubber(Math.max(0, dy));
         setReadyOnce(s.target >= THRESHOLD);
-        if (!s.raf) {
+        if (!s.raf)
           s.raf = requestAnimationFrame(() => {
             s.raf = 0;
             paint(s.target, false);
           });
+      };
+      const onEnd = () => {
+        if (s.busy) return;
+        if (!s.pulling) {
+          s.active = false;
+          syncListener();
+          return;
+        }
+        void settle(s.target >= THRESHOLD);
+      };
+      const onCancel = () => {
+        if (s.busy) return;
+        if (s.pulling) void settle(false);
+        else {
+          s.active = false;
+          syncListener();
         }
       };
-      const onEnd = async () => {
-        detach();
-        if (!s.active) return;
-        s.active = false;
-        if (s.raf) {
-          cancelAnimationFrame(s.raf);
-          s.raf = 0;
-        }
-        if (!s.pulling) return;
-        s.pulling = false;
-        if (s.target >= THRESHOLD && !s.busy) {
-          s.busy = true;
-          setRefreshing(true);
-          setReadyOnce(false);
-          await animateTo(HOLD, true, 200);
-          try {
-            await Promise.all([
-              Promise.resolve(cbRef.current && cbRef.current()),
-              new Promise((r) => setTimeout(r, 900)), // avoid a flicker
-            ]);
-          } catch {
-            /* individual loaders report their own errors */
-          }
-          setRefreshing(false);
-          await animateTo(0, false, 320);
-          s.busy = false;
-        } else {
-          setReadyOnce(false);
-          await animateTo(0, false, 260);
-        }
-        s.target = 0;
-        layer(false);
-        lockBounce(false);
-      };
-
       el.addEventListener("touchstart", onStart, { passive: true });
       el.addEventListener("touchend", onEnd, { passive: true });
-      el.addEventListener("touchcancel", onEnd, { passive: true });
+      el.addEventListener("touchcancel", onCancel, { passive: true });
+      window.addEventListener("scroll", syncListener, { passive: true });
+      syncListener();
       return () => {
+        disposed = true;
+        generation += 1;
+        window.removeEventListener("scroll", syncListener);
         if (s.raf) cancelAnimationFrame(s.raf);
+        s.raf = 0;
         stopAnim();
         layer(false);
-        lockBounce(false);
+        if (bodyRef.current) bodyRef.current.style.transform = "";
+        s.active = s.pulling = s.busy = s.ready = false;
+        s.cur = s.target = 0;
         el.removeEventListener("touchstart", onStart);
-        el.removeEventListener("touchmove", onMove);
         el.removeEventListener("touchend", onEnd);
-        el.removeEventListener("touchcancel", onEnd);
+        el.removeEventListener("touchcancel", onCancel);
+        detach();
       };
     }, []);
 
@@ -33685,11 +33753,13 @@ const CustomerApp = (() => {
           ? Promise.resolve(syncCustomerFeaturesFromServer())
           : Promise.resolve(),
       ]);
+      // refreshMoney() above already reloads shipments / air / CN orders /
+      // wallet. Do NOT also fire synthetic focus + visibilitychange: every
+      // listener (features sync x2, cart x2, loaders…) would run again at the
+      // same moment → network + re-render storm → the app freezes after refresh.
       try {
-        // Screens that don't listen to focus/visibility (e.g. Shop) listen to this.
-        window.dispatchEvent(new CustomEvent("cb-pull-refresh"));
-        window.dispatchEvent(new Event("focus"));
-        document.dispatchEvent(new Event("visibilitychange"));
+        window.dispatchEvent(new CustomEvent("cb-pull-refresh")); // Shop catalog
+        window.dispatchEvent(new CustomEvent("cb-shop-cart")); // cart badge, once
       } catch {}
     };
     const tabs = [
@@ -33759,7 +33829,7 @@ const CustomerApp = (() => {
               {tr("Loading account permissions…", "កំពុងទាញយកសិទ្ធិគណនី…")}
             </div>
           )}
-          <PullToRefresh onRefresh={handlePullRefresh}>
+          <PullToRefresh key={pathname} onRefresh={handlePullRefresh}>
             <Outlet />
           </PullToRefresh>
           {toast && (
@@ -38839,6 +38909,9 @@ const CustomerApp = (() => {
     const [cartN] = useShopCartCount();
     const [reload, setReload] = useState(0);
     const chipsRef = useRef(null);
+    const keepLen = useRef(0);
+    const itemsLen = useRef(0);
+    itemsLen.current = items.length;
     const PAGE = 20;
     const [dq, setDq] = useState("");
     useEffect(() => {
@@ -38861,8 +38934,8 @@ const CustomerApp = (() => {
     // Pull-to-refresh (or Retry): new "For you" order + refetch the catalog.
     useEffect(() => {
       const onPull = () => {
-        setSeed(shopFeedReseed());
-        setReload((n) => n + 1);
+        keepLen.current = itemsLen.current; // keep the same number of cards
+        setReload((n) => n + 1); // same seed → same order → no remount flash
       };
       window.addEventListener("cb-pull-refresh", onPull);
       return () => window.removeEventListener("cb-pull-refresh", onPull);
@@ -38891,12 +38964,12 @@ const CustomerApp = (() => {
           behavior: shopCReduced() ? "auto" : "smooth",
         });
     }, [cat, cats.length]);
-    const fetchPage = async (offset) => {
+    const fetchPage = async (offset, limit = PAGE) => {
       const { data, error } = await supabase.rpc("shop_catalog", {
         p_search: dq.trim() || null,
         p_category: cat || null,
         p_sort: sort,
-        p_limit: PAGE,
+        p_limit: limit,
         p_offset: offset,
       });
       if (error) throw error;
@@ -38922,14 +38995,16 @@ const CustomerApp = (() => {
     };
     useEffect(() => {
       let alive = true;
+      const n = Math.max(PAGE, keepLen.current || 0);
+      keepLen.current = 0;
       setLoading(true);
       const load =
         sort === "for_you"
           ? fetchAll().then((d) => {
               feedAll.current = shopFeedOrder(d.items, seed);
-              return { items: feedAll.current.slice(0, PAGE), total: d.total };
+              return { items: feedAll.current.slice(0, n), total: d.total };
             })
-          : fetchPage(0);
+          : fetchPage(0, n);
       load
         .then((d) => {
           if (!alive) return;
