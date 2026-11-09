@@ -33263,13 +33263,21 @@ const CustomerApp = (() => {
 
   // ---------- Pull-to-refresh (mobile customer portal) ----------
   // Pull the page down while scrolled to the very top → release → refetch.
-  // Smooth version: while dragging we write the transform straight to the DOM
-  // (inside requestAnimationFrame, GPU-accelerated translate3d) instead of
-  // calling setState on every touchmove, so React doesn't re-render ~60x/sec.
+  //
+  // Why it is built this way (iOS Safari):
+  //  • The FIRST downward touchmove at scrollTop 0 must call preventDefault().
+  //    If we wait (dead-zone), iOS starts its own rubber-band bounce, the
+  //    touchmove becomes non-cancelable and the page moves twice (native
+  //    bounce + our translate) → the "not smooth" feeling.
+  //  • While dragging we write transform straight to the DOM (no setState per
+  //    touchmove), via requestAnimationFrame + translate3d.
+  //  • The release / snap-back is a JS tween, NOT a CSS transition, because the
+  //    app has `prefers-reduced-motion { .jz-customer * { transition:none!important } }`
+  //    which would otherwise make the snap-back jump instantly.
   function PullToRefresh({ onRefresh, children }) {
     const { tr } = useApp();
     const [refreshing, setRefreshing] = useState(false);
-    const [ready, setReady] = useState(false); // only flips when crossing the threshold
+    const [ready, setReady] = useState(false); // flips only when crossing the threshold
     const wrapRef = useRef(null);
     const bodyRef = useRef(null);
     const hintRef = useRef(null);
@@ -33278,51 +33286,78 @@ const CustomerApp = (() => {
       x0: 0,
       active: false,
       pulling: false,
-      dist: 0,
+      cur: 0, // offset currently painted (px)
+      target: 0, // offset requested by the finger (px)
       busy: false,
-      raf: 0,
+      raf: 0, // drag frame
+      anim: 0, // release tween frame
       ready: false,
     });
     const cbRef = useRef(onRefresh);
     cbRef.current = onRefresh;
-    const THRESHOLD = 70;
-    const MAX = 120;
+    const THRESHOLD = 64;
     const HOLD = 52;
-    const DEAD = 8; // ignore the first few px so taps / tiny scrolls don't jitter
-    const EASE = "cubic-bezier(.2,.8,.2,1)";
+    const RUBBER_MAX = 150;
+    // iOS-style rubber band: 1:1 feel at the start, increasing resistance.
+    const rubber = (dy) => (1 - 1 / (dy / RUBBER_MAX + 1)) * RUBBER_MAX;
 
     useEffect(() => {
       const el = wrapRef.current;
       if (!el) return undefined;
       const s = st.current;
+      const de = document.documentElement;
       const atTop = () =>
         (window.scrollY || document.documentElement.scrollTop || 0) <= 0;
 
-      const paint = (px, animate, spinning) => {
+      const paint = (px, spinning) => {
         const body = bodyRef.current;
         const hint = hintRef.current;
         if (!body || !hint) return;
-        const t = animate ? `transform .28s ${EASE}` : "none";
-        body.style.transition = t;
-        hint.style.transition = animate ? `${t}, opacity .2s` : "none";
-        body.style.transform = px > 0 ? `translate3d(0,${px}px,0)` : "";
+        s.cur = px;
+        body.style.transform = px > 0.5 ? `translate3d(0,${px}px,0)` : "";
         hint.style.transform = `translate3d(0,${px - HOLD}px,0)`;
         hint.style.opacity = spinning
           ? "1"
-          : String(Math.min(1, px / THRESHOLD));
+          : String(Math.max(0, Math.min(1, px / THRESHOLD)));
       };
-      const schedule = () => {
-        if (s.raf) return;
-        s.raf = requestAnimationFrame(() => {
-          s.raf = 0;
-          paint(s.dist, false, false);
+      const stopAnim = () => {
+        if (s.anim) {
+          cancelAnimationFrame(s.anim);
+          s.anim = 0;
+        }
+      };
+      // Smooth JS tween (ease-out cubic) — unaffected by CSS !important rules.
+      const animateTo = (to, spinning, ms = 280) =>
+        new Promise((resolve) => {
+          stopAnim();
+          const from = s.cur;
+          if (Math.abs(from - to) < 0.5) {
+            paint(to, spinning);
+            resolve();
+            return;
+          }
+          const t0 = performance.now();
+          const tick = (now) => {
+            const k = Math.min(1, (now - t0) / ms);
+            const e = 1 - Math.pow(1 - k, 3);
+            paint(from + (to - from) * e, spinning);
+            if (k < 1) s.anim = requestAnimationFrame(tick);
+            else {
+              s.anim = 0;
+              resolve();
+            }
+          };
+          s.anim = requestAnimationFrame(tick);
         });
-      };
       const setReadyOnce = (v) => {
         if (s.ready !== v) {
           s.ready = v;
           setReady(v);
         }
+      };
+      const lockBounce = (on) => {
+        // Only while a pull is in progress → normal scrolling keeps iOS momentum.
+        de.style.overscrollBehaviorY = on ? "none" : "";
       };
 
       const onStart = (e) => {
@@ -33330,9 +33365,9 @@ const CustomerApp = (() => {
           s.active = false;
           return;
         }
+        stopAnim();
         s.y0 = e.touches[0].clientY;
         s.x0 = e.touches[0].clientX;
-        s.dist = 0;
         s.pulling = false;
         s.active = true;
       };
@@ -33340,29 +33375,35 @@ const CustomerApp = (() => {
         if (!s.active || s.busy) return;
         const dy = e.touches[0].clientY - s.y0;
         const dx = e.touches[0].clientX - s.x0;
-        // Scrolling up / sideways / page already scrolled → hand back to the browser.
-        if (
-          dy <= 0 ||
-          (!s.pulling && Math.abs(dx) > Math.abs(dy)) ||
-          !atTop()
-        ) {
-          if (s.pulling) {
-            s.pulling = false;
-            s.dist = 0;
-            setReadyOnce(false);
-            paint(0, true, false);
+        if (!s.pulling) {
+          // Not (yet) a pull: scrolling up, sideways (chips row), or page moved.
+          if (dy <= 0 || Math.abs(dx) > Math.abs(dy) || !atTop()) {
+            if (dy <= 0 || Math.abs(dx) > Math.abs(dy)) s.active = false;
+            return;
           }
-          if (dy <= 0) s.active = false;
-          return;
+          // The browser already took this gesture (not cancelable) → don't
+          // fight the native bounce, just leave it alone.
+          if (!e.cancelable) {
+            s.active = false;
+            return;
+          }
+          s.pulling = true;
+          lockBounce(true);
         }
-        if (dy < DEAD && !s.pulling) return;
-        s.pulling = true;
-        // Rubber-band: the further you pull, the more resistance.
-        const eff = dy - DEAD;
-        s.dist = Math.min(MAX, MAX * (1 - Math.exp(-eff / 170)) * 1.25);
-        if (e.cancelable) e.preventDefault(); // stop iOS bounce while pulling
-        setReadyOnce(s.dist >= THRESHOLD);
-        schedule();
+        if (dy <= 0) {
+          // finger went back above the start point
+          s.target = 0;
+        } else {
+          s.target = rubber(dy);
+        }
+        if (e.cancelable) e.preventDefault();
+        setReadyOnce(s.target >= THRESHOLD);
+        if (!s.raf) {
+          s.raf = requestAnimationFrame(() => {
+            s.raf = 0;
+            paint(s.target, false);
+          });
+        }
       };
       const onEnd = async () => {
         if (!s.active) return;
@@ -33371,10 +33412,13 @@ const CustomerApp = (() => {
           cancelAnimationFrame(s.raf);
           s.raf = 0;
         }
-        if (s.pulling && s.dist >= THRESHOLD && !s.busy) {
+        if (!s.pulling) return;
+        s.pulling = false;
+        if (s.target >= THRESHOLD && !s.busy) {
           s.busy = true;
           setRefreshing(true);
-          paint(HOLD, true, true);
+          setReadyOnce(false);
+          await animateTo(HOLD, true, 200);
           try {
             await Promise.all([
               Promise.resolve(cbRef.current && cbRef.current()),
@@ -33383,13 +33427,15 @@ const CustomerApp = (() => {
           } catch {
             /* individual loaders report their own errors */
           }
-          s.busy = false;
           setRefreshing(false);
+          await animateTo(0, false, 320);
+          s.busy = false;
+        } else {
+          setReadyOnce(false);
+          await animateTo(0, false, 260);
         }
-        s.pulling = false;
-        s.dist = 0;
-        setReadyOnce(false);
-        paint(0, true, false);
+        s.target = 0;
+        lockBounce(false);
       };
 
       el.addEventListener("touchstart", onStart, { passive: true });
@@ -33398,6 +33444,8 @@ const CustomerApp = (() => {
       el.addEventListener("touchcancel", onEnd, { passive: true });
       return () => {
         if (s.raf) cancelAnimationFrame(s.raf);
+        stopAnim();
+        lockBounce(false);
         el.removeEventListener("touchstart", onStart);
         el.removeEventListener("touchmove", onMove);
         el.removeEventListener("touchend", onEnd);
