@@ -36694,7 +36694,16 @@ const CustomerApp = (() => {
         Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
         document.head.appendChild(el);
         added.push(el);
+        return el;
       };
+      // iOS Safari auto-zooms the page when a focused field has font-size
+      // < 16px. Force 16px on iOS only so typing never zooms the screen
+      // (pinch-zoom stays available, unlike maximum-scale=1).
+      const zoomFix = add("style", {});
+      zoomFix.textContent =
+        "@supports (-webkit-touch-callout: none) {" +
+        "input:not([type=checkbox]):not([type=radio]):not([type=range]),select,textarea{font-size:16px !important;}" +
+        "}";
       add("link", { rel: "manifest", href: "/customer/manifest.webmanifest" });
       add("link", {
         rel: "apple-touch-icon",
