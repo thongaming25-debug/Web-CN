@@ -2440,10 +2440,20 @@ function PkgTypeTag({ row }) {
     </span>
   );
 }
-const pkgRowHref = (row) =>
-  isParseLinkPkg(row) && row.cn_order_no
-    ? `/cn-orders/${encodeURIComponent(row.cn_order_no)}`
+const pkgRowHref = (row) => {
+  const cnNo =
+    row?.cn_order_no ||
+    (row?.cn_order_id ? CN_ORDER_NO_BY_ID[row.cn_order_id] : "");
+  return isParseLinkPkg(row) && cnNo
+    ? `/cn-orders/${encodeURIComponent(cnNo)}`
     : `/packages/${encodeURIComponent(row.tk)}`;
+};
+// Row click for DataTable: open the detail, Ctrl/Cmd-click → new tab.
+const openPkgRow = (navigate) => (row, e) => {
+  const href = pkgRowHref(row);
+  if (e && (e.metaKey || e.ctrlKey)) window.open(href, "_blank");
+  else navigate(href);
+};
 
 const MODULES = {
   "/packages": {
@@ -10264,6 +10274,7 @@ function ScanConfirmPage({
     [],
   );
 
+  const navigate = useNavigate();
   const doneRows = packages.filter((p) => p.status === toStatus);
   const queueRows = queue.map((tk) => findPackage(tk)).filter(Boolean);
 
@@ -10418,7 +10429,7 @@ function ScanConfirmPage({
                 key: "tk",
                 label: "TK Number",
                 strong: true,
-                linkTo: (row) => `/packages/${row.tk}`,
+                linkTo: (row) => pkgRowHref(row),
               },
               { key: "customer", label: "Customer" },
               { key: "weight", label: "Weight" },
@@ -10449,6 +10460,7 @@ function ScanConfirmPage({
               },
             ].filter(Boolean)}
             rows={doneRows}
+            onRowClick={openPkgRow(navigate)}
           />
         </div>
       ) : (
@@ -10494,7 +10506,7 @@ function ScanConfirmPage({
                   >
                     <div className="min-w-0">
                       <Link
-                        to={`/packages/${row.tk}`}
+                        to={pkgRowHref(row)}
                         className="font-medium text-signal-blue hover:underline"
                       >
                         {row.tk}
@@ -10773,7 +10785,7 @@ function MiniTkTable({ rows }) {
             key: "tk",
             label: "TK Number",
             strong: true,
-            linkTo: (r) => `/packages/${r.tk}`,
+            linkTo: (r) => pkgRowHref(r),
           },
           { key: "customer", label: "Customer" },
           {
@@ -23281,6 +23293,15 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
     };
   }, [open, cur?.tk]);
 
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose?.();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   if (!open || !pkg) return null;
 
   const wh = whRows.find((x) => x.code === cur.dest_branch_code);
@@ -23369,32 +23390,35 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
   }
 
   const navBtn =
-    "flex items-center gap-1 text-sm font-medium border border-mist-200 px-2.5 py-1.5 rounded-md hover:bg-mist-50 disabled:opacity-40";
+    "inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40";
 
-  return (
+  // Same clean shell as the other modals: full-screen blur backdrop (portal),
+  // rounded card, header + X, scrollable label preview, Cancel / Print footer.
+  return createPortal(
     <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
+      className="fixed inset-0 z-[120] flex min-h-[100dvh] items-center justify-center bg-slate-950/40 p-4 backdrop-blur-md"
       onClick={onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
         onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-md shadow-lg w-full max-w-xl max-h-[92vh] flex flex-col"
+        className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl"
       >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-mist-200">
-          <h3 className="font-display font-bold text-lg text-ink-900">
-            Print Label
-          </h3>
+        <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+          <h3 className="text-lg font-bold text-slate-900">Print</h3>
           <button
             type="button"
             onClick={onClose}
-            className="text-ink-600/40 hover:text-ink-900"
+            aria-label="Close"
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
           >
             <X size={18} />
           </button>
         </div>
 
         {total > 1 && (
-          <div className="flex items-center justify-between px-5 py-2.5 border-b border-mist-200 bg-mist-50">
+          <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-6 py-2.5">
             <button
               type="button"
               className={navBtn}
@@ -23404,7 +23428,7 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
               <Icons.ChevronLeft size={15} />
               Prev
             </button>
-            <span className="text-sm text-ink-700">
+            <span className="truncate text-sm text-slate-600">
               Package <b>{curIdx + 1}</b> / {total} · {cur.tk}
             </span>
             <button
@@ -23419,30 +23443,39 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
           </div>
         )}
 
-        <div className="p-4 overflow-auto flex justify-center bg-mist-50">
+        <div className="flex flex-1 justify-center overflow-auto px-6 py-5">
           {err ? (
-            <p className="text-sm text-signal-red py-10">{err}</p>
+            <p className="py-10 text-sm text-red-600">{err}</p>
           ) : !codes ? (
-            <p className="text-sm text-ink-600/50 py-10">Preparing label…</p>
+            <p className="py-10 text-sm text-slate-400">Preparing label…</p>
           ) : (
             <iframe
               title="label-preview"
               srcDoc={previewHtml}
-              className="bg-white border border-mist-200 shadow-sm"
+              className="shrink-0 bg-white"
               style={{
                 width: `${LABEL_W_MM * 3.78}px`,
                 height: `${LABEL_H_MM * 3.78}px`,
+                border: 0,
               }}
             />
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-mist-200 flex-wrap">
+        <div className="flex flex-wrap items-center justify-end gap-2 px-6 pb-5 pt-1">
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <X size={14} />
+            Cancel
+          </button>
           {total > 1 && (
             <button
               type="button"
               onClick={printAll}
-              className="flex items-center gap-1.5 text-sm font-medium text-signal-blue border border-signal-blue/30 bg-signal-blue/5 px-3.5 py-2 rounded-md hover:bg-signal-blue/10"
+              className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-4 text-sm font-semibold text-blue-700 hover:bg-blue-100"
             >
               <Icons.Printer size={14} />
               Print All ({total})
@@ -23452,22 +23485,15 @@ function PrintLabelModal({ open, onClose, pkg, custId, custName }) {
             type="button"
             onClick={printCurrent}
             disabled={!codes}
-            className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-4 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-50"
+            className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-blue-600 px-5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Icons.Printer size={14} />
             {total > 1 ? `Print ${curIdx + 1}/${total}` : "Print"}
           </button>
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex items-center gap-1.5 text-sm font-medium text-ink-700 border border-mist-200 px-3.5 py-2 rounded-md hover:bg-mist-50"
-          >
-            <X size={14} />
-            Cancel
-          </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
