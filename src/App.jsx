@@ -861,6 +861,7 @@ const DEFAULT_CARGO_POLICIES = {
     sizeRates: { S: 1.5, M: 3, L: 4 },
     weightRate: 600,
     cbmRate: 190,
+    kgPerCbm: 0, // KG that equal 1 CBM (0 = weight rule off)
     minimumFreight: 200,
     applyMinimumFreight: false,
     deliveryFee: 0,
@@ -871,6 +872,7 @@ const DEFAULT_CARGO_POLICIES = {
     sizeRates: { S: 1.5, M: 3, L: 4 },
     weightRate: 600,
     cbmRate: 220,
+    kgPerCbm: 0, // KG that equal 1 CBM (0 = weight rule off)
     minimumFreight: 240,
     applyMinimumFreight: false,
     deliveryFee: 0,
@@ -3519,10 +3521,18 @@ function calcFreight({
   if (!(rate > 0))
     return { ok: false, message: `${type} CBM rate is not configured`, cbm };
 
-  // Dimension Based: actual CBM × the selected cargo-type rate.
+  // Dimension Based: chargeable CBM × the selected cargo-type rate.
   // 190/220 are rates per CBM, never size thresholds.
+  // Weight rule (Land / Sea): when "KG per 1 CBM" is set and the actual
+  // weight is heavier than the volume, chargeable CBM = actual KG ÷ KG per
+  // CBM. Otherwise chargeable CBM = actual volume (L × W × H).
   // Minimum Freight is a SPECIAL RULE and is OFF by default.
-  const rawFee = cbm * rate;
+  const kgPerCbm = Number(cargoPolicy.kgPerCbm || 0);
+  const kg = Number(weight);
+  const weightCbm = kgPerCbm > 0 && kg > 0 ? kg / kgPerCbm : null;
+  const byWeight = weightCbm != null && weightCbm > cbm;
+  const chargeCbm = byWeight ? weightCbm : cbm;
+  const rawFee = chargeCbm * rate;
   const minimumFreight = Number(cargoPolicy.minimumFreight || 0);
   const applyMinimumFreight = cargoPolicy.applyMinimumFreight === true;
   const fee = applyMinimumFreight ? Math.max(rawFee, minimumFreight) : rawFee;
@@ -3530,7 +3540,11 @@ function calcFreight({
     ok: true,
     method: "CBM",
     rate,
-    cbm,
+    cbm, // actual volume (stored on the package)
+    chargeCbm, // CBM the fee is based on (volume or weight ÷ kgPerCbm)
+    basis: byWeight ? "weight" : "volume",
+    weightKg: kg > 0 ? kg : null,
+    kgPerCbm: kgPerCbm > 0 ? kgPerCbm : null,
     rawFee: Math.round(rawFee * 100) / 100,
     minimumFreight,
     applyMinimumFreight,
@@ -7796,6 +7810,17 @@ function CargoCalculator({
                         },
                       ]
                     : []),
+                  ...(dimensionMode && calc.ok && calc.kgPerCbm
+                    ? [
+                        {
+                          label: "Charged CBM",
+                          value:
+                            calc.basis === "weight"
+                              ? `${calc.chargeCbm.toFixed(3)} m³ (by weight: ${calc.weightKg} KG ÷ ${calc.kgPerCbm})`
+                              : `${calc.chargeCbm.toFixed(3)} m³ (by volume)`,
+                        },
+                      ]
+                    : []),
                   {
                     label: "Rate",
                     value: calc.ok
@@ -9364,8 +9389,15 @@ function VerifyScanModal({
                   {calc?.ok ? (
                     <>
                       CBM ថ្មី:{" "}
-                      <b>{calc.cbm != null ? calc.cbm.toFixed(3) : "—"}</b> ·
-                      Freight ថ្មី:{" "}
+                      <b>{calc.cbm != null ? calc.cbm.toFixed(3) : "—"}</b>
+                      {calc.basis === "weight" && (
+                        <>
+                          {" "}
+                          (គិតតាមទម្ងន់ {calc.weightKg} KG ÷ {calc.kgPerCbm} ={" "}
+                          <b>{calc.chargeCbm.toFixed(3)}</b> CBM)
+                        </>
+                      )}{" "}
+                      · Freight ថ្មី:{" "}
                       <b>
                         {pkg.freight_overridden
                           ? `${money(pkg.freight_fee)} (Override — Save)`
@@ -22639,6 +22671,25 @@ function EditPackageModal({ open, pkg, onClose }) {
     }));
   }
 
+  // Live freight preview (same rules as Save): volume vs weight ÷ KG-per-CBM.
+  const liveIsAir = pkgShippingMethod(pkg) === "Air";
+  const liveCalc = calcFreight({
+    shippingMethod: pkgShippingMethod(pkg),
+    cargoType: f.cargo_type,
+    packageType: f.package_type,
+    sizeClass: f.size_class,
+    length: f.length,
+    width: f.width,
+    height: f.height,
+    weight: f.weight,
+  });
+  const liveCargoType = f.cargo_type === "Sensitive" ? "Sensitive" : "Normal";
+  const livePolicy =
+    ((getSystemSettings().shipping || DEFAULT_SYSTEM_SETTINGS.shipping)
+      .cargoPolicies || DEFAULT_CARGO_POLICIES)[liveCargoType] ||
+    DEFAULT_CARGO_POLICIES[liveCargoType];
+  const liveKgSet = Number(livePolicy?.kgPerCbm) > 0;
+
   return (
     <AppModal
       title={`Edit Package · ${pkg.tk}`}
@@ -22759,6 +22810,55 @@ function EditPackageModal({ open, pkg, onClose }) {
             </div>
           ))}
       </div>
+      {!liveIsAir && curPkgType === "dimension_based" && (
+        <div className="rounded-xl border border-blue-100 bg-blue-50/50 px-4 py-3 text-sm text-ink-700 space-y-1">
+          <div className="text-xs font-bold uppercase tracking-wide text-blue-700">
+            Freight calculation · {liveCargoType}
+          </div>
+          {liveCalc.ok && liveCalc.method === "CBM" ? (
+            <>
+              <div>
+                Volume: <b>{liveCalc.cbm.toFixed(3)} m³</b>
+                {liveCalc.weightKg && liveCalc.kgPerCbm ? (
+                  <>
+                    {" "}
+                    · Weight: <b>{liveCalc.weightKg} KG</b> ÷{" "}
+                    {liveCalc.kgPerCbm} ={" "}
+                    <b>
+                      {(liveCalc.weightKg / liveCalc.kgPerCbm).toFixed(3)} m³
+                    </b>
+                  </>
+                ) : null}
+              </div>
+              <div>
+                Charged:{" "}
+                <b>
+                  {liveCalc.chargeCbm.toFixed(3)} m³ (
+                  {liveCalc.basis === "weight" ? "by weight" : "by volume"})
+                </b>{" "}
+                × {money(liveCalc.rate)} / CBM ={" "}
+                <b className="text-blue-700">{money(liveCalc.fee)}</b>
+              </div>
+              {pkg.freight_overridden && (
+                <div className="text-xs text-amber-700">
+                  Fee is manually overridden ({money(pkg.freight_fee)}) — it
+                  will not be recalculated on Save.
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="text-xs text-slate-500">
+              {liveCalc.message || "Enter Length, Width and Height."}
+            </div>
+          )}
+          {!liveKgSet && (
+            <div className="text-xs text-slate-400">
+              KG per 1 CBM is not set for {liveCargoType} (Settings → Shipping
+              &amp; Pricing), so the fee is charged by volume only.
+            </div>
+          )}
+        </div>
+      )}
       <div>
         <label className={LABEL_CLS}>Product Photos</label>
         {origPhotos === null ? (
@@ -58408,7 +58508,8 @@ function SettingsPage() {
                           </div>
                           <div className="text-xs text-slate-500 mt-0.5">
                             Actual Length × Width × Height → CBM × {cargoType}{" "}
-                            rate. Minimum is optional.
+                            rate. If the actual weight is heavier: KG ÷ KG per 1
+                            CBM × rate. Minimum is optional.
                           </div>
                         </div>
                         <span
@@ -58420,12 +58521,17 @@ function SettingsPage() {
                         </span>
                       </div>
                       <div className="p-5 space-y-5">
-                        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
                           {[
                             [
                               "CBM Rate",
                               "cbmRate",
                               `${settings.shipping.currency} / CBM`,
+                            ],
+                            [
+                              "KG per 1 CBM",
+                              "kgPerCbm",
+                              "KG = 1 CBM (0 = off)",
                             ],
                             [
                               "Minimum Freight",
