@@ -50806,6 +50806,65 @@ function CnOrdersPage() {
   const [quick, setQuick] = useState(""); // clickable stat / quick-tab filter
   const [rowsMeta, setRowsMeta] = useState({ total: null, truncated: false });
   const coverTried = useRef(new Set()); // order ids whose cover was already looked up
+  // ── Server-side paging (Orders tab) ─────────────────────────────────────
+  // With no search text and no status-dropdown filter, the table asks the
+  // server for ONE page (pageSize rows) and shows a skeleton while another
+  // page loads. Search, the computed-status dropdown, the TK list and the
+  // Finance tab still need every row, so they switch to the full client-side
+  // load on demand (and reuse it until something changes).
+  const serverMode = !!supabase && activeTab === "orders" && !q && !status;
+  const fullLoadedRef = useRef(false);
+  const [pageRows, setPageRows] = useState([]);
+  const [pageTotal, setPageTotal] = useState(0);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [pageError, setPageError] = useState("");
+  const [serverCounts, setServerCounts] = useState(null);
+  const [serverNonce, setServerNonce] = useState(0);
+  // Same rules as quickDefs below, expressed as database filters (the legacy
+  // status names are listed too, since the UI normalises them).
+  const applyQuickFilter = (qb, key) => {
+    switch (key) {
+      case "need_payment":
+        return qb
+          .eq("status", "Order Processing")
+          .or("payment_status.is.null,payment_status.neq.Paid");
+      case "ready":
+        return qb.eq("status", "Order Processing").eq("payment_status", "Paid");
+      case "in_china":
+        return qb.in("status", [
+          "Purchased",
+          "Shipping to China WH",
+          "Inbound",
+          "Inbound Origin",
+        ]);
+      case "to_cambodia":
+        return qb.in("status", [
+          "Outbound",
+          "Outbound Origin",
+          "Arrived",
+          "Arrive WH-KH",
+          "Shipping to Branch",
+          "Inbound Warehouse",
+          "Inbound WH-KH",
+        ]);
+      default:
+        return qb;
+    }
+  };
+  const applyServerFilters = (qb) => {
+    let out = qb;
+    if (pay) out = out.eq("payment_status", pay);
+    if (quick) out = applyQuickFilter(out, quick);
+    const { from, to } = resolveDateRange(dateRange);
+    if (from)
+      out = out.gte("created_at", new Date(`${from}T00:00:00`).toISOString());
+    if (to) {
+      const next = new Date(`${to}T00:00:00`);
+      next.setDate(next.getDate() + 1);
+      out = out.lt("created_at", next.toISOString());
+    }
+    return out;
+  };
   const navigate = useNavigate();
   // Whole row opens the order, but clicks on links/buttons keep their own
   // behaviour and selecting text inside a row does not navigate away.
@@ -50838,6 +50897,7 @@ function CnOrdersPage() {
     setRowsMeta({ total, truncated });
     coverTried.current = new Set();
     setRows(list);
+    fullLoadedRef.current = true;
     setLoading(false);
     attachCnCovers(list).then(
       (withCovers) => setRows(withCovers),
@@ -50887,12 +50947,109 @@ function CnOrdersPage() {
     }
     setTkLoading(false);
   }, []);
+  // Full load only when something really needs every row.
   useEffect(() => {
-    load();
-  }, [load]);
+    if (!serverMode && !fullLoadedRef.current) load();
+  }, [serverMode, load]);
   useEffect(() => {
-    if (activeTab === "tks" || activeTab === "orders") loadTks();
-  }, [activeTab, loadTks]);
+    if (activeTab === "tks" || (activeTab === "orders" && !serverMode))
+      loadTks();
+  }, [activeTab, serverMode, loadTks]);
+  // One page of orders (+ the tracking numbers of just those orders).
+  useEffect(() => {
+    if (!serverMode) return undefined;
+    let cancelled = false;
+    (async () => {
+      setPageLoading(true);
+      setPageError("");
+      const from = page * pageSize;
+      const { data, error, count } = await applyServerFilters(
+        supabase.from("cn_orders").select("*", { count: "exact" }),
+      )
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (cancelled) return;
+      if (error) {
+        setPageError(error.message || "Unable to load CN orders.");
+        setPageRows([]);
+        setPageLoading(false);
+        return;
+      }
+      const total = count ?? 0;
+      if (!(data || []).length && total > 0 && page > 0) {
+        // The last page vanished (rows deleted / filter changed): go back.
+        setPage(Math.max(0, Math.ceil(total / pageSize) - 1));
+        return;
+      }
+      const list = data || [];
+      const ids = list.map((r) => r.id).filter(Boolean);
+      if (ids.length) {
+        try {
+          const [pk, pc] = await Promise.all([
+            supabase.from("packages").select("*").in("cn_order_id", ids),
+            supabase
+              .from("cn_order_parcels")
+              .select("id,cn_order_id,domestic_tracking,created_at")
+              .in("cn_order_id", ids)
+              .order("created_at", { ascending: true }),
+          ]);
+          if (cancelled) return;
+          setTkRows(pk.error ? [] : pk.data || []);
+          setParcelRows(pc.error ? [] : pc.data || []);
+        } catch {
+          if (cancelled) return;
+          setTkRows([]);
+          setParcelRows([]);
+        }
+      } else {
+        setTkRows([]);
+        setParcelRows([]);
+      }
+      setPageRows(list);
+      setPageTotal(total);
+      setPageLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    serverMode,
+    page,
+    pageSize,
+    pay,
+    quick,
+    JSON.stringify(dateRange),
+    serverNonce,
+  ]);
+  // Stat-card numbers straight from the server (cheap head-only counts).
+  useEffect(() => {
+    if (!serverMode) return undefined;
+    let cancelled = false;
+    (async () => {
+      const head = () =>
+        supabase.from("cn_orders").select("id", { count: "exact", head: true });
+      const keys = ["need_payment", "ready", "in_china", "to_cambodia"];
+      const res = await Promise.all([
+        head(),
+        ...keys.map((k) => applyQuickFilter(head(), k)),
+      ]);
+      if (cancelled) return;
+      if (res.some((r) => r.error)) return setServerCounts(null);
+      setServerCounts({
+        total: res[0].count ?? 0,
+        need_payment: res[1].count ?? 0,
+        ready: res[2].count ?? 0,
+        in_china: res[3].count ?? 0,
+        to_cambodia: res[4].count ?? 0,
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverMode, serverNonce]);
   useEffect(() => {
     setPage(0);
   }, [q, status, pay, tkStatus, dateRange, activeTab, quick, pageSize]);
@@ -50941,12 +51098,21 @@ function CnOrdersPage() {
         ].includes(cnNormalizeStatus(r.status)),
     },
   ];
-  const quickCounts = Object.fromEntries(
-    quickDefs.map((d) => [d.key, rows.filter(d.test).length]),
-  );
+  const quickCounts = serverMode
+    ? Object.fromEntries(
+        quickDefs.map((d) => [d.key, serverCounts ? serverCounts[d.key] : "—"]),
+      )
+    : Object.fromEntries(
+        quickDefs.map((d) => [d.key, rows.filter(d.test).length]),
+      );
+  const totalOrdersCount = serverMode
+    ? serverCounts
+      ? serverCounts.total
+      : "—"
+    : rows.length;
   const quickTest = quickDefs.find((d) => d.key === quick)?.test;
   const orderStats = [
-    ["Total Orders", rows.length, "text-ink-900", ""],
+    ["Total Orders", totalOrdersCount, "text-ink-900", ""],
     ...quickDefs.map((d) => [d.label, quickCounts[d.key], d.color, d.key]),
   ];
   // Tracking numbers (TKs) per CN order, computed once for the table + search.
@@ -51158,11 +51324,18 @@ function CnOrdersPage() {
   );
 
   // Pagination (orders + TK list)
-  const listTotal = activeTab === "tks" ? filteredTks.length : filtered.length;
+  const listTotal =
+    activeTab === "tks"
+      ? filteredTks.length
+      : serverMode
+        ? pageTotal
+        : filtered.length;
   const pageCount = Math.max(1, Math.ceil(listTotal / pageSize));
   const curPage = Math.min(page, pageCount - 1);
   const pageFrom = curPage * pageSize;
-  const pagedOrders = filtered.slice(pageFrom, pageFrom + pageSize);
+  const pagedOrders = serverMode
+    ? pageRows
+    : filtered.slice(pageFrom, pageFrom + pageSize);
   const pagedTks = filteredTks.slice(pageFrom, pageFrom + pageSize);
 
   const pageIdKey = pagedOrders.map((r) => r.id).join(",");
@@ -51178,7 +51351,10 @@ function CnOrdersPage() {
         const byId = new Map(
           withCovers.filter((r) => r.cover_url).map((r) => [r.id, r]),
         );
-        if (byId.size) setRows((prev) => prev.map((r) => byId.get(r.id) || r));
+        if (byId.size) {
+          setRows((prev) => prev.map((r) => byId.get(r.id) || r));
+          setPageRows((prev) => prev.map((r) => byId.get(r.id) || r));
+        }
       },
       () => {},
     );
@@ -51200,6 +51376,12 @@ function CnOrdersPage() {
     setDateRange(EMPTY_DATE_RANGE);
   };
   const refreshAll = () => {
+    if (serverMode) {
+      // Re-fetch the current page + counts; the full cache (if any) is stale.
+      fullLoadedRef.current = false;
+      setServerNonce((n) => n + 1);
+      return;
+    }
     load();
     loadTks();
   };
@@ -51302,47 +51484,121 @@ function CnOrdersPage() {
       );
       return;
     }
-    exportRowsToCSV(
-      `cn-orders-${stamp}.csv`,
-      [
-        { label: "Order ID", key: "order_id" },
-        { label: "Customer", key: "customer" },
-        {
-          label: "Product",
-          csv: (x) =>
-            x.product_name || x.cn_order_items?.[0]?.product_name || "",
-        },
-        {
-          label: "Items",
-          csv: (x) =>
-            Array.isArray(x.cn_order_items) ? x.cn_order_items.length : "",
-        },
-        {
-          label: "Tracking Numbers",
-          csv: (x) => (tkNumbersByOrder.get(x.id) || []).join(" | "),
-        },
-        { label: "Linked TKs", csv: (x) => linkedTkCount.get(x.id) || 0 },
-        {
-          label: "Shipping Method",
-          csv: (x) => normShipMethod(x.shipping_method) || "Land",
-        },
-        { label: "Total (USD)", csv: (x) => Number(x.total_due_usd) || 0 },
-        { label: "Paid (USD)", csv: (x) => paidOf(x) },
-        {
-          label: "Balance (USD)",
-          csv: (x) =>
-            x.payment_status === "Refunded"
-              ? 0
-              : Math.max(0, (Number(x.total_due_usd) || 0) - paidOf(x)),
-        },
-        { label: "Payment", key: "payment_status" },
-        { label: "Status", csv: (x) => cnOrderTableStatus(x) },
-        { label: "Created", csv: (x) => formatIso(x.created_at) },
-        { label: "Updated", csv: (x) => formatIso(x.updated_at) },
-      ],
-      filtered,
-    );
+    const orderCsv = (list, tkMap, linkedMap) =>
+      exportRowsToCSV(
+        `cn-orders-${stamp}.csv`,
+        [
+          { label: "Order ID", key: "order_id" },
+          { label: "Customer", key: "customer" },
+          {
+            label: "Product",
+            csv: (x) =>
+              x.product_name || x.cn_order_items?.[0]?.product_name || "",
+          },
+          {
+            label: "Items",
+            csv: (x) =>
+              Array.isArray(x.cn_order_items) ? x.cn_order_items.length : "",
+          },
+          {
+            label: "Tracking Numbers",
+            csv: (x) => (tkMap.get(x.id) || []).join(" | "),
+          },
+          { label: "Linked TKs", csv: (x) => linkedMap.get(x.id) || 0 },
+          {
+            label: "Shipping Method",
+            csv: (x) => normShipMethod(x.shipping_method) || "Land",
+          },
+          { label: "Total (USD)", csv: (x) => Number(x.total_due_usd) || 0 },
+          { label: "Paid (USD)", csv: (x) => paidOf(x) },
+          {
+            label: "Balance (USD)",
+            csv: (x) =>
+              x.payment_status === "Refunded"
+                ? 0
+                : Math.max(0, (Number(x.total_due_usd) || 0) - paidOf(x)),
+          },
+          { label: "Payment", key: "payment_status" },
+          { label: "Status", csv: (x) => cnOrderTableStatus(x) },
+          { label: "Created", csv: (x) => formatIso(x.created_at) },
+          { label: "Updated", csv: (x) => formatIso(x.updated_at) },
+        ],
+        list,
+      );
+    if (!serverMode) {
+      orderCsv(filtered, tkNumbersByOrder, linkedTkCount);
+      return;
+    }
+    // Server mode only holds one page in memory: fetch everything that matches
+    // the current filters (and all tracking numbers) just for this download.
+    (async () => {
+      try {
+        const all = await fetchAllRows(
+          ({ count, stable }) => {
+            const qb = applyServerFilters(
+              supabase
+                .from("cn_orders")
+                .select("*", count ? { count: "exact" } : undefined),
+            ).order("created_at", { ascending: false });
+            return stable ? qb.order("id", { ascending: false }) : qb;
+          },
+          { cap: CN_ORDERS_LIMIT },
+        );
+        if (all.error) throw all.error;
+        const tks = await fetchAllRows(
+          ({ count, stable }) => {
+            const qb = supabase
+              .from("packages")
+              .select(
+                "id,tk,cn_order_id",
+                count ? { count: "exact" } : undefined,
+              )
+              .not("cn_order_id", "is", null)
+              .order("created_at", { ascending: false });
+            return stable ? qb.order("id", { ascending: false }) : qb;
+          },
+          { cap: CN_ORDERS_LIMIT },
+        );
+        const parcels = await fetchAllRows(
+          ({ count, stable }) => {
+            const qb = supabase
+              .from("cn_order_parcels")
+              .select(
+                "id,cn_order_id,domestic_tracking,created_at",
+                count ? { count: "exact" } : undefined,
+              )
+              .order("created_at", { ascending: true });
+            return stable ? qb.order("id", { ascending: true }) : qb;
+          },
+          { cap: CN_ORDERS_LIMIT },
+        );
+        const tkMap = new Map();
+        const seen = new Map();
+        const linked = new Map();
+        const add = (orderId, value) => {
+          const v = String(value || "").trim();
+          if (!orderId || !v) return;
+          const set = seen.get(orderId) || new Set();
+          const key = cnLinkKey(v);
+          if (set.has(key)) return;
+          set.add(key);
+          seen.set(orderId, set);
+          tkMap.set(orderId, [...(tkMap.get(orderId) || []), v]);
+        };
+        (tks.data || []).forEach((p) => {
+          add(p.cn_order_id, p.tk);
+          linked.set(p.cn_order_id, (linked.get(p.cn_order_id) || 0) + 1);
+        });
+        (parcels.data || []).forEach((p) =>
+          add(p.cn_order_id, p.domestic_tracking),
+        );
+        orderCsv(all.data || [], tkMap, linked);
+      } catch (e) {
+        setLoadError(e?.message || "Download failed.");
+      }
+    })();
   };
+
   const formatActualCost = (r, field) => {
     const val = r[field];
     const rate = Number(r.purchase_exchange_rate || r.cny_per_usd);
@@ -51832,7 +52088,7 @@ function CnOrdersPage() {
           </button>
         </div>
       )}
-      {!loadError && !loading && rowsMeta.truncated && (
+      {!serverMode && !loadError && !loading && rowsMeta.truncated && (
         <div className="rounded-xl bg-amber-50 text-amber-800 px-3 py-2 text-sm">
           បង្ហាញ {rows.length.toLocaleString("en-US")} ក្នុងចំណោម{" "}
           {Number(rowsMeta.total).toLocaleString("en-US")} Order — លើសកម្រិតដែល
@@ -51924,7 +52180,7 @@ function CnOrdersPage() {
           >
             <ListTab
               label="All"
-              count={rows.length}
+              count={totalOrdersCount}
               active={!quick}
               onClick={() => setQuick("")}
             />
@@ -52045,18 +52301,25 @@ function CnOrdersPage() {
             columns={cnOrderCols}
             rows={pagedOrders}
             rowKey={(r) => r.id}
-            loading={loading}
-            skeletonRows={6}
+            loading={serverMode ? pageLoading : loading}
+            skeletonRows={Math.min(pageSize, 8)}
             onRowClick={(r, e) =>
               openRow(e, `/cn-orders/${encodeURIComponent(r.order_id)}`)
             }
             error={
-              loadError && !filtered.length
-                ? {
-                    title: "Couldn't load CN purchase orders.",
-                    hint: loadError,
-                  }
-                : null
+              serverMode
+                ? pageError
+                  ? {
+                      title: "Couldn't load CN purchase orders.",
+                      hint: pageError,
+                    }
+                  : null
+                : loadError && !filtered.length
+                  ? {
+                      title: "Couldn't load CN purchase orders.",
+                      hint: loadError,
+                    }
+                  : null
             }
             onRetry={refreshAll}
             emptyTitle="No CN purchase orders found."
@@ -52081,7 +52344,11 @@ function CnOrdersPage() {
         )}
 
         {(activeTab === "orders" || activeTab === "tks") &&
-          !(activeTab === "orders" ? loading : tkLoading) &&
+          !(activeTab === "orders"
+            ? serverMode
+              ? false
+              : loading
+            : tkLoading) &&
           listTotal > 0 && (
             <PaginationBar
               page={curPage}
@@ -52145,7 +52412,7 @@ function CnOrdersPage() {
         <CnOrderCreateModal
           open={createOpen}
           onClose={() => setCreateOpen(false)}
-          onSaved={() => load()}
+          onSaved={() => refreshAll()}
         />
       )}
       {actualCostOrder && (
@@ -52155,7 +52422,7 @@ function CnOrdersPage() {
           onClose={() => setActualCostOrder(null)}
           onSaved={() => {
             setActualCostOrder(null);
-            load();
+            refreshAll();
           }}
         />
       )}
