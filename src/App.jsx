@@ -36725,6 +36725,41 @@ const CustomerApp = (() => {
       const oldVp = vp?.getAttribute("content");
       if (vp && oldVp && !/viewport-fit/.test(oldVp))
         vp.setAttribute("content", oldVp + ", viewport-fit=cover");
+      // Belt and braces for iOS: while a text field is focused, lock the
+      // viewport scale so Safari can never zoom in; restore on blur.
+      const isTextField = (t) =>
+        t &&
+        (t.tagName === "TEXTAREA" ||
+          t.tagName === "SELECT" ||
+          (t.tagName === "INPUT" &&
+            !/^(checkbox|radio|range|button|submit|file)$/i.test(t.type)));
+      const baseVp = vp?.getAttribute("content") || "";
+      const lockVp = () => {
+        if (vp && !/maximum-scale/.test(vp.getAttribute("content") || ""))
+          vp.setAttribute(
+            "content",
+            (vp.getAttribute("content") || "") + ", maximum-scale=1",
+          );
+      };
+      const unlockVp = () => {
+        if (vp)
+          vp.setAttribute(
+            "content",
+            (vp.getAttribute("content") || "").replace(
+              /,\s*maximum-scale=1/,
+              "",
+            ),
+          );
+      };
+      const onFocusIn = (e) => isTextField(e.target) && lockVp();
+      const onFocusOut = (e) => isTextField(e.target) && unlockVp();
+      const iosDevice =
+        /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+      if (iosDevice) {
+        document.addEventListener("focusin", onFocusIn);
+        document.addEventListener("focusout", onFocusOut);
+      }
       // Customer app scrolls the page itself: allow normal iOS momentum/bounce
       // (global "overscroll-behavior:none" feels stuck on iPhone).
       const de = document.documentElement;
@@ -36741,6 +36776,8 @@ const CustomerApp = (() => {
           .catch(() => {});
       }
       return () => {
+        document.removeEventListener("focusin", onFocusIn);
+        document.removeEventListener("focusout", onFocusOut);
         added.forEach((el) => el.remove());
         if (vp && oldVp) vp.setAttribute("content", oldVp);
         de.style.overscrollBehavior = oldOsb[0];
