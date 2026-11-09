@@ -33263,18 +33263,33 @@ const CustomerApp = (() => {
 
   // ---------- Pull-to-refresh (mobile customer portal) ----------
   // Pull the page down while scrolled to the very top → release → refetch.
-  // Works with the normal window scroll (no inner scroll container needed).
+  // Smooth version: while dragging we write the transform straight to the DOM
+  // (inside requestAnimationFrame, GPU-accelerated translate3d) instead of
+  // calling setState on every touchmove, so React doesn't re-render ~60x/sec.
   function PullToRefresh({ onRefresh, children }) {
     const { tr } = useApp();
-    const [pull, setPull] = useState(0); // px the content is pulled down
     const [refreshing, setRefreshing] = useState(false);
+    const [ready, setReady] = useState(false); // only flips when crossing the threshold
     const wrapRef = useRef(null);
-    const st = useRef({ y0: 0, x0: 0, active: false, dist: 0, busy: false });
+    const bodyRef = useRef(null);
+    const hintRef = useRef(null);
+    const st = useRef({
+      y0: 0,
+      x0: 0,
+      active: false,
+      pulling: false,
+      dist: 0,
+      busy: false,
+      raf: 0,
+      ready: false,
+    });
     const cbRef = useRef(onRefresh);
     cbRef.current = onRefresh;
     const THRESHOLD = 70;
     const MAX = 120;
     const HOLD = 52;
+    const DEAD = 8; // ignore the first few px so taps / tiny scrolls don't jitter
+    const EASE = "cubic-bezier(.2,.8,.2,1)";
 
     useEffect(() => {
       const el = wrapRef.current;
@@ -33282,6 +33297,33 @@ const CustomerApp = (() => {
       const s = st.current;
       const atTop = () =>
         (window.scrollY || document.documentElement.scrollTop || 0) <= 0;
+
+      const paint = (px, animate, spinning) => {
+        const body = bodyRef.current;
+        const hint = hintRef.current;
+        if (!body || !hint) return;
+        const t = animate ? `transform .28s ${EASE}` : "none";
+        body.style.transition = t;
+        hint.style.transition = animate ? `${t}, opacity .2s` : "none";
+        body.style.transform = px > 0 ? `translate3d(0,${px}px,0)` : "";
+        hint.style.transform = `translate3d(0,${px - HOLD}px,0)`;
+        hint.style.opacity = spinning
+          ? "1"
+          : String(Math.min(1, px / THRESHOLD));
+      };
+      const schedule = () => {
+        if (s.raf) return;
+        s.raf = requestAnimationFrame(() => {
+          s.raf = 0;
+          paint(s.dist, false, false);
+        });
+      };
+      const setReadyOnce = (v) => {
+        if (s.ready !== v) {
+          s.ready = v;
+          setReady(v);
+        }
+      };
 
       const onStart = (e) => {
         if (s.busy || e.touches.length !== 1 || !atTop()) {
@@ -33291,36 +33333,52 @@ const CustomerApp = (() => {
         s.y0 = e.touches[0].clientY;
         s.x0 = e.touches[0].clientX;
         s.dist = 0;
+        s.pulling = false;
         s.active = true;
       };
       const onMove = (e) => {
         if (!s.active || s.busy) return;
         const dy = e.touches[0].clientY - s.y0;
         const dx = e.touches[0].clientX - s.x0;
-        // Scrolling up, sideways, or page already moved → not a pull.
-        if (dy <= 0 || Math.abs(dx) > Math.abs(dy) || !atTop()) {
-          if (s.dist > 0) {
+        // Scrolling up / sideways / page already scrolled → hand back to the browser.
+        if (
+          dy <= 0 ||
+          (!s.pulling && Math.abs(dx) > Math.abs(dy)) ||
+          !atTop()
+        ) {
+          if (s.pulling) {
+            s.pulling = false;
             s.dist = 0;
-            setPull(0);
+            setReadyOnce(false);
+            paint(0, true, false);
           }
           if (dy <= 0) s.active = false;
           return;
         }
-        s.dist = Math.min(MAX, dy * 0.5); // rubber-band resistance
+        if (dy < DEAD && !s.pulling) return;
+        s.pulling = true;
+        // Rubber-band: the further you pull, the more resistance.
+        const eff = dy - DEAD;
+        s.dist = Math.min(MAX, MAX * (1 - Math.exp(-eff / 170)) * 1.25);
         if (e.cancelable) e.preventDefault(); // stop iOS bounce while pulling
-        setPull(s.dist);
+        setReadyOnce(s.dist >= THRESHOLD);
+        schedule();
       };
       const onEnd = async () => {
         if (!s.active) return;
         s.active = false;
-        if (s.dist >= THRESHOLD && !s.busy) {
+        if (s.raf) {
+          cancelAnimationFrame(s.raf);
+          s.raf = 0;
+        }
+        if (s.pulling && s.dist >= THRESHOLD && !s.busy) {
           s.busy = true;
           setRefreshing(true);
-          setPull(HOLD);
+          paint(HOLD, true, true);
           try {
             await Promise.all([
               Promise.resolve(cbRef.current && cbRef.current()),
-              new Promise((r) => setTimeout(r, 700)), // avoid a flicker
+              new Promise((r) => setTimeout(r, 900)), // avoid a flicker
             ]);
           } catch {
             /* individual loaders report their own errors */
@@ -33328,8 +33386,10 @@ const CustomerApp = (() => {
           s.busy = false;
           setRefreshing(false);
         }
+        s.pulling = false;
         s.dist = 0;
-        setPull(0);
+        setReadyOnce(false);
+        paint(0, true, false);
       };
 
       el.addEventListener("touchstart", onStart, { passive: true });
@@ -33337,6 +33397,7 @@ const CustomerApp = (() => {
       el.addEventListener("touchend", onEnd, { passive: true });
       el.addEventListener("touchcancel", onEnd, { passive: true });
       return () => {
+        if (s.raf) cancelAnimationFrame(s.raf);
         el.removeEventListener("touchstart", onStart);
         el.removeEventListener("touchmove", onMove);
         el.removeEventListener("touchend", onEnd);
@@ -33344,26 +33405,24 @@ const CustomerApp = (() => {
       };
     }, []);
 
-    const ready = pull >= THRESHOLD;
-    const progress = Math.min(1, pull / THRESHOLD);
     const label = refreshing
       ? tr("Refreshing…", "កំពុងផ្ទុកឡើងវិញ…")
       : ready
         ? tr("Release to refresh", "លែងដើម្បីផ្ទុកឡើងវិញ")
         : tr("Pull down to refresh", "ទាញចុះដើម្បីផ្ទុកឡើងវិញ");
-    const dragging = pull > 0 && !refreshing;
 
     return (
       <div ref={wrapRef} className="relative">
         <div
+          ref={hintRef}
           aria-live="polite"
           className="pointer-events-none absolute inset-x-0 flex items-center justify-center gap-2 text-xs font-medium text-slate-500"
           style={{
             top: 0,
             height: HOLD,
-            transform: `translateY(${pull - HOLD}px)`,
-            opacity: refreshing ? 1 : progress,
-            transition: dragging ? "none" : "transform .25s ease, opacity .2s",
+            transform: `translate3d(0,${-HOLD}px,0)`,
+            opacity: 0,
+            willChange: "transform, opacity",
           }}
         >
           {refreshing ? (
@@ -33380,12 +33439,7 @@ const CustomerApp = (() => {
           )}
           <span>{label}</span>
         </div>
-        <div
-          style={{
-            transform: pull > 0 ? `translateY(${pull}px)` : "none",
-            transition: dragging ? "none" : "transform .25s ease",
-          }}
-        >
+        <div ref={bodyRef} style={{ willChange: "transform" }}>
           {children}
         </div>
       </div>
@@ -33574,6 +33628,8 @@ const CustomerApp = (() => {
           : Promise.resolve(),
       ]);
       try {
+        // Screens that don't listen to focus/visibility (e.g. Shop) listen to this.
+        window.dispatchEvent(new CustomEvent("cb-pull-refresh"));
         window.dispatchEvent(new Event("focus"));
         document.dispatchEvent(new Event("visibilitychange"));
       } catch {}
@@ -38744,6 +38800,15 @@ const CustomerApp = (() => {
       document.addEventListener("visibilitychange", onVis);
       return () => document.removeEventListener("visibilitychange", onVis);
     }, []);
+    // Pull-to-refresh (or Retry): new "For you" order + refetch the catalog.
+    useEffect(() => {
+      const onPull = () => {
+        setSeed(shopFeedReseed());
+        setReload((n) => n + 1);
+      };
+      window.addEventListener("cb-pull-refresh", onPull);
+      return () => window.removeEventListener("cb-pull-refresh", onPull);
+    }, []);
     useEffect(() => {
       supabase.rpc("shop_categories_public").then(({ data }) => {
         const list = data || [];
@@ -38756,7 +38821,7 @@ const CustomerApp = (() => {
           : list;
         setCats(ordered);
       });
-    }, []);
+    }, [reload]);
     useEffect(() => {
       const el =
         chipsRef.current &&
