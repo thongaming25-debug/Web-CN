@@ -32806,49 +32806,62 @@ const CustomerApp = (() => {
 
   // ---------- Language switcher ----------
   function LangSheet({ onClose }) {
-    const { lang, setLang, tr } = useApp();
+    const { lang, setLang, tr, dark } = useApp();
     const opts = [
       ["km", "ភាសាខ្មែរ"],
       ["en", "English"],
       ["zh", "中文"],
     ];
-    return (
+    // Rendered in a portal on <body> so it is NOT trapped inside the login
+    // hero's stacking context (the login Card has z-10 and was painting on
+    // top of this sheet). The wrapper re-applies the portal's font + dark
+    // scope because it now lives outside <Provider>'s div.
+    return createPortal(
       <div
-        className="fixed inset-0 bg-slate-900/50 z-[70] flex items-end justify-center text-slate-900"
-        onClick={onClose}
+        lang={lang}
+        className={`jz-customer ${lang === "km" ? "cb-km" : lang === "zh" ? "cb-zh cb-en" : "cb-en"}${dark ? " cb-cust-dark" : ""}`}
+        style={{ ...FONTS[lang], minHeight: 0, background: "transparent" }}
       >
         <div
-          onClick={(e) => e.stopPropagation()}
-          className="bg-white w-full max-w-md rounded-t-3xl p-5 space-y-3"
-          style={{ paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))" }}
+          className="fixed inset-0 bg-slate-900/50 z-[9999] flex items-end justify-center text-slate-900"
+          onClick={onClose}
         >
-          <h2 className="font-bold text-lg">
-            {tr("Choose Your Language", "ជ្រើសរើសភាសា")}
-          </h2>
-          {opts.map(([k, name]) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => {
-                setLang(k);
-                onClose();
-              }}
-              className={`w-full h-14 rounded-2xl flex items-center gap-3 px-3.5 font-semibold border ${lang === k ? "bg-blue-600 text-white border-blue-600" : "bg-white text-slate-800 border-slate-200"}`}
-            >
-              <LangFlag code={k} size={36} />
-              <span className="flex-1 text-left">{name}</span>
-              {lang === k && <Check size={18} />}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-full h-12 text-slate-500 font-semibold"
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white w-full max-w-md rounded-t-3xl p-5 space-y-3"
+            style={{
+              paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))",
+            }}
           >
-            {tr("Cancel", "បោះបង់")}
-          </button>
+            <h2 className="font-bold text-lg">
+              {tr("Choose Your Language", "ជ្រើសរើសភាសា")}
+            </h2>
+            {opts.map(([k, name]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => {
+                  setLang(k);
+                  onClose();
+                }}
+                className={`w-full h-14 rounded-2xl flex items-center gap-3 px-3.5 font-semibold border ${lang === k ? "bg-blue-600 text-white border-blue-600" : "bg-white text-slate-800 border-slate-200"}`}
+              >
+                <LangFlag code={k} size={36} />
+                <span className="flex-1 text-left">{name}</span>
+                {lang === k && <Check size={18} />}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={onClose}
+              className="w-full h-12 text-slate-500 font-semibold"
+            >
+              {tr("Cancel", "បោះបង់")}
+            </button>
+          </div>
         </div>
-      </div>
+      </div>,
+      document.body,
     );
   }
   // ---------- Appearance (theme) sheet ----------
@@ -33045,7 +33058,7 @@ const CustomerApp = (() => {
             );
 
     return (
-      <div className="min-h-screen bg-slate-50" style={FONT}>
+      <div className="min-h-screen" style={FONT}>
         {overlay && (
           <AuthTransition
             phase={overlay}
@@ -33067,46 +33080,57 @@ const CustomerApp = (() => {
           />
         )}
         <div className="max-w-md mx-auto pb-10">
-          {/* Hero */}
-          <div className="relative overflow-hidden bg-gradient-to-br from-blue-700 via-blue-600 to-sky-500 text-white px-6 pt-12 pb-20 rounded-b-[40px] text-center">
-            <div className="pointer-events-none absolute -top-16 -right-16 h-52 w-52 rounded-full bg-white/10" />
-            <div className="pointer-events-none absolute -bottom-24 -left-12 h-56 w-56 rounded-full bg-white/10" />
-            <div className="absolute top-4 right-4 z-10">
-              <LangBtn />
+          {/* Header — same as the customer Home page */}
+          <header
+            className="sticky top-0 z-30 bg-white shadow-[0_2px_10px_-4px_rgba(15,40,90,.15)] px-4 pb-3.5 flex items-center justify-between"
+            style={{ paddingTop: "max(0.875rem, env(safe-area-inset-top))" }}
+          >
+            <div className="flex items-center min-w-0">
+              <BrandLockup brandName={brandName} brandLogo={brandLogo} />
             </div>
-            <div className="relative mx-auto mb-4 grid h-[72px] w-[72px] place-items-center overflow-hidden rounded-[22px] bg-white/15 ring-1 ring-white/30 shadow-lg shadow-blue-900/20">
-              {brandLogo ? (
-                <img
-                  src={brandLogo}
-                  alt={`${brandName} logo`}
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <Ship size={34} />
-              )}
-            </div>
-            <div className="relative text-[28px] font-extrabold tracking-tight leading-none">
-              {brandName}
-            </div>
-            <p className="relative mt-1.5 text-blue-100 text-xs">
+            <LangBtn pill />
+          </header>
+
+          {/* Greeting — same type scale as Home */}
+          <div className="px-4 pt-5 pb-1">
+            <h1 className="text-[26px] font-extrabold leading-tight text-[color:var(--jz-c-text,#14284b)]">
+              {tr(`Welcome to ${brandName}`, `សូមស្វាគមន៍មកកាន់ ${brandName}`)}
+            </h1>
+            <p className="text-slate-500">
               {tr("Global to Your Door", "ដឹកជញ្ជូនដល់មាត់ទ្វារអ្នក")}
-            </p>
-            <p className="relative mt-5 font-semibold">
-              {tr("Customer Portal", "ផតថលអតិថិជន")}
-            </p>
-            <p className="relative text-blue-100 text-sm">
-              {tr(
-                "Track your shipments anytime, anywhere",
-                "តាមដានទំនិញរបស់អ្នក គ្រប់ពេល គ្រប់ទីកន្លែង",
-              )}
             </p>
           </div>
 
-          {/* Card (z-10 so the hero never covers its top edge) */}
-          <Card
-            className="relative z-10 mx-4 -mt-10 p-5 sm:p-6"
-            style={{ boxShadow: "0 24px 50px -22px rgba(15,40,90,.35)" }}
-          >
+          {/* Orange hero card — same style as Home "Total Shipments" */}
+          <div className="px-4 pt-4">
+            <div
+              className="relative overflow-hidden rounded-2xl text-white p-4 flex items-center gap-4 shadow-[0_10px_24px_-10px_rgba(244,124,32,.65)]"
+              style={{
+                background:
+                  "linear-gradient(135deg, #ff9a3d 0%, #f47c20 55%, #e8650f 100%)",
+              }}
+            >
+              <span className="pointer-events-none absolute -right-6 -top-8 w-28 h-28 rounded-full bg-white/10" />
+              <span className="pointer-events-none absolute right-10 -bottom-10 w-24 h-24 rounded-full bg-white/10" />
+              <span className="relative w-14 h-14 rounded-full bg-white/20 ring-1 ring-white/30 grid place-items-center shrink-0">
+                <Package size={28} />
+              </span>
+              <div className="relative flex-1">
+                <p className="text-base font-bold leading-tight">
+                  {tr("Customer Portal", "ផតថលអតិថិជន")}
+                </p>
+                <p className="mt-0.5 text-sm font-medium text-white/90">
+                  {tr(
+                    "Track your shipments anytime, anywhere",
+                    "តាមដានទំនិញរបស់អ្នក គ្រប់ពេល គ្រប់ទីកន្លែង",
+                  )}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Form card — same white rounded card as Home */}
+          <Card className="relative mx-4 mt-4 p-5 sm:p-6">
             {mode === "forgot" ? (
               <button
                 type="button"
