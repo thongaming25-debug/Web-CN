@@ -1423,6 +1423,7 @@ const NAV_SECTIONS = [
     label: "Warehouse",
     items: [
       { label: "Warehouse Management", icon: "Container", path: "/warehouses" },
+      { label: "Address", icon: "MapPin", path: "/addresses" },
       { label: "Locations", icon: "MapPinned", path: "/locations" },
       {
         label: "Warehouse Operations",
@@ -1739,6 +1740,7 @@ const PATH_VIEW = {
   "/orders": "order.view",
   "/cn-orders": "cn_order.view",
   "/warehouses": "warehouse.view",
+  "/addresses": "warehouse.view",
   "/locations": "location.view",
   "/warehouse-operations": "warehouse_ops.view",
   "/exceptions": "exception.view",
@@ -10692,6 +10694,7 @@ function WarehouseFormModal({ open, type, existing, onClose, onSave }) {
   const [v, setV] = useState(blankWarehouse(type));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const khTree = useKhGazetteer();
 
   useEffect(() => {
     if (open) {
@@ -10758,22 +10761,73 @@ function WarehouseFormModal({ open, type, existing, onClose, onSave }) {
       submitLabel="Save"
       busyLabel="កំពុងSave..."
     >
-      {fields.map(([key, label]) => (
-        <div key={key}>
-          <label className={LABEL_CLS}>{label}</label>
-          <input
-            value={v[key] ?? ""}
-            disabled={key === "code" && !!existing}
-            onChange={(e) => setV((x) => ({ ...x, [key]: e.target.value }))}
-            className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
-          />
-          {key === "code" && existing && (
-            <p className="text-[11px] text-ink-600/50 mt-1">
-              Code មិនអាចប្តូរបានទេ ព្រោះ Order/TK ប្រើវាជាឯកសារយោង
-            </p>
-          )}
-        </div>
-      ))}
+      {fields.map(([key, label]) => {
+        if (
+          isKh &&
+          (key === "province" || key === "district" || key === "commune")
+        ) {
+          // Pick from the Address master data so names always match what
+          // customers choose (Admin → Address).
+          const po = khTree.find((r) => khMatch(r, v.province));
+          const dO = po?.[3].find((r) => khMatch(r, v.district));
+          const opts =
+            key === "province"
+              ? khTree
+              : key === "district"
+                ? po?.[3] || []
+                : dO?.[3] || [];
+          const cur = v[key] || "";
+          const known = !cur || opts.some((r) => khMatch(r, cur));
+          return (
+            <div key={key}>
+              <label className={LABEL_CLS}>{label}</label>
+              <select
+                value={cur}
+                disabled={
+                  (key === "district" && !v.province) ||
+                  (key === "commune" && !v.district)
+                }
+                onChange={(e) =>
+                  setV((x) => ({
+                    ...x,
+                    [key]: e.target.value,
+                    ...(key === "province"
+                      ? { district: "", commune: "" }
+                      : {}),
+                    ...(key === "district" ? { commune: "" } : {}),
+                  }))
+                }
+                className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
+              >
+                <option value="">— Select —</option>
+                {!known && <option value={cur}>{cur}</option>}
+                {opts.map((r) => (
+                  <option key={r[0]} value={r[2]}>
+                    {r[2]}
+                    {r[1] ? ` · ${r[1]}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+          );
+        }
+        return (
+          <div key={key}>
+            <label className={LABEL_CLS}>{label}</label>
+            <input
+              value={v[key] ?? ""}
+              disabled={key === "code" && !!existing}
+              onChange={(e) => setV((x) => ({ ...x, [key]: e.target.value }))}
+              className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
+            />
+            {key === "code" && existing && (
+              <p className="text-[11px] text-ink-600/50 mt-1">
+                Code មិនអាចប្តូរបានទេ ព្រោះ Order/TK ប្រើវាជាឯកសារយោង
+              </p>
+            )}
+          </div>
+        );
+      })}
       <div>
         <label className={LABEL_CLS}>Status</label>
         <select
@@ -11054,6 +11108,832 @@ function WarehouseDetailModal({ wh, canManage, onClose }) {
           {tab === "tks" && <MiniTkTable rows={mine} />}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Cambodia address master data — Province / District / Commune
+// ============================================================
+// Managed in Admin → Warehouse → Address. The customer portal and the Branch
+// form read the same tables. Until the tables exist (or are seeded) everything
+// falls back to the built-in list below, so nothing breaks before the migration.
+//
+// SUPABASE MIGRATION (run once, then press "Import default data" in Admin → Address):
+//
+//   create table if not exists public.kh_provinces (
+//     code text primary key,
+//     name_km text, name_en text not null,
+//     status text not null default 'Active',
+//     created_at timestamptz default now(), updated_at timestamptz default now()
+//   );
+//   create table if not exists public.kh_districts (
+//     code text primary key,
+//     province_code text not null references public.kh_provinces(code),
+//     name_km text, name_en text not null,
+//     status text not null default 'Active',
+//     created_at timestamptz default now(), updated_at timestamptz default now()
+//   );
+//   create table if not exists public.kh_communes (
+//     code text primary key,
+//     district_code text not null references public.kh_districts(code),
+//     name_km text, name_en text not null,
+//     status text not null default 'Active',
+//     created_at timestamptz default now(), updated_at timestamptz default now()
+//   );
+//   create index if not exists kh_districts_province_idx on public.kh_districts(province_code);
+//   create index if not exists kh_communes_district_idx on public.kh_communes(district_code);
+//
+//   alter table public.kh_provinces enable row level security;
+//   alter table public.kh_districts enable row level security;
+//   alter table public.kh_communes enable row level security;
+//   grant select on public.kh_provinces, public.kh_districts, public.kh_communes to authenticated;
+//   -- everybody signed in (customers + staff) may read the list
+//   drop policy if exists kh_provinces_read on public.kh_provinces;
+//   create policy kh_provinces_read on public.kh_provinces for select to authenticated using (true);
+//   drop policy if exists kh_districts_read on public.kh_districts;
+//   create policy kh_districts_read on public.kh_districts for select to authenticated using (true);
+//   drop policy if exists kh_communes_read on public.kh_communes;
+//   create policy kh_communes_read on public.kh_communes for select to authenticated using (true);
+//   -- only staff with warehouse.manage (or Super Admin) may change it
+//   drop policy if exists kh_provinces_write on public.kh_provinces;
+//   create policy kh_provinces_write on public.kh_provinces for all to authenticated
+//     using (exists (select 1 from public.users u where u.auth_user_id = auth.uid()
+//            and (u.role = 'Super Admin' or public.has_permission('warehouse.manage'))))
+//     with check (exists (select 1 from public.users u where u.auth_user_id = auth.uid()
+//            and (u.role = 'Super Admin' or public.has_permission('warehouse.manage'))));
+//   drop policy if exists kh_districts_write on public.kh_districts;
+//   create policy kh_districts_write on public.kh_districts for all to authenticated
+//     using (exists (select 1 from public.users u where u.auth_user_id = auth.uid()
+//            and (u.role = 'Super Admin' or public.has_permission('warehouse.manage'))))
+//     with check (exists (select 1 from public.users u where u.auth_user_id = auth.uid()
+//            and (u.role = 'Super Admin' or public.has_permission('warehouse.manage'))));
+//   drop policy if exists kh_communes_write on public.kh_communes;
+//   create policy kh_communes_write on public.kh_communes for all to authenticated
+//     using (exists (select 1 from public.users u where u.auth_user_id = auth.uid()
+//            and (u.role = 'Super Admin' or public.has_permission('warehouse.manage'))))
+//     with check (exists (select 1 from public.users u where u.auth_user_id = auth.uid()
+//            and (u.role = 'Super Admin' or public.has_permission('warehouse.manage'))));
+//   notify pgrst, 'reload schema';
+//
+// Built-in list: Province -> District -> Commune (25 / 210 / 1,652), villages left out.
+// Row shape: [code, nameKm, nameEn, children].
+// Source: NCDD (https://db.ncdd.gov.kh/) via the open-source "kh-address" package.
+const KH_ADDR_JSON =
+  '[["01","បន្ទាយមានជ័យ","Banteay Meanchey",[["0102","មង្គលបូរី","Mongkol Borei",[["010201","បន្ទាយនាង","Banteay Neang"],["010202","បត់ត្រង់","Bat Trang"],["010203","ចំណោម","Chamnaom"],["010204","គោកបល្ល័ង្គ","Kouk Ballangk"],["010205","គយម៉ែង","Koy Maeng"],["010206","អូរប្រាសាទ","Ou Prasat"],["010207","ភ្នំតូច","Phnum Touch"],["010208","រហាត់ទឹក","Rohat Tuek"],["010209","ឫស្សីក្រោក","Ruessei Kraok"],["010210","សំបួរ","Sambuor"],["010211","សឿ","Soea"],["010212","ស្រះរាំង","Srah Reang"],["010213","តាឡំ","Ta Lam"]]],["0103","ភ្នំស្រុក","Phnum Srok",[["010301","ណាំតៅ","Nam Tau"],["010302","ប៉ោយចារ","Poy Char"],["010303","ពន្លៃ","Ponley"],["010304","ស្ពានស្រែង","Spean Sraeng"],["010305","ស្រះជីក","Srah Chik"],["010306","ភ្នំដី","Phnum Dei"]]],["0104","ព្រះនេត្រព្រះ","Preah Netr Preah",[["010401","ឈ្នួរមានជ័យ","Chnuor Mean Chey"],["010402","ជប់វារី","Chob Vari"],["010403","ភ្នំលៀប","Phnum Lieb"],["010404","ប្រាសាទ","Prasat"],["010405","ព្រះនេត្រព្រះ","Preak Netr Preah"],["010406","រហាល","Rohal"],["010407","ទានកាំ","Tean Kam"],["010408","ទឹកជោរ","Tuek Chour"],["010409","បុស្បូវ","Bos Sbov"]]],["0105","អូរជ្រៅ","Ou Chrov",[["010501","ចង្ហា","Changha"],["010502","កូប","Koub"],["010503","គុត្ដសត","Kuttasat"],["010505","សំរោង","Samraong"],["010506","សូភី","Souphi"],["010507","សឹង្ហ","Soengh"],["010509","អូរបីជាន់","Ou Beichoan"]]],["0106","សិរីសោភ័ណ","Serei Saophoan",[["010602","កំពង់ស្វាយ","Kampong Svay"],["010603","កោះពងសត្វ","Kaoh Pong Satv"],["010604","ម្កាក់","Mkak"],["010605","អូរអំបិល","Ou Ambel"],["010606","ភ្នៀត","Phniet"],["010607","ព្រះពន្លា","Preah Ponlea"],["010608","ទឹកថ្លា","Tuek Thla"]]],["0107","ថ្មពួក","Thma Puok",[["010701","បន្ទាយឆ្មារ","Banteay Chhmar"],["010702","គោករមៀត","Kouk Romiet"],["010703","ភូមិថ្មី","Phum Thmei"],["010704","ថ្មពួក","Thma Puok"],["010705","គោកកឋិន","Kouk Kakthen"],["010706","គំរូ","Kumru"]]],["0108","ស្វាយចេក","Svay Chek",[["010801","ផ្គាំ","Phkoam"],["010802","សារង្គ","Sarongk"],["010803","ស្លក្រាម","Sla Kram"],["010804","ស្វាយចេក","Svay Chek"],["010805","តាបែន","Ta Baen"],["010806","តាផូ","Ta Phou"],["010807","ទ្រាស","Treas"],["010808","រលួស","Roluos"]]],["0109","ម៉ាឡៃ","Malai",[["010901","បឹងបេង","Boeng Beng"],["010902","ម៉ាឡៃ","Malai"],["010903","អូរសំព័រ","Ou Sampoar"],["010904","អូរស្រឡៅ","Ou Sralau"],["010905","ទួលពង្រ","Tuol Pongro"],["010906","តាគង់","Ta Kong"]]],["0110","ប៉ោយប៉ែត","Paoy Paet",[["011001","និមិត្ដ","Nimitt"],["011002","ប៉ោយប៉ែត","Paoy Paet"],["011003","ផ្សារកណ្តាល","Phsar Kandal"],["011004","អូរជ្រៅ","Ou Chrov"],["011005","អូរឫស្សី","Ou Reusey"]]]]],["02","បាត់ដំបង","Battambang",[["0201","បាណន់","Banan",[["020101","កន្ទឺ ១","Kantueu Muoy"],["020102","កន្ទឺ ២","Kantueu Pir"],["020103","បាយដំរាំ","Bay Damram"],["020104","ឈើទាល","Chheu Teal"],["020105","ចែងមានជ័យ","Chaeng Mean Chey"],["020106","ភ្នំសំពៅ","Phnum Sampov"],["020107","ស្នឹង","Snoeng"],["020108","តាគ្រាម","Ta Kream"]]],["0202","ថ្មគោល","Thma Koul",[["020201","តាពូង","Ta Pung"],["020202","តាម៉ឺន","Ta Meun"],["020203","អូរតាគី","Ou Ta Ki"],["020204","ជ្រៃ","Chrey"],["020205","អន្លង់រុន","Anlong Run"],["020206","ជ្រោយស្ដៅ","Chrouy Sdau"],["020207","បឹងព្រីង","Boeng Pring"],["020208","គោកឃ្មុំ","Kouk Khmum"],["020209","បន្សាយត្រែង","Bansay Traeng"],["020210","រូងជ្រៃ","Rung Chrey"]]],["0203","បាត់ដំបង","Battambang",[["020301","ទួលតាឯក","Tuol Ta Ek"],["020302","ព្រែកព្រះស្ដេច","Prek Preah Sdach"],["020303","រតនៈ","Rottanak"],["020304","ចំការសំរោង","Chomkar Somraong"],["020305","ស្លាកែត","Sla Ket"],["020306","ក្ដុលដូនទាវ","Kdol Doun Teav"],["020307","អូរម៉ាល់","OMal"],["020308","វត្ដគរ","wat Kor"],["020309","អូរចារ","Ou Char"],["020310","ស្វាយប៉ោ","Svay Por"]]],["0204","បវេល","Bavel",[["020401","បវេល","Bavel"],["020402","ខ្នាចរមាស","Khnach Romeas"],["020403","ល្វា","Lvea"],["020404","ព្រៃខ្ពស់","Prey Khpos"],["020405","អំពិលប្រាំដើម","Ampil Pram Daeum"],["020406","ក្ដុលតាហែន","Kdol Ta Haen"],["020407","ឃ្លាំងមាស","Khlaeng Meas"],["020408","បឹងប្រាំ","Boeung Pram"],["020409","បួវិល","Bouvel"]]],["0205","ឯកភ្នំ","Aek Phnum",[["020501","ព្រែកនរិន្ទ","Preaek Norint"],["020502","សំរោងក្នុង","Samraong Knong"],["020503","ព្រែកខ្ពប","Preaek Khpob"],["020504","ព្រែកហ្លួង","Preaek Luong"],["020505","ពាមឯក","Peam Aek"],["020506","ព្រៃចាស់","Prey Chas"],["020507","កោះជីវាំង","Kaoh Chiveang"]]],["0206","មោងឫស្សី","Moung Ruessei",[["020601","មោង","Moung"],["020602","គារ","Kear"],["020603","ព្រៃស្វាយ","Prey Svay"],["020604","ឫស្សីក្រាំង","Ruessei Krang"],["020605","ជ្រៃ","Chrey"],["020606","តាលាស់","Ta Loas"],["020607","កកោះ","Kakaoh"],["020608","ព្រៃតូច","Prey Touch"],["020609","របស់មង្គល","Robas Mongkol"]]],["0207","រតនមណ្ឌល","Rotonak Mondol",[["020701","ស្ដៅ","Sdau"],["020702","អណ្ដើកហែប","Andaeuk Haeb"],["020703","ផ្លូវមាស","Phlov Meas"],["020704","ត្រែង","Traeng"],["020705","រស្មីសង្ហារ","Reaksmei Songha"]]],["0208","សង្កែ","Sangkae",[["020801","អន្លង់វិល","Anlong Vil"],["020802","នរា","Norea"],["020803","តាប៉ុន","Ta Pon"],["020804","រកា","Roka"],["020805","កំពង់ព្រះ","Kampong Preah"],["020806","កំពង់ព្រៀង","Kampong Prieng"],["020807","រាំងកេសី","Reang Kesei"],["020808","អូរដំបង ១","Ou Dambang Muoy"],["020809","អូរដំបង ២","Ou Dambang Pir"],["020810","វត្ដតាមិម","Vaot Ta Muem"]]],["0209","សំឡូត","Samlout",[["020901","តាតោក","Ta Taok"],["020902","កំពង់ល្ពៅ","Kampong Lpov"],["020903","អូរសំរិល","Ou Samril"],["020904","ស៊ុង","Sung"],["020905","សំឡូត","Samlout"],["020906","មានជ័យ","Mean Chey"],["020907","តាសាញ","Ta Sanh"]]],["0210","សំពៅលូន","Sampov Lun",[["021001","សំពៅលូន","Sampov Lun"],["021002","អង្គរបាន","Angkor Ban"],["021003","តាស្ដា","Ta Sda"],["021004","សន្ដិភាព","Santepheap"],["021005","សេរីមានជ័យ","Serei Mean Chey"],["021006","ជ្រៃសីមា","Chrey Seima"]]],["0211","ភ្នំព្រឹក","Phnum Proek",[["021101","ភ្នំព្រឹក","Phnum Proek"],["021102","ពេជ្រចិន្ដា","Pech Chenda"],["021103","បួរ","Bour"],["021104","បារាំងធ្លាក់","Barang Thleak"],["021105","អូររំដួល","Ou Rumduol"]]],["0212","កំរៀង","Kamrieng",[["021201","កំរៀង","Kamrieng"],["021202","បឹងរាំង","Boeng Reang"],["021203","អូរដា","Ou Da"],["021204","ត្រាង","Trang"],["021205","តាសែន","Ta Saen"],["021206","តាក្រី","Ta Krei"]]],["0213","គាស់ក្រឡ","Koas Krala",[["021301","ធិបតី","Thipakdei"],["021302","គាស់ក្រឡ","Kaos Krala"],["021303","ហប់","Hab"],["021304","ព្រះផុស","Preah Phos"],["021305","ដូនបា","Doun Ba"],["021306","ឆ្នាល់មាន់","Chhnal Moan"]]],["0214","រុក្ខគិរី","Rukh Kiri",[["021401","ព្រែកជីក","Preaek Chik"],["021402","ព្រៃត្រឡាច","Prey Tralach"],["021403","មុខរាហ៍","Mukh Reah"],["021404","ស្តុកប្រវឹក","Sdok Pravoek"],["021405","បាសាក់","Basak"]]]]],["03","កំពង់ចាម","Kampong Cham",[["0301","បាធាយ","Batheay",[["030101","បាធាយ","Batheay"],["030102","ច្បារអំពៅ","Chbar Ampov"],["030103","ជាលា","Chealea"],["030104","ជើងព្រៃ","Cheung Prey"],["030105","មេព្រីង","Me Pring"],["030106","ផ្អាវ","Ph\'av"],["030107","សំបូរ","Sambour"],["030108","សណ្ដែក","Sandaek"],["030109","តាំងក្រាំង","Tang Krang"],["030110","តាំងក្រសាំង","Tang Krasang"],["030111","ត្រប់","Trab"],["030112","ទំនប់","Tumnob"]]],["0302","ចំការលើ","Chamkar Leu",[["030201","បុសខ្នុរ","Bos Khnor"],["030202","ចំការអណ្ដូង","Chamkar Andoung"],["030203","ជយោ","Cheyyou"],["030204","ល្វាលើ","Lvea Leu"],["030205","ស្ពឺ","Spueu"],["030206","ស្វាយទាប","Svay Teab"],["030207","តាអុង","Ta Ong"],["030208","តាប្រុក","Ta Prok"]]],["0303","ជើងព្រៃ","Cheung Prey",[["030301","ខ្នុរដំបង","Khnor Dambang"],["030302","គោករវៀង","Kouk Rovieng"],["030303","ផ្ដៅជុំ","Pdau Chum"],["030304","ព្រៃចារ","Prey Char"],["030305","ព្រីងជ្រុំ","Pring Chrum"],["030306","សំពងជ័យ","Sampong Chey"],["030307","ស្ដើងជ័យ","Sdaeung Chey"],["030308","សូទិព្វ","Soutib"],["030309","ស្រម៉រ","Sramar"],["030310","ត្រពាំងគរ","Trapeang Kor"]]],["0305","កំពង់ចាម","Kampong Cham",[["030501","បឹងកុក","Boeng Kok"],["030502","កំពង់ចាម","Kampong Cham"],["030503","សំបួរមាស","Sambuor Meas"],["030504","វាលវង់","Veal Vong"]]],["0306","កំពង់សៀម","Kampong Siem",[["030601","អំពិល","Ampil"],["030602","ហាន់ជ័យ","Hanchey"],["030603","កៀនជ្រៃ","Kien Chrey"],["030604","គគរ","Kokor"],["030605","កោះមិត្ដ","Kaoh Mitt"],["030606","កោះរកា","Kaoh Roka"],["030607","កោះសំរោង","Kaoh Samraong"],["030608","កោះទន្ទឹម","Kaoh Tontuem"],["030609","ក្រឡា","Krala"],["030610","អូរស្វាយ","Ou Svay"],["030611","រអាង","Ro\'ang"],["030612","រំចេក","Rumchek"],["030613","ស្រក","Srak"],["030614","ទ្រាន","Trean"],["030615","វិហារធំ","Vihear Thum"]]],["0307","កងមាស","Kang Meas",[["030701","អង្គរបាន","Angkor Ban"],["030702","កងតាណឹង","Kang Ta Noeng"],["030703","ខ្ចៅ","Khchau"],["030704","ពាមជីកង","Peam Chi Kang"],["030705","ព្រែកកុយ","Preaek Koy"],["030706","ព្រែកក្របៅ","Preaek Krabau"],["030707","រាយប៉ាយ","Reay Pay"],["030708","រកាអារ","Roka Ar"],["030709","រកាគយ","Roka Koy"],["030710","ស្ដៅ","Sdau"],["030711","សូរគង","Sour Kong"]]],["0308","កោះសូទិន","Kaoh Soutin",[["030801","កំពង់រាប","Kampong Reab"],["030802","កោះសូទិន","Kaoh Sotin"],["030803","ល្វេ","Lve"],["030804","មហាលាភ","Moha Leaph"],["030805","មហាខ្ញូង","Moha Khnhoung"],["030806","ពាមប្រធ្នោះ","Peam Prathnuoh"],["030807","ពង្រ","Pongro"],["030808","ព្រែកតានង់","Preaek Ta Nong"]]],["0313","ព្រៃឈរ","Prey Chhor",[["031301","បារាយណ៍","Baray"],["031302","បឹងណាយ","Boeng Nay"],["031303","ជ្រៃវៀន","Chrey Vien"],["031304","ខ្វិតធំ","Khvet Thum"],["031305","គរ","Kor"],["031306","ក្រូច","Krouch"],["031307","ល្វា","Lvea"],["031308","មៀន","Mien"],["031309","ព្រៃឈរ","Prey Chhor"],["031310","សូរសែន្យ","Sour Saen"],["031311","សំរោង","Samraong"],["031312","ស្រង៉ែ","Sragnae"],["031313","ថ្មពូន","Thma Pun"],["031314","តុងរ៉ុង","Tong Rong"],["031315","ត្រពាំងព្រះ","Trapeang Preah"]]],["0314","ស្រីសន្ធរ","Srei Santhor",[["031401","បារាយណ៍","Baray"],["031402","ជីបាល","Chi Bal"],["031403","ខ្នារស","Khnar Sa"],["031404","កោះអណ្ដែត","Kaoh Andaet"],["031405","មានជ័យ","Mean Chey"],["031406","ផ្ទះកណ្ដាល","Phteah Kandal"],["031407","ប្រាំយ៉ាម","Pram Yam"],["031408","ព្រែកដំបូក","Preaek Dambouk"],["031409","ព្រែកពោធិ","Preaek Pou"],["031410","ព្រែករំដេង","Preaek Rumdeng"],["031411","ឫស្សីស្រុក","Ruessei Srok"],["031412","ស្វាយពោធិ","Svay Pou"],["031413","ស្វាយខ្សាច់ភ្នំ","Svay Khsach Phnum"],["031414","ទងត្រឡាច","Tong Tralach"]]],["0315","ស្ទឹងត្រង់","Stueng Trang",[["031501","អារក្សត្នោត","Areaks Tnot"],["031503","ដងក្ដារ","Dang Kdar"],["031504","ខ្ពបតាងួន","Khpob Ta Nguon"],["031505","មេសរជ្រៃ","Me Sar Chrey"],["031506","អូរម្លូ","Ou Mlu"],["031507","ពាមកោះស្នា","Peam Kaoh Snar"],["031508","ព្រះអណ្ដូង","Preah Andoung"],["031509","ព្រែកបាក់","Preaek Bak"],["031510","ព្រែកកក់","Preak Kak"],["031512","សូភាស","Soupheas"],["031513","ទួលព្រះឃ្លាំង","Tuol Preah Khleang"],["031514","ទួលសំបួរ","Tuol Sambuor"]]]]],["04","កំពង់ឆ្នាំង","Kampong Chhnang",[["0401","បរិបូណ៌","Baribour",[["040101","អញ្ចាញរូង","Anhchanh Rung"],["040102","ឆ្នុកទ្រូ","Chhnok Tru"],["040103","ចក","Chak"],["040104","ខុនរ៉ង","Khon Rang"],["040105","កំពង់ព្រះគគីរ","Kampong Preah Kokir"],["040106","មេលំ","Melum"],["040107","ផ្សារ","Phsar"],["040108","ពេជចង្វារ","Pech Changvar"],["040109","ពពេល","Popel"],["040110","ពន្លៃ","Ponley"],["040111","ត្រពាំងចាន់","Trapeang Chan"]]],["0402","ជលគីរី","Chol Kiri",[["040201","ជលសា","Chol Sar"],["040202","កោះថ្កូវ","Kaoh Thkov"],["040203","កំពង់អុស","Kampong Ous"],["040204","ពាមឆ្កោក","Peam Chhkaok"],["040205","ព្រៃគ្រី","Prey Kri"]]],["0403","កំពង់ឆ្នាំង","Kampong Chhnang",[["040301","ផ្សារឆ្នាំង","Phsar Chhnang"],["040302","កំពង់ឆ្នាំង","Kampong Chhnang"],["040303","ប្អេរ","B\'er"],["040304","ខ្សាម","Khsam"]]],["0404","កំពង់លែង","Kampong Leaeng",[["040401","ច្រណូក","Chranouk"],["040402","ដារ","Dar"],["040403","កំពង់ហៅ","Kampong Hau"],["040404","ផ្លូវទូក","Phlov Tuk"],["040405","ពោធិ៍","Pou"],["040406","ប្រឡាយមាស","Pralay Meas"],["040407","សំរោងសែន","Samraong Saen"],["040408","ស្វាយរំពារ","Svay Rumpear"],["040409","ត្រងិល","Trangel"]]],["0405","កំពង់ត្រឡាច","Kampong Tralach",[["040501","អំពិលទឹក","Ampil Tuek"],["040502","ឈូកស","Chhuk Sa"],["040503","ច្រេស","Chres"],["040504","កំពង់ត្រឡាច","Kampong Tralach"],["040505","លង្វែក","Longveaek"],["040506","អូរឫស្សី","Ou Ruessei"],["040507","ពានី","Peani"],["040508","សែប","Saeb"],["040509","តាជេស","Ta Ches"],["040510","ថ្មឥដ្ឋ","Thma Edth"]]],["0406","រលាប្អៀរ","Rolea B\'ier",[["040601","អណ្ដូងស្នាយ","Andoung Snay"],["040602","បន្ទាយព្រាល","Banteay Preal"],["040603","ជើងគ្រាវ","Cheung Kreav"],["040604","ជ្រៃបាក់","Chrey Bak"],["040605","គោកបន្ទាយ","Kouk Banteay"],["040606","ក្រាំងលាវ","Krang Leav"],["040607","ពង្រ","Pongro"],["040608","ប្រស្នឹប","Prasnoeb"],["040609","ព្រៃមូល","Prey Mul"],["040610","រលាប្អៀរ","Rolea B\'ier"],["040611","ស្រែថ្មី","Srae Thmei"],["040612","ស្វាយជ្រុំ","Svay Chrum"],["040613","ទឹកហូត","Tuek Hout"],["040614","ភ្នំក្រាំងដីមាស","Phnom Kraing Dey Meas"]]],["0407","សាមគ្គីមានជ័យ","Sameakki Mean Chey",[["040701","ឈានឡើង","Chhean Laeung"],["040702","ខ្នារឆ្មារ","Khnar Chhmar"],["040703","ក្រាំងល្វា","Krang Lvea"],["040704","ពាម","Peam"],["040705","សេដ្ឋី","Sedthei"],["040706","ស្វាយ","Svay"],["040707","ស្វាយជុក","Svay Chuk"],["040708","ត្បែងខ្ពស់","Tbaeng Khpos"],["040709","ធ្លកវៀន","Thlok Vien"]]],["0408","ទឹកផុស","Tuek Phos",[["040801","អភិវឌ្ឍន៍","Akphivoadth"],["040802","ជៀប","Chieb"],["040803","ចោងម៉ោង","Chaong Maong"],["040804","ក្បាលទឹក","Kbal Tuek"],["040805","ខ្លុងពពក","Khlong Popok"],["040806","ក្រាំងស្គារ","Krang Skear"],["040807","តាំងក្រសាំង","Tang Krasang"],["040808","ទួលខ្ពស់","Tuol Khpos"],["040809","ក្តុលសែនជ័យ","Kdol Saen Chey"]]]]],["05","កំពង់ស្ពឺ","Kampong Speu",[["0501","បរសេដ្ឋ","Basedth",[["050101","បរសេដ្ឋ","Basedth"],["050102","កាត់ភ្លុក","Kat Phluk"],["050103","និទាន","Nitean"],["050104","ភក្ដី","Pheakdei"],["050105","ភារីមានជ័យ","Pheari Mean Chey"],["050106","ផុង","Phong"],["050107","ពោធិអង្ក្រង","Pou Angkrang"],["050108","ពោធិ៍ចំរើន","Pou Chamraeun"],["050109","ពោធិ៍ម្រាល","Pou Mreal"],["050110","ស្វាយចចិប","Svay Chacheb"],["050111","ទួលអំពិល","Tuol Ampil"],["050112","ទួលសាលា","Tuol Sala"],["050113","កក់","Kak"],["050114","ស្វាយរំពារ","Svay Rumpear"],["050115","ព្រះខែ","Preah Khae"]]],["0502","ច្បារមន","Chbar Mon",[["050201","ច្បារមន","Chbar Mon"],["050202","កណ្ដោលដុំ","Kandaol Dom"],["050203","រការធំ","Rokar Thum"],["050204","សុព័រទេព","Sopoar Tep"],["050205","ស្វាយក្រវ៉ាន់","Svay Kravan"]]],["0503","គងពិសី","Kong Pisei",[["050301","អង្គពពេល","Angk Popel"],["050302","ជង្រុក","Chongruk"],["050303","មហាឫស្សី","Moha Ruessei"],["050304","ពេជ្រមុនី","Pechr Muni"],["050305","ព្រះនិព្វាន","Preah Nipean"],["050306","ព្រៃញាតិ","Prey Nheat"],["050307","ព្រៃវិហារ","Prey Vihear"],["050308","រកាកោះ","Roka Kaoh"],["050309","ស្ដុក","Sdok"],["050310","ស្នំក្រពើ","Snam Krapeu"],["050311","ស្រង់","Srang"],["050312","ទឹកល្អក់","Tuek L\'ak"],["050313","វាល","Veal"]]],["0504","ឱរ៉ាល់","Aoral",[["050401","ហោងសំណំ","Haong Samnam"],["050402","រស្មីសាមគ្គី","Reaksmei Sameakki"],["050403","ត្រពាំងជោ","Trapeang Chour"],["050404","សង្កែសាទប","Sangkae Satob"],["050405","តាសាល","Ta Sal"]]],["0506","ភ្នំស្រួច","Phnum Sruoch",[["050601","ចំបក់","Chambak"],["050602","ជាំសង្កែ","Choam Sangkae"],["050603","ដំបូករូង","Dambouk Rung"],["050604","គិរីវន្ដ","Kiri Voan"],["050605","ក្រាំងដីវ៉ាយ","Krang Dei Vay"],["050606","មហាសាំង","Moha Sang"],["050607","អូរ","Ou"],["050608","ព្រៃរំដួល","Prey Rumduol"],["050609","ព្រៃក្មេង","Prey Kmeng"],["050610","តាំងសំរោង","Tang Samraong"],["050611","តាំងស្យា","Tang Sya"],["050613","ត្រែងត្រយឹង","Traeng Trayueng"],["050614","យាយម៉ៅពេជ្យនិល","Yeay Mao Pichnil"]]],["0507","សំរោងទង","Samraong Tong",[["050701","រលាំងចក","Roleang Chak"],["050702","កាហែង","Kahaeng"],["050703","ខ្ទុំក្រាំង","Khtum Krang"],["050704","ក្រាំងអំពិល","Krang Ampil"],["050705","ព្នាយ","Pneay"],["050706","រលាំងគ្រើល","Roleang Kreul"],["050707","សំរោងទង","Samrong Tong"],["050708","សំបូរ","Sambour"],["050709","សែនដី","Saen Dei"],["050710","ស្គុះ","Skuh"],["050711","តាំងក្រូច","Tang Krouch"],["050712","ធម្មតាអរ","Thummoda Ar"],["050713","ត្រពាំងគង","Trapeang Kong"],["050714","ទំព័រមាស","Tumpoar Meas"],["050715","វល្លិសរ","Voa Sar"]]],["0508","ថ្ពង","Thpong",[["050801","អមលាំង","Amleang"],["050802","មនោរម្យ","Monourom"],["050804","ប្រាំបីមុម","Prambei Mum"],["050805","រុងរឿង","Rung Roeang"],["050806","ទ័ពមាន","Toap Mean"],["050807","វាលពន់","Veal Pon"],["050808","យាអង្គ","Yea Angk"]]],["0509","ឧដុង្គម៉ែជ័យ","Odongk Maechay",[["050901","វាំងចាស់","Veang Chas"],["050902","វាលពង់","Veal Pong"],["050903","ត្រាចទង","Trach Tong"],["050904","ព្រះស្រែ","Preah Srae"],["050905","ក្សេមក្សាន្ដ","Khsem Khsant"]]],["0510","សាមគ្គីមុនីជ័យ","Samkkei Munichay",[["051001","ចាន់សែន","Chan Saen"],["051002","ជើងរាស់","Cheung Roas"],["051003","ជំពូព្រឹក្ស","Chumpu Proeks"],["051004","ក្រាំងចេក","Krang Chek"],["051005","មានជ័យ","Mean Chey"],["051006","ព្រៃក្រសាំង","Prey Krasang"],["051007","យុទ្ធសាមគ្គី","Yutth Sameakki"],["051008","ដំណាក់រាំង","Damnak Reang"],["051009","ពាំងល្វា","Peang Lvea"],["051010","ភ្នំតូច","Phnom Touch"]]]]],["06","កំពង់ធំ","Kampong Thom",[["0601","បារាយណ៍","Baray",[["060101","បាក់ស្នា","Bak Sna"],["060102","បល្ល័ង្គ","Ballangk"],["060103","បារាយណ៍","Baray"],["060104","បឹង","Boeng"],["060105","ចើងដើង","Chaeung Daeung"],["060107","ឈូកខ្សាច់","Chhuk Khsach"],["060108","ចុងដូង","Chong Doung"],["060110","គគីធំ","Kokir Thum"],["060111","ក្រវ៉ា","Krava"],["060117","ត្នោតជុំ","Tnaot Chum"]]],["0602","កំពង់ស្វាយ","Kampong Svay",[["060201","ជ័យ","Chey"],["060202","ដំរីស្លាប់","Damrei Slab"],["060203","កំពង់គោ","Kampong Kou"],["060204","កំពង់ស្វាយ","Kampong Svay"],["060205","នីពេជ","Nipech"],["060206","ផាត់សណ្ដាយ","Phat Sanday"],["060207","សាន់គ","San Kor"],["060208","ត្បែង","Tbaeng"],["060209","ត្រពាំងឫស្សី","Trapeang Ruessei"],["060210","ក្ដីដូង","Kdei Doung"],["060211","ព្រៃគុយ","Prey Kuy"]]],["0603","ស្ទឹងសែន","Stueng Saen",[["060301","ដំរីជាន់ខ្លា","Damrei Choan Khla"],["060302","កំពង់ធំ","Kampong Thum"],["060303","កំពង់រទេះ","Kampong Roteh"],["060304","អូរកន្ធរ","Ou Kanthor"],["060306","កំពង់ក្របៅ","Kampong Krabau"],["060308","ព្រៃតាហ៊ូ","Prey Ta Hu"],["060309","អាចារ្យលាក់","Achar Leak"],["060310","ស្រយ៉ូវ","Srayov"]]],["0604","ប្រាសាទបល្ល័ង្គ","Prasat Ballangk",[["060401","ដូង","Doung"],["060402","ក្រយា","Kraya"],["060403","ផាន់ញើម","Phan Nheum"],["060404","សាគ្រាម","Sakream"],["060405","សាលាវិស័យ","Sala Visai"],["060406","សាមគ្គី","Sameakki"],["060407","ទួលគ្រើល","Tuol Kreul"]]],["0605","ប្រាសាទសំបូរ","Prasat Sambour",[["060501","ឈូក","Chhuk"],["060502","គោល","Koul"],["060503","សំបូរណ៍","Sambour"],["060504","ស្រើង","Sraeung"],["060505","តាំងក្រសៅ","Tang Krasau"]]],["0606","សណ្ដាន់","Sandan",[["060601","ឈើទាល","Chheu Teal"],["060602","ដងកាំបិត","Dang Kambet"],["060603","ក្លែង","Klaeng"],["060604","មានរិទ្ធ","Mean Rith"],["060605","មានជ័យ","Mean Chey"],["060606","ងន","Ngan"],["060607","សណ្ដាន់","Sandan"],["060608","សុចិត្រ","Sochet"],["060609","ទំរីង","Tum Ring"]]],["0607","សន្ទុក","Santuk",[["060701","បឹងល្វា","Boeng Lvea"],["060702","ជ្រាប់","Chroab"],["060703","កំពង់ថ្ម","Kampong Thma"],["060704","កកោះ","Kakaoh"],["060705","ក្រយា","Kraya"],["060706","ព្នៅ","Pnov"],["060707","ប្រាសាទ","Prasat"],["060708","តាំងក្រសាំង","Tang Krasang"],["060709","ទីពោ","Ti Pou"],["060710","ត្បូងក្រពើ","Tboung Krapeu"]]],["0608","ស្ទោង","Stoung",[["060801","បន្ទាយស្ទោង","Banteay Stoung"],["060802","ចំណាក្រោម","Chamna Kraom"],["060803","ចំណាលើ","Chamna Leu"],["060804","កំពង់ចិនជើង","Kampong Chen Cheung"],["060805","កំពង់ចិនត្បូង","Kampong Chen Tboung"],["060806","ម្សាក្រង","Msa Krang"],["060807","ពាមបាង","Peam Bang"],["060808","ពពក","Popok"],["060809","ប្រឡាយ","Pralay"],["060810","ព្រះដំរី","Preah Damrei"],["060811","រុងរឿង","Rung Roeang"],["060812","សំព្រោជ","Samprouch"],["060813","ទ្រា","Trea"]]],["0609","តាំងគោក","Taing Kouk",[["060901","ពង្រ","Pongro"],["060902","ច្រនាង","Chraneang"],["060903","ជ្រលង","Chrolong"],["060904","ទ្រៀល","Triel"],["060905","សូយោង","Sou Young"],["060906","ស្រឡៅ","Sralau"],["060907","ស្វាយភ្លើង","Svay Phleung"],["060908","អណ្ដូងពោធិ៍","Andoung Pou"]]]]],["07","កំពត","Kampot",[["0701","អង្គរជ័យ","Angkor Chey",[["070101","អង្គភ្នំតូច","Angk Phnum Touch"],["070102","អង្គរជ័យ","Ankor Chey"],["070103","ចំប៉ី","Champei"],["070104","ដំបូកខ្ពស់","Dambouk Khpos"],["070105","ដានគោម","Dan Koum"],["070106","ដើមដូង","Daeum Doung"],["070107","ម្រោម","Mroum"],["070108","ភ្នំកុង","Phnum Kong"],["070109","ប្រភ្នំ","Praphnum"],["070110","សំឡាញ","Samlanh"],["070111","តានី","Tani"]]],["0702","បន្ទាយមាស","Banteay Meas",[["070201","បន្ទាយមាសខាងកើត","Banteay Meas Khang Kaeut"],["070202","បន្ទាយមាសខាងលិច","Banteay Meas Khang lech"],["070203","ព្រៃទន្លេ","Prey Tonle"],["070204","សំរោងក្រោម","Samraong Kraom"],["070205","សំរោងលើ","Samraong Leu"],["070206","ស្ដេចគង់ខាងជើង","Sdach Kong Khang Cheung"],["070207","ស្ដេចគង់ខាងលិច","Sdach Kong Khang lech"],["070208","ស្ដេចគង់ខាងត្បូង","Sdach Kong Khang Tboung"],["070209","ត្នោតចុងស្រង់","Tnoat Chong Srang"],["070210","ត្រពាំងសាលាខាងកើត","Trapeang Sala Khang Kaeut"],["070211","ត្រពាំងសាលាខាងលិច","Trapeang Sala Khang Lech"],["070212","ទូកមាសខាងកើត","Tuk Meas Khang Kaeut"],["070213","ទូកមាសខាងលិច","Tuk Meas Khang Lech"],["070214","វត្ដអង្គខាងជើង","Voat Angk Khang Cheung"],["070215","វត្ដអង្គខាងត្បូង","Voat Angk Khang Tboung"]]],["0703","ឈូក","Chhuk",[["070301","បានៀវ","Baniev"],["070302","តាកែន","Takaen"],["070303","បឹងនិមល","Boeng Nimol"],["070304","ឈូក","Chhuk"],["070305","ដូនយ៉យ","Doun Yay"],["070306","ក្រាំងស្បូវ","Krang Sbov"],["070307","ក្រាំងស្នាយ","Krang Snay"],["070308","ល្បើក","Lbaeuk"],["070309","ត្រពាំងភ្លាំង","Trapeang Phleang"],["070310","មានជ័យ","Mean Chey"],["070311","នារាយណ៍","Neareay"],["070312","សត្វពង","Satv Pong"],["070313","ត្រពាំងបី","Trapeang Bei"],["070314","ត្រមែង","Tramaeng"],["070315","តេជោអភិវឌ្ឍន៍","Dechou Akphivoadth"]]],["0704","ជុំគិរី","Chum Kiri",[["070401","ច្រេស","Chres"],["070402","ជំពូវន្ដ","Chumpu Voan"],["070403","ស្នាយអញ្ជិត","Snay Anhchit"],["070404","ស្រែចែង","Srae Chaeng"],["070405","ស្រែក្នុង","Srae Knong"],["070406","ស្រែសំរោង","Srae Samraong"],["070407","ត្រពាំងរាំង","Trapeang Reang"]]],["0705","ដងទង់","Dang Tong",[["070501","ដំណាក់សុក្រំ","Damnak Sokram"],["070502","ដងទង់","Dang Tong"],["070503","ឃ្ជាយខាងជើង","Khcheay Khang Cheung"],["070504","ខ្ជាយខាងត្បូង","Khcheay Khang Tboung"],["070505","មានរិទ្ធិ","Mean Ritth"],["070506","ស្រែជាខាងជើង","Srae Chea Khang Cheung"],["070507","ស្រែជាខាងត្បូង","Srae Chea Khang Tboung"],["070508","ទទុង","Totung"],["070509","អង្គ រមាស","Angk  Romeas"],["070510","ល្អាង","L\'ang"]]],["0706","កំពង់ត្រាច","Kampong Trach",[["070601","បឹងសាលាខាងជើង","Boeng Sala Khang Cheung"],["070602","បឹងសាលាខាងត្បូង","Boeng Sala Khang Tboung"],["070603","ដំណាក់កន្ទួតខាងជើង","Damnak Kantuot Khang Cheung"],["070604","ដំណាក់កន្ទួតខាងត្បូង","Damnak Kantuot Khang Tboung"],["070605","កំពង់ត្រាចខាងកើត","Kampong Trach Khang Kaeut"],["070606","កំពង់ត្រាចខាងលិច","Kampong Trach Khang Lech"],["070607","ប្រាសាទភ្នំខ្យង","Prasat Phnom Khyang"],["070608","ភ្នំប្រាសាទ","Phnom Prasat"],["070609","អង្គសុរភី","Ang Sophy"],["070612","ព្រែកក្រឹស","Preaek Kroes"],["070613","ឫស្សីស្រុកខាងកើត","Ruessei Srok Khang Kaeut"],["070614","ឫស្សីស្រុកខាងលិច","Ruessei Srok Khang Lech"],["070615","ស្វាយទងខាងជើង","Svay Tong Khang Cheung"],["070616","ស្វាយទងខាងត្បូង","Svay Tong Khang Tboung"]]],["0707","ទឹកឈូ","Tuek Chhou",[["070702","ជុំគ្រៀល","Chum Kriel"],["070703","កំពង់ក្រែង","Kampong Kraeng"],["070704","កំពង់សំរោង","Kampong Samraong"],["070705","កណ្ដោល","Kandaol"],["070708","កូនសត្វ","Koun Satv"],["070709","ម៉ាក់ប្រាង្គ","Makprang"],["070712","ព្រៃឃ្មុំ","Prey Khmum"],["070713","ព្រៃថ្នង","Prey Thnang"],["070715","ស្ទឹងកែវ","Stueng Kaev"],["070716","ថ្មី","Thmei"],["070717","ត្រពាំងព្រីង","Trapeang Pring"],["070718","ត្រពាំងសង្កែ","Trapeang Sangkae"],["070719","ត្រពាំងធំ","Trapeang Thum"]]],["0708","កំពត","Kampot",[["070801","កំពង់កណ្ដាល","Kampong Kandal"],["070802","ក្រាំងអំពិល","Krang Ampil"],["070803","កំពង់បាយ","Kampong Bay"],["070804","អណ្ដូងខ្មែរ","Andoung Khmer"],["070805","ត្រើយកោះ","Traeuy Kaoh"]]],["0709","បូកគោ","Bokor",[["070901","បឹងទូក","Boeng Tuk"],["070902","កោះតូច","Kaoh Touch"],["070903","ព្រែកត្នោត","Preaek Tnoat"]]]]],["08","កណ្តាល","Kandal",[["0801","កណ្ដាលស្ទឹង","Kandal Stueng",[["080101","អំពៅព្រៃ","Ampov Prey"],["080102","អន្លង់រមៀត","Anlong Romiet"],["080103","បារគូ","Barku"],["080104","បឹងខ្យាង","Boeng Khyang"],["080105","ជើងកើប","Cheung Kaeub"],["080106","ដើមឫស","Daeum Rues"],["080107","កណ្ដោក","Kandaok"],["080108","ថ្មី","Thmei"],["080109","គោកត្រប់","Kouk Trab"],["080113","ព្រះពុទ្ធ","Preah Putth"],["080115","ព្រែករកា","Preaek Roka"],["080116","ព្រែកស្លែង","Preaek Slaeng"],["080117","រកា","Roka"],["080118","រលាំងកែន","Roleang Kaen"],["080122","សៀមរាប","Siem Reab"],["080125","ត្បែង","Tbaeng"],["080127","ត្រពាំងវែង","Trapeang Veaeng"],["080128","ទ្រា","Trea"]]],["0802","កៀនស្វាយ","Kien Svay",[["080201","បន្ទាយដែក","Banteay Daek"],["080202","ឈើទាល","Chheu Teal"],["080203","ដីឥដ្ឋ","Dei Edth"],["080204","កំពង់ស្វាយ","Kampong Svay"],["080206","គគីរ","Kokir"],["080207","គគីរធំ","Kokir Thum"],["080208","ភូមិធំ","Phum Thum"],["080211","សំរោងធំ","Samraong Thum"]]],["0803","ខ្សាច់កណ្ដាល","Khsach Kandal",[["080302","ជ័យធំ","Chey Thum"],["080303","កំពង់ចំលង","Kampong Chamlang"],["080304","កោះចូរ៉ាម","Kaoh Chouram"],["080306","ព្រះប្រសប់","Preah Prasab"],["080310","ព្រែកតាមាក់","Preaek Ta Meak"],["080311","ពុកឫស្សី","Puk Ruessei"],["080312","រកាជន្លឹង","Roka Chonlueng"],["080313","សន្លុង","Sanlung"],["080314","ស៊ីធរ","Sithor"],["080316","ស្វាយរមៀត","Svay Romiet"],["080317","តាឯក","Ta Aek"],["080318","វិហារសួគ៌","Vihear Suork"]]],["0804","កោះធំ","Kaoh Thum",[["080403","កំពង់កុង","Kampong Kong"],["080404","កោះធំ ‹ក›","Kaoh Thum Ka"],["080405","កោះធំ ‹ខ›","Kaoh Thum Kha"],["080407","លើកដែក","Leuk Daek"],["080408","ពោធិ៍បាន","Pouthi Ban"],["080411","ព្រែកថ្មី","Preaek Thmei"]]],["0805","លើកដែក","Leuk Daek",[["080501","កំពង់ភ្នំ","Kampong Phnum"],["080502","ក្អមសំណរ","K\'am Samnar"],["080503","ខ្ពបអាទាវ","Khpob Ateav"],["080504","ពាមរាំង","Peam Reang"],["080505","ព្រែកដាច់","Preaek Dach"],["080506","ព្រែកទន្លាប់","Preaek Tonloab"],["080507","សណ្ដារ","Sandar"]]],["0806","ល្វាឯម","Lvea Aem",[["080603","បឹងគ្រំ","Boeng Krum"],["080604","កោះកែវ","Kaoh Kaev"],["080605","កោះរះ","Kaoh Reah"],["080606","ល្វាសរ","Lvea Sar"],["080608","ភូមិធំ","Phum Thum"],["080610","ព្រែករៃ","Preaek Rey"],["080611","ព្រែកឫស្សី","Preaek Ruessei"],["080612","សំបួរ","Sambuor"],["080614","ថ្មគរ","Thma Kor"],["080615","ទឹកឃ្លាំង","Tuek Khleang"]]],["0807","មុខកំពូល","Mukh Kampul",[["080703","ព្រែកអញ្ចាញ","Preaek Anhchanh"],["080704","ព្រែកដំបង","Preaek Dambang"],["080707","រកាកោង ទី ១","Roka Kong Ti Muoy"],["080708","រកាកោង ទី ២","Roka Kong Ti Pir"],["080709","ឫស្សីជ្រោយ","Ruessei Chrouy"],["080710","សំបួរមាស","Sambuor Meas"],["080711","ស្វាយអំពារ","Svay Ampear"]]],["0808","អង្គស្នួល","Angk Snuol",[["080801","បែកចាន","Baek Chan"],["080803","ឆក់ឈើនាង","Chhak Chheu Neang"],["080804","ដំណាក់អំពិល","Damnak Ampil"],["080807","ក្រាំងម្កាក់","Krang Mkak"],["080808","លំហាច","Lumhach"],["080809","ម្កាក់","Mkak"],["080811","ពើក","Peuk"],["080813","ព្រៃពួច","Prey Puoch"],["080814","សំរោងលើ","Samraong Leu"],["080816","ទួលព្រេជ","Tuol Prech"]]],["0809","ពញាឮ","Ponhea Lueu",[["080901","ឈ្វាំង","Chhveang"],["080902","ជ្រៃលាស់","Chrey Loas"],["080903","កំពង់ហ្លួង","Kampong Luong"],["080904","កំពង់អុស","Kampong Os"],["080905","កោះចិន","Kaoh Chen"],["080906","ភ្នំបាត","Phnum Bat"],["080907","ពញាឮ","Ponhea Lueu"],["080910","ព្រែកតាទែន","Preaek Ta Teaen"],["080911","ផ្សារដែក","Phsar Daek"],["080913","ទំនប់ធំ","Tumnob Thum"],["080914","វិហារហ្លួង","Vihear Luong"]]],["0810","ស្អាង","S\'ang",[["081001","ខ្ពប","Khpob"],["081003","កោះខែល","Kaoh Khael"],["081004","កោះខ្សាច់ទន្លា","Kaoh Khsach Tonlea"],["081005","ក្រាំងយ៉ូវ","Krang Yov"],["081006","ប្រាសាទ","Prasat"],["081007","ព្រែកអំបិល","Preaek Ambel"],["081008","ព្រែកគយ","Preaek Koy"],["081010","ស្អាងភ្នំ","S\'ang Phnum"],["081012","ស្វាយប្រទាល","Svay Prateal"],["081014","តាលន់","Ta Lon"],["081015","ត្រើយស្លា","Traeuy Sla"],["081016","ទឹកវិល","Tuek Vil"]]],["0811","តាខ្មៅ","Ta Khmau",[["081101","តាក្ដុល","Ta Kdol"],["081102","ព្រែកឫស្សី","Prek Ruessey"],["081103","ដើមមៀន","Doeum Mien"],["081104","តាខ្មៅ","Ta Khmao"],["081105","ព្រែកហូរ","Prek Ho"],["081106","កំពង់សំណាញ់","Kampong Samnanh"],["081107","ស្វាយរលំ","Svay Rolum"],["081108","កោះអន្លង់ចិន","Kaoh Anlong Chen"],["081109","សិត្បូ","Setbou"],["081110","រកាខ្ពស់","Roka Khpos"]]],["0812","សំពៅពូន","Sampeou Poun",[["081201","ឈើខ្មៅ","Chheu Kmau"],["081202","ព្រែកជ្រៃ","Prea​ek Chrey"],["081203","ព្រែកស្ដី","Preaek Sdei"],["081204","ជ្រោយតាកែវ","Chrouy Ta Kaev"],["081205","សំពៅពូន","Sampeou Poun"]]],["0813","អរិយក្សត្រ","Akreiy Ksatr",[["081301","បាក់ដាវ","Bak Dav"],["081302","កោះឧកញ៉ាតី","Kaoh Oknha Tei"],["081303","ព្រែកអំពិល","Preaek Ampil"],["081304","ព្រែកលួង","Preaek Luong"],["081305","ព្រែកតាកូវ","Preaek Ta kov"],["081306","ស្វាយជ្រំ","Svay Chrum"],["081307","អរិយក្សត្រ","Akreiy Ksatr"],["081308","សារិកាកែវ","Sarikakaev"],["081309","ពាមឧកញ៉ាអុង","Peam Oknha Ong"],["081310","ព្រែកក្មេង","Preaek Kmeng"],["081311","បារុង","Barong"]]]]],["09","កោះកុង","Koh Kong",[["0901","បុទុមសាគរ","Botum Sakor",[["090101","អណ្ដូងទឹក","Andoung Tuek"],["090102","កណ្ដោល","Kandaol"],["090103","តានូន","Ta Noun"],["090104","ថ្មស","Thma Sa"]]],["0902","គិរីសាគរ","Kiri Sakor",[["090201","កោះស្ដេច","Kaoh Sdach"],["090202","ភ្ញីមាស","Phnhi Meas"],["090203","ព្រែកខ្សាច់","Preaek Khsach"]]],["0903","កោះកុង","Kaoh Kong",[["090301","ជ្រោយប្រស់","Chrouy Pras"],["090302","កោះកាពិ","Kaoh Kapi"],["090303","តាតៃក្រោម","Ta Tai Kraom"],["090304","ត្រពាំងរូង","Trapeang Rung"]]],["0904","ខេមរភូមិន្ទ","Khemara Phoumin",[["090401","ស្មាច់មានជ័យ","Smach Mean Chey"],["090402","ដងទង់","Dang Tong"],["090403","ស្ទឹងវែង","Stueng Veaeng"]]],["0905","មណ្ឌលសីមា","Mondol Seima",[["090501","ប៉ាក់ខ្លង","Pak Khlang"],["090502","ពាមក្រសោប","Peam Krasaob"],["090503","ទួលគគីរ","Tuol Kokir"]]],["0906","ស្រែ អំបិល","Srae Ambel",[["090601","បឹងព្រាវ","Boeng Preav"],["090602","ជី ខ ក្រោម","Chi Kha Kraom"],["090603","ជី ខ លើ","Chi kha Leu"],["090604","ជ្រោយស្វាយ","Chrouy Svay"],["090605","ដងពែង","Dang Peaeng"],["090606","ស្រែអំបិល","Srae Ambel"]]],["0907","ថ្មបាំង","Thma Bang",[["090701","តាទៃលើ","Ta Tey Leu"],["090702","ប្រឡាយ","Pralay"],["090703","ជំនាប់","Chumnoab"],["090704","ឫស្សីជ្រុំ","Ruessei Chrum"],["090705","ជីផាត","Chi Phat"],["090706","ថ្មដូនពៅ","Thma Doun Pov"]]]]],["10","ក្រចេះ","Kratie",[["1001","ឆ្លូង","Chhloung",[["100101","ឆ្លូង","Chhloung"],["100102","ដំរីផុង","Damrei Phong"],["100103","ហាន់ជ័យ","Han Chey"],["100104","កំពង់ដំរី","Kampong Damrei"],["100105","កញ្ជរ","Kanhchor"],["100106","ខ្សាច់អណ្ដែត","Khsach Andeth"],["100107","ពង្រ","Pongro"],["100108","ព្រែកសាម៉ាន់","Preaek Saman"]]],["1002","ក្រចេះ","Kracheh",[["100207","កោះទ្រង់","Kaoh Trong"],["100208","ក្រគរ","Krakor"],["100209","ក្រចេះ","Kracheh"],["100210","អូរឫស្សី","Ou Ruessei"],["100211","រកាកណ្ដាល","Roka Kandal"]]],["1003","ព្រែកប្រសព្វ","Prek Prasab",[["100301","ចំបក់","Chambâk"],["100302","ជ្រោយបន្ទាយ","Chrouy Banteay"],["100303","កំពង់គរ","Kampong Kor"],["100304","កោះតាស៊ុយ","Koh Ta Suy"],["100305","ព្រែកប្រសព្វ","Preaek Prasab"],["100306","ឫស្សីកែវ","Russey Keo"],["100307","សោប","Saob"],["100308","តាម៉ៅ","Ta Mao"]]],["1004","សំបូរ","Sambour",[["100401","បឹងចារ","Boeng Char"],["100402","កំពង់ចាម","Kampong Cham"],["100404","កោះខ្ញែរ","Kaoh Khnhaer"],["100407","សំបូរ","Sambour"],["100408","សណ្ដាន់","Sandan"],["100410","វឌ្ឍនៈ","Voadthonak"]]],["1005","ស្នួល","Snuol",[["100501","ឃ្សឹម","Khsuem"],["100502","ពីរធ្នូ","Pir Thnu"],["100503","ស្នួល","Snuol"],["100504","ស្រែចារ","Srae Char"],["100505","ស្វាយជ្រះ","Svay Chreah"],["100506","គ្រញូងសែនជ័យ","Kronhoung Saen Chey"]]],["1006","ចិត្របុរី","Chetr Borei",[["100601","បុសលាវ","Bos Leav"],["100602","ចង្ក្រង់","Changkrang"],["100603","ដារ","Dar"],["100604","កន្ទួត","Kantuot"],["100605","គោលាប់","Kou Loab"],["100606","កោះច្រែង","Kaoh Chraeng"],["100607","សំបុក","Sambok"],["100608","ថ្មអណ្ដើក","Thma Andaeuk"],["100609","ថ្មគ្រែ","Thma Kreae"],["100610","ថ្មី","Thmei"]]],["1007","អូរគ្រៀងសែនជ័យ","Ou Krieng Saenchey",[["100701","ក្បាលដំរី","Kbal Damrei"],["100702","អូរគ្រៀង","Ou Krieng"],["100703","អូរកណ្តៀរសែនជ័យ","Oukondear Senchey"],["100704","រលួសមានជ័យ","Roluos Mean Chey"],["100705","ស្រែជិះ","Srae Chis"]]]]],["11","មណ្ឌលគិរី","Mondul Kiri",[["1101","កែវសីមា","Kaev Seima",[["110101","ចុងផ្លាស់","Chong Phlah"],["110102","មេម៉ង់","Memang"],["110103","ស្រែឈូក","Srae Chhuk"],["110104","ស្រែខ្ទុម","Srae Khtum"],["110105","ស្រែព្រះ","Srae Preah"]]],["1102","កោះញែក","Kaoh Nheaek",[["110201","ណងឃីលិក","Nang Khi Lik"],["110202","អ បួនលើ","A Buon Leu"],["110203","រយ៉","Roya"],["110204","សុខសាន្ដ","Sokh Sant"],["110205","ស្រែហ៊ុយ","Srae Huy"],["110206","ស្រែសង្គម","Srae Sangkum"]]],["1103","អូររាំង","Ou Reang",[["110301","ដាក់ដាំ","Dak Dam"],["110302","សែនមនោរម្យ","Saen Monourom"]]],["1104","ពេជ្រាដា","Pech Chreada",[["110401","ក្រង់តេះ","Krang Teh"],["110402","ពូជ្រៃ","Pu Chrey"],["110403","ស្រែអំពូម","Srae Ampum"],["110404","ប៊ូស្រា","Bu Sra"]]],["1105","សែនមនោរម្យ","Saen Monourom",[["110501","មនោរម្យ","Monourom"],["110502","សុខដុម","Sokh Dom"],["110503","ស្ពានមានជ័យ","Spean Mean Chey"],["110504","រមនា","Romonea"]]]]],["12","រាជធានីភ្នំពេញ","Phnom Penh",[["1201","ចំការមន","Chamkar Mon",[["120101","ទន្លេបាសាក់","Tonle Basak"],["120109","ទួលទំពូងទី ២","Tuol Tumpung Ti Pir"],["120110","ទួលទំពូងទី ១","Tuol Tumpung Ti Muoy"],["120111","បឹងត្របែក","Boeng Trabaek"],["120112","ផ្សារដើមថ្កូវ","Phsar Daeum Thkov"]]],["1202","ដូនពេញ","Doun Penh",[["120201","ផ្សារថ្មីទី ១","Phsar Thmei Ti Muoy"],["120202","ផ្សារថ្មីទី ២","Phsar Thmei Ti Pir"],["120203","ផ្សារថ្មីទី ៣","Phsar Thmei Ti Bei"],["120204","បឹងរាំង","Boeng Reang"],["120205","ផ្សារកណ្ដាលទី១","Phsar Kandal Ti Muoy"],["120206","ផ្សារកណ្ដាលទី២","Phsar Kandal Ti Pir"],["120207","ចតុមុខ","Chakto Mukh"],["120208","ជ័យជំនះ","Chey Chummeah"],["120209","ផ្សារចាស់","Phsar Chas"],["120210","ស្រះចក","Srah Chak"],["120211","វត្ដភ្នំ","Voat Phnum"]]],["1203","៧មករា","Prampir Meakkakra",[["120301","អូរឫស្សីទី ១","Ou Ruessei Ti Muoy"],["120302","អូរឫស្សីទី ២","Ou Ruessei Ti Pir"],["120303","អូរឫស្សីទី ៣","Ou Ruessei Ti Bei"],["120304","អូរឫស្សីទី ៤","Ou Ruessei Ti Buon"],["120305","មនោរម្យ","Monourom"],["120306","មិត្ដភាព","Mittapheap"],["120307","វាលវង់","Veal Vong"],["120308","បឹងព្រលឹត","Boeng Proluet"]]],["1204","ទួលគោក","Tuol Kouk",[["120401","ផ្សារដេប៉ូទី ១","Phsar Depou Ti Muoy"],["120402","ផ្សារដេប៉ូទី ២","Phsar Depou Ti Pir"],["120403","ផ្សារដេប៉ូទី ៣","Phsar Depou Ti Bei"],["120404","ទឹកល្អក់ទី ១","Tuek L\'ak Ti Muoy"],["120405","ទឹកល្អក់ទី ២","Tuek L\'ak Ti Pir"],["120406","ទឹកល្អក់ទី ៣","Tuek L\'ak Ti Bei"],["120407","បឹងកក់ទី ១","Boeng Kak Ti Muoy"],["120408","បឹងកក់ទី ២","Boeng Kak Ti Pir"],["120409","ផ្សារដើមគរ","Phsar Daeum Kor"],["120410","បឹងសាឡាង","Boeng Salang"]]],["1205","ដង្កោ","Dangkao",[["120501","ដង្កោ","Dangkao"],["120507","ពងទឹក","Pong Tuek"],["120508","ព្រៃវែង","Prey Veaeng"],["120510","ព្រៃស","Prey Sa"],["120512","ក្រាំងពង្រ","Krang Pongro"],["120514","សាក់សំពៅ","Sak Sampov"],["120515","ជើងឯក","Cheung Aek"],["120516","គងនយ","Kong Noy"],["120517","ព្រែកកំពឹស","Preaek Kampues"],["120518","រលួស","Roluos"],["120519","ស្ពានថ្ម","Spean Thma"],["120520","ទៀន","Tien"]]],["1206","មានជ័យ","Mean Chey",[["120606","ចាក់អង្រែលើ","Chak Angrae Leu"],["120607","ចាក់អង្រែក្រោម","Chak Angrae Kraom"],["120608","ស្ទឹងមានជ័យទី១","Stueng Mean chey 1"],["120609","ស្ទឹងមានជ័យទី២","Stueng Mean chey 2"],["120610","ស្ទឹងមានជ័យទី៣","Stueng Mean chey 3"],["120611","បឹងទំពុនទី១","Boeng Tumpun 1"],["120612","បឹងទំពុនទី២","Boeng Tumpun 2"]]],["1207","ឫស្សីកែវ","Russey Keo",[["120703","ស្វាយប៉ាក","Svay Pak"],["120704","គីឡូម៉ែត្រលេខ៦","Kilomaetr Lekh Prammuoy"],["120706","ឫស្សីកែវ","Ruessei Kaev"],["120711","ច្រាំងចំរេះទី ១","Chrang Chamreh Ti Muoy"],["120712","ច្រាំងចំរេះទី ២","Chrang Chamreh Ti Pir"],["120713","ទួលសង្កែទី១","Tuol Sangkae 1"],["120714","ទួលសង្កែទី២","Tuol Sangkae 2"]]],["1208","សែនសុខ","Sensok",[["120801","ភ្នំពេញថ្មី","Phnom Penh Thmei"],["120802","ទឹកថ្លា","Tuek Thla"],["120803","ឃ្មួញ","Khmuonh"],["120807","ក្រាំងធ្នង់","Krang Thnong"],["120808","អូរបែកក្អម","Ou Baek K\'am"],["120809","គោកឃ្លាង","Kouk Khleang"]]],["1209","ពោធិ៍សែនជ័យ","Pur SenChey",[["120901","ត្រពាំងក្រសាំង","Trapeang Krasang"],["120906","សំរោងក្រោម","Samraong Kraom"],["120914","ចោមចៅទី១","Chaom Chau 1"],["120915","ចោមចៅទី២","Chaom Chau 2"],["120916","ចោមចៅទី៣","Chaom Chau 3"],["120917","កាកាបទី១","Kakab 1"],["120918","កាកាបទី២","Kakab 2"]]],["1210","ជ្រោយចង្វារ","Chrouy Changvar",[["121001","ជ្រោយចង្វារ","Chrouy Changvar"],["121002","ព្រែកលៀប","Preaek Lieb"],["121003","ព្រែកតាសេក","Preaek Ta Sek"],["121004","កោះដាច់","Kaoh Dach"],["121005","បាក់ខែង","Bak Kaeng"]]],["1211","ព្រែកព្នៅ","Praek Pnov",[["121101","ព្រែកព្នៅ","Preaek Phnov"],["121102","ពញាពន់","Ponhea Pon"],["121103","សំរោង","Samraong"],["121104","គោករកា","Kouk Roka"],["121105","ពន្សាំង","Ponsang"]]],["1212","ច្បារអំពៅ","Chbar Ampov",[["121201","ច្បារអំពៅទី ១","Chhbar Ampov Ti Muoy"],["121202","ច្បារអំពៅទី ២","Chbar Ampov Ti Pir"],["121203","និរោធ","Nirouth"],["121204","ព្រែកប្រា","Preaek Pra"],["121205","វាលស្បូវ","Veal Sbov"],["121206","ព្រែកឯង","Preaek Aeng"],["121207","ក្បាលកោះ","Kbal Kaoh"],["121208","ព្រែកថ្មី","Preaek Thmei"]]],["1213","បឹងកេងកង","Boeng Keng Kang",[["121301","បឹងកេងកងទី ១","Boeng Keng Kang Ti Muoy"],["121302","បឹងកេងកងទី ២","Boeng Keng Kang Ti Pir"],["121303","បឹងកេងកងទី ៣","Boeng Keng Kang Ti Bei"],["121304","អូឡាំពិក","Olympic"],["121305","ទំនប់ទឹក","Tumnob Tuek"],["121306","ទួលស្វាយព្រៃទី ១","Tuol Svay Prey Ti Muoy"],["121307","ទួលស្វាយព្រៃទី ២","Tuol Svay Prey Ti Pir"]]],["1214","កំបូល","Kamboul",[["121401","កំបូល","Kamboul"],["121402","កន្ទោក","Kantaok"],["121403","ឪឡោក","Ovlaok"],["121404","ស្នោរ","Snaor"],["121405","ភ្លើងឆេះរទេះ","Phleung Chheh Roteh"],["121406","បឹងធំ","Boeng Thum"],["121407","ប្រទះឡាង","Prateah Lang"]]]]],["13","ព្រះវិហារ","Preah Vihear",[["1301","ជ័យសែន","Chey Saen",[["130101","ស្អាង","S\'ang"],["130102","តស៊ូ","Tasu"],["130103","ខ្យង","Khyang"],["130104","ច្រាច់","Chrach"],["130105","ធ្មា","Thmea"],["130106","ពុទ្រា","Putrea"]]],["1302","ឆែប","Chhaeb",[["130201","ឆែបមួយ","Chhaeb Muoy"],["130202","ឆែបពីរ","Chhaeb Pir"],["130203","សង្កែមួយ","Sangkae Muoy"],["130204","សង្កែពីរ","Sangkae Pir"],["130205","ម្លូព្រៃមួយ","Mlu Prey Muoy"],["130206","ម្លូព្រៃពីរ","Mlu Prey Pir"],["130207","កំពង់ស្រឡៅមួយ","Kampong Sralau Muoy"],["130208","កំពង់ស្រឡៅពីរ","Kampong Sralau Pir"]]],["1303","ជាំក្សាន្ដ","Choam Ksant",[["130301","ជាំក្សាន្ដ","Choam Ksant"],["130302","ទឹកក្រហម","Tuek Kraham"],["130303","ព្រីងធំ","Pring Thum"],["130304","រំដោះស្រែ","Rumdaoh Srae"],["130305","យាង","Yeang"],["130306","កន្ទួត","Kantuot"],["130307","ស្រអែម","Sror Aem"],["130308","មរកត","Morokot"]]],["1304","គូលែន","Kuleaen",[["130401","គូលែនត្បូង","Kuleaen Tboung"],["130402","គូលែនជើង","Kuleaen Cheung"],["130403","ថ្មី","Thmei"],["130404","ភ្នំពេញ","Phnum Penh"],["130405","ភ្នំត្បែងពីរ","Phnum Tbaeng Pir"],["130406","ស្រយង់","Srayang"]]],["1305","រវៀង","Rovieng",[["130501","របៀប","Robieb"],["130502","រស្មី","Reaksmei"],["130503","រហ័ស","Rohas"],["130504","រុងរឿង","Rung Roeang"],["130505","រីករាយ","Rik Reay"],["130506","រួសរាន់","Ruos Roan"],["130507","រតនៈ","Rotanak"],["130508","រៀបរយ","Rieb Roy"],["130509","រក្សា","Reaksa"],["130510","រំដោះ","Rumdaoh"],["130511","រមទម","Romtum"],["130512","រមណីយ","Romoneiy"]]],["1306","សង្គមថ្មី","Sangkum Thmei",[["130601","ចំរើន","Chamraeun"],["130602","រអាង","Ro\'ang"],["130603","ភ្នំត្បែងមួយ","Phnum Tbaeng Muoy"],["130604","ស្ដៅ","Sdau"],["130605","រណសិរ្ស","Ronak Ser"]]],["1307","ត្បែងមានជ័យ","Tbaeng Mean Chey",[["130703","ឈានមុខ","Chhean Mukh"],["130704","ពោធិ៍","Pou"],["130705","ប្រមេរុ","Prame"],["130706","ព្រះឃ្លាំង","Preah Khleang"]]],["1308","ព្រះវិហារ","Preah Vihear",[["130801","កំពង់ប្រណាក","Kampong Pranak"],["130802","ប៉ាលហាល","Pal Hal"]]]]],["14","ព្រៃវែង","Prey Veng",[["1401","បាភ្នំ","Ba Phnum",[["140101","បឹងព្រះ","Boeng Preah"],["140102","ជើងភ្នំ","Cheung Phnum"],["140103","ឈើកាច់","Chheu Kach"],["140104","រក្សជ័យ","Reaks Chey"],["140105","រោងដំរី","Roung Damrei"],["140106","ស្ដៅកោង","Sdau Kaong"],["140107","ស្ពឺ  ក","Spueu Ka"],["140108","ស្ពឺ  ខ","Spueu Kha"],["140109","ធាយ","Theay"]]],["1402","កំចាយមារ","Kamchay Mear",[["140201","ជាច","Cheach"],["140202","ដូនកឹង","Doun Koeng"],["140203","ក្រញូង","Kranhung"],["140204","ក្របៅ","Krabau"],["140205","ស៊ាងឃ្វាង","Seang Khveang"],["140206","ស្មោងខាងជើង","Smaong Khang Cheung"],["140207","ស្មោងខាងត្បូង","Smaong Khang Tboung"],["140208","ត្របែក","Trabaek"]]],["1403","កំពង់ត្របែក","Kampong Trabaek",[["140301","អន្សោង","Ansaong"],["140302","ចាម","Cham"],["140303","ជាងដែក","Cheang Daek"],["140304","ជ្រៃ","Chrey"],["140305","កន្សោមអក","Kansoam Ak"],["140306","គោខ្ចក","Kou Khchak"],["140307","កំពង់ត្របែក","Kampong Trabaek"],["140308","ពាមមន្ទារ","Peam Montear"],["140309","ប្រាសាទ","Prasat"],["140310","ប្រធាតុ","Pratheat"],["140311","ព្រៃឈរ","Prey Chhor"],["140312","ព្រៃពោន","Prey Poun"],["140313","ថ្កូវ","Thkov"]]],["1404","កញ្ជ្រៀច","Kanhchriech",[["140401","ចុងអំពិល","Chong Ampil"],["140402","កញ្ជ្រៀច","Kanhchriech"],["140403","ក្ដឿងរាយ","Kdoeang Reay"],["140404","គោកគង់កើត","Kouk Kong Kaeut"],["140405","គោកគង់លិច","Kouk Kong Lech"],["140406","ព្រាល","Preal"],["140407","ថ្មពូន","Thma Pun"],["140408","ត្នោត","Tnaot"]]],["1405","មេសាង","Me Sang",[["140501","អង្គរសរ","Angkor Sar"],["140502","ច្រេស","Chres"],["140503","ជីផុច","Chi Phoch"],["140504","ព្រៃឃ្នេស","Prey Khnes"],["140505","ព្រៃរំដេង","Prey Rumdeng"],["140506","ព្រៃទទឹង","Prey Totueng"],["140507","ស្វាយជ្រុំ","Svay Chrum"],["140508","ត្រពាំងស្រែ","Trapeang Srae"]]],["1406","ពាមជរ","Peam Chor",[["140601","អង្គរអង្គ","Angkor Angk"],["140602","កំពង់ប្រាសាទ","Kampong Prasat"],["140603","កោះចេក","Kaoh Chek"],["140604","កោះរកា","Kaoh Roka"],["140605","កោះសំពៅ","Kaoh Sampov"],["140606","ក្រាំងតាយ៉ង","Krang Ta Yang"],["140607","ព្រែកក្របៅ","Preaek Krabau"],["140608","ព្រែកសំបួរ","Preaek Sambuor"],["140609","ឫស្សីស្រុក","Ruessei Srok"],["140610","ស្វាយភ្លោះ","Svay Phluoh"]]],["1407","ពាមរក៍","Peam Ro",[["140701","បាបោង","Ba Baong"],["140702","បន្លិចប្រាសាទ","Banlich Prasat"],["140703","អ្នកលឿង","Neak Loeang"],["140704","ពាមមានជ័យ","Peam Mean Chey"],["140705","ពាមរក៍","Peam Ro"],["140706","ព្រែកខ្សាយ ក","Preaek Khsay Ka"],["140707","ព្រែកខ្សាយ ខ","Preaek Khsay Kha"],["140708","ព្រៃកណ្ដៀង","Prey Kandieng"]]],["1408","ពារាំង","Pea Reang",[["140801","កំពង់ពពិល","Kampong Popil"],["140802","កញ្ចំ","Kanhcham"],["140803","កំពង់ប្រាំង","Kampong Prang"],["140805","មេសរប្រចាន់","Mesar Prachan"],["140807","ព្រៃព្នៅ","Prey Pnov"],["140808","ព្រៃស្នៀត","Prey Sniet"],["140809","ព្រៃស្រឡិត","Prey Sralet"],["140810","រាប","Reab"],["140811","រកា","Roka"]]],["1409","ព្រះស្ដេច","Preah Sdach",[["140901","អង្គររាជ្យ","Angkor Reach"],["140902","បន្ទាយចក្រី","Banteay Chakrei"],["140903","បឹងដោល","Boeng Daol"],["140904","ជៃកំពក","Chey Kampok"],["140905","កំពង់សឹង","Kampong Soeng"],["140906","ក្រាំងស្វាយ","Krang Svay"],["140907","ល្វា","Lvea"],["140908","ព្រះស្ដេច","Preah Sdach"],["140909","រាធរ","Reathor"],["140910","រំចេក","Rumchek"],["140911","សេនារាជឧត្ដម","Sena Reach Otdam"]]],["1410","ព្រៃវែង","Prey Veng",[["141001","បារាយណ៍","Baray"],["141002","ជើងទឹក","Cheung Tuek"],["141003","កំពង់លាវ","Kampong Leav"],["141004","តាកោ","Ta Kao"]]],["1411","ពោធិ៍រៀង","Pur Rieng",[["141101","ពោធិ៍រៀង","Pou Rieng"],["141102","ព្រែកអន្ទះ","Preaek Anteah"],["141103","ព្រែកជ្រៃ","Preaek Chrey"],["141104","ព្រៃកន្លោង","Prey Kanlaong"],["141106","កំពង់ឫស្សី","Kampong Ruessei"],["141107","ព្រែកតាសរ","Preaek Ta Sar"]]],["1412","ស៊ីធរកណ្ដាល","Sithor Kandal",[["141201","អំពិលក្រៅ","Ampil Krau"],["141202","ជ្រៃឃ្មុំ","Chrey Khmum"],["141203","ល្វេ","Lve"],["141204","ព្នៅទី ១","Pnov Ti Muoy"],["141205","ព្នៅទី ២","Pnov Ti Pir"],["141206","ពោធិ៍ទី","Pou Ti"],["141207","ព្រែកចង្ក្រាន","Preaek Changkran"],["141208","ព្រៃដើមថ្នឹង","Prey Daeum Thnoeng"],["141209","ព្រៃទឹង","Prey Tueng"],["141210","រំលេច","Rumlech"],["141211","ឫស្សីសាញ់","Ruessei Sanh"]]],["1413","ស្វាយអន្ទរ","Svay Antor",[["141301","អង្គរទ្រេត","Angkor Tret"],["141302","ជាខ្លាង","Chea Khlang"],["141303","ជ្រៃ","Chrey"],["141304","ដំរីពួន","Damrei Puon"],["141305","មេបុណ្យ","Me Bon"],["141306","ពានរោង","Pean Roung"],["141307","ពពឺស","Popueus"],["141308","ព្រៃខ្លា","Prey Khla"],["141309","សំរោង","Samraong"],["141310","ស្វាយអន្ទរ","Svay Antor"],["141311","ទឹកថ្លា","Tuek Thla"]]]]],["15","ពោធិ៍សាត់","Pursat",[["1501","បាកាន","Bakan",[["150101","បឹងបត់កណ្ដាល","Boeng Bat Kandaol"],["150102","បឹងខ្នារ","Boeng Khnar"],["150103","ខ្នារទទឹង","Khnar Totueng"],["150104","មេទឹក","Me Tuek"],["150105","អូរតាប៉ោង","Ou Ta Paong"],["150106","រំលេច","Rumlech"],["150107","ស្នាមព្រះ","Snam Preah"],["150108","ស្វាយដូនកែវ","Svay Doun Kaev"],["150110","ត្រពាំងជង","Trapeang chorng"]]],["1502","កណ្ដៀង","Kandieng",[["150201","អន្លង់វិល","Anlong Vil"],["150203","កណ្ដៀង","Kandieng"],["150204","កញ្ជរ","Kanhchor"],["150205","រាំងទិល","Reang Til"],["150206","ស្រែស្ដុក","Srae Sdok"],["150207","ស្វាយលួង","Svay Luong"],["150208","ស្យា","Sya"],["150209","វាល","Veal"],["150210","កោះជុំ","Kaoh Chum"]]],["1503","ក្រគរ","Krakor",[["150301","អន្លង់ត្នោត","Anlong Tnaot"],["150302","អន្សាចំបក់","Ansa Chambak"],["150303","បឹងកន្ទួត","Boeng Kantuot"],["150304","ឈើតុំ","Chheu Tom"],["150305","កំពង់លួង","Kampong Luong"],["150306","កំពង់ពោធិ៍","Kampong Pou"],["150307","ក្បាលត្រាច","Kbal Trach"],["150308","អូរសណ្ដាន់","Ou Sandan"],["150309","ស្នាអន្សា","Sna Ansa"],["150310","ស្វាយស","Svay Sa"],["150311","ត្នោតជុំ","Tnaot Chum"]]],["1504","ភ្នំក្រវ៉ាញ","Phnum Kravanh",[["150401","បាក់ចិញ្ចៀន","Bak Chenhchien"],["150402","លាច","Leach"],["150404","ព្រងិល","Prongil"],["150405","រកាត","Rokat"],["150406","សន្ទ្រែ","Santreae"],["150407","សំរោង","Samraong"]]],["1505","ពោធិ៍សាត់","Pursat",[["150501","ចំរើនផល","Chamraeun Phal"],["150503","លលកស","Lolok Sa"],["150504","ផ្ទះព្រៃ","Phteah Prey"],["150505","ព្រៃញី","Prey Nhi"],["150506","រលាប","Roleab"],["150507","ស្វាយអាត់","Svay At"],["150508","បន្ទាយដី","Banteay Dei"]]],["1506","វាលវែង","Veal Veaeng",[["150601","អូរសោម","Ou Saom"],["150602","ក្រពើពីរ","Krapeu Pir"],["150603","អន្លង់រាប","Anlong Reab"],["150604","ប្រម៉ោយ","Pramaoy"],["150605","ថ្មដា","Thma Da"]]],["1507","តាលោសែនជ័យ","Ta Lou Senchey",[["150701","តាលោ","Ta Lou"],["150702","ផ្ទះរុង","Phteah Rung"]]]]],["16","រតនគិរី","Ratanak Kiri",[["1601","អណ្ដូងមាស","Andoung Meas",[["160101","ម៉ាលិក","Malik"],["160103","ញ៉ាង","Nhang"],["160104","តាឡាវ","Ta Lav"]]],["1602","បានលុង","Ban Lung",[["160201","កាចាញ","Kachanh"],["160202","ឡាបានសៀក","Labansiek"],["160203","យក្ខឡោម","Yeak Laom"],["160204","បឹងកន្សែង","Boeng Kansaeng"]]],["1603","បរកែវ","Bar Kaev",[["160301","កក់","Kak"],["160302","កិះចុង","Keh Chong"],["160303","ឡាមីញ","La Minh"],["160304","លុងឃុង","Lung Khung"],["160305","ស៊ើង","Saeung"],["160306","ទីងចាក់","Ting Chak"]]],["1604","កូនមុំ","Koun Mom",[["160401","សិរីមង្គល","Serei Mongkol"],["160402","ស្រែអង្គ្រង","Srae Angkrorng"],["160403","តាអង","Ta Ang"],["160404","តឺន","Teun"],["160405","ត្រពាំងច្រេស","Trapeang Chres"],["160406","ត្រពាំងក្រហម","Trapeang Kraham"]]],["1605","លំផាត់","Lumphat",[["160501","ជ័យឧត្ដម","Chey Otdam"],["160502","កាឡែង","Ka Laeng"],["160503","ល្បាំង១","Lbang Muoy"],["160504","ល្បាំង២","Lbang Pir"],["160505","បាតាង","Ba Tang"],["160506","សេដា","Seda"]]],["1606","អូរជុំ","Ou Chum",[["160601","ចាអ៊ុង","Cha Ung"],["160602","ប៉ូយ","Pouy"],["160603","ឯកភាព","Aekakpheap"],["160604","កាឡៃ","Kalai"],["160605","អូរជុំ","Ou Chum"],["160606","សាមគ្គី","Sameakki"],["160607","ល្អក់","L\'ak"]]],["1607","អូរយ៉ាដាវ","Ou Ya Dav",[["160701","បរខាំ","Bar Kham"],["160702","លំជ័រ","Lum Choar"],["160703","ប៉ក់ញ៉ៃ","Pak Nhai"],["160704","ប៉ាតេ","Pa Te"],["160705","សេសាន","Sesan"],["160706","សោមធំ","Saom Thum"],["160707","យ៉ាទុង","Ya Tung"]]],["1608","តាវែង","Ta Veaeng",[["160801","តាវែងលើ","Ta Veaeng Leu"],["160802","តាវែងក្រោម","Ta Veaeng Kraom"]]],["1609","វើនសៃ","Veun Sai",[["160901","ប៉ុង","Pong"],["160903","ហាត់ប៉ក់","Hat Pak"],["160904","កាចូន","Ka Choun"],["160905","កោះប៉ង់","Kaoh Pang"],["160906","កោះពាក្យ","Kaoh Peak"],["160907","កុកឡាក់","Kok Lak"],["160908","ប៉ាកាឡាន់","Pa Kalan"],["160909","ភ្នំកុក","Phnum Kok"],["160910","វើនសៃ","Veun Sai"]]]]],["17","សៀមរាប","Siemreap",[["1701","អង្គរជុំ","Angkor Chum",[["170101","ចារឈូក","Char Chhuk"],["170102","ដូនពេង","Doun Peng"],["170103","គោកដូង","Kouk Doung"],["170104","គោល","Koul"],["170105","នគរភាស","Nokor Pheas"],["170106","ស្រែខ្វាវ","Srae Khvav"],["170107","តាសោម","Ta Saom"]]],["1702","អង្គរធំ","Angkor Thum",[["170201","ជប់តាត្រាវ","Chob Ta Trav"],["170202","លាងដៃ","Leang Dai"],["170203","ពាក់ស្នែង","Peak Snaeng"],["170204","ស្វាយចេក","Svay Chek"]]],["1703","បន្ទាយស្រី","Banteay Srei",[["170301","ខ្នារសណ្ដាយ","Khnar Sanday"],["170302","ឃុនរាម","Khun Ream"],["170303","ព្រះដាក់","Preah Dak"],["170304","រំចេក","Rumchek"],["170306","ត្បែង","Tbaeng"]]],["1704","ជីក្រែង","Chi Kraeng",[["170401","អន្លង់សំណរ","Anlong Samnar"],["170402","ជីក្រែង","Chi Kraeng"],["170403","កំពង់ក្ដី","Kampong Kdei"],["170404","ខ្វាវ","Khvav"],["170405","គោកធ្លកក្រោម","Kouk Thlok Kraom"],["170406","គោកធ្លកលើ","Kouk Thlok Leu"],["170407","ល្វែងឫស្សី","Lveaeng Ruessei"],["170408","ពង្រក្រោម","Pongro Kraom"],["170409","ពង្រលើ","Pongro Leu"],["170410","ឫស្សីលក","Ruessei Lok"],["170411","សង្វើយ","Sangvaeuy"],["170412","ស្ពានត្នោត","Spean Tnaot"]]],["1706","ក្រឡាញ់","Kralanh",[["170601","ចន្លាសដៃ","Chanleas Dai"],["170602","កំពង់ថ្កូវ","Kampong Thkov"],["170603","ក្រឡាញ់","Kralanh"],["170604","ក្រូចគរ","Krouch Kor"],["170605","រោងគោ","Roung Kou"],["170606","សំបួរ","Sambuor"],["170607","សែនសុខ","Saen Sokh"],["170608","ស្នួល","Snuol"],["170609","ស្រណាល","Sranal"],["170610","តាអាន","Ta An"]]],["1707","ពួក","Puok",[["170701","សសរស្ដម្ភ","Sasar Sdam"],["170702","ដូនកែវ","Doun Kaev"],["170703","ក្ដីរុន","Kdei Run"],["170704","កែវពណ៌","Kaev Poar"],["170705","ខ្នាត","Khnat"],["170707","ល្វា","Lvea"],["170708","មុខប៉ែន","Mukh Paen"],["170709","ពោធិ៍ទ្រាយ","Pou Treay"],["170710","ពួក","Puok"],["170711","ព្រៃជ្រូក","Prey Chruk"],["170712","រើល","Reul"],["170713","សំរោងយា","Samraong Yea"],["170715","ត្រីញ័រ","Trei Nhoar"],["170716","យាង","Yeang"]]],["1709","ប្រាសាទបាគង","Prasat Bakong",[["170902","បាគង","Bakong"],["170904","កំពង់ភ្លុក","Kampong Phluk"],["170905","កន្ទ្រាំង","Kantreang"],["170906","កណ្ដែក","Kandaek"],["170907","មានជ័យ","Mean Chey"],["170908","រលួស","Roluos"],["170909","ត្រពាំងធំ","Trapeang Thum"],["170910","អំពិល","Ampil"]]],["1710","សៀមរាប","Siem Reap",[["171001","ស្លក្រាម","Sla Kram"],["171002","ស្វាយដង្គំ","Svay Dankum"],["171003","គោកចក","Kok Chak"],["171004","សាលាកំរើក","Sala Kamreuk"],["171005","នគរធំ","Nokor Thum"],["171006","ជ្រាវ","Chreav"],["171007","ចុងឃ្នៀស","Chong Khnies"],["171008","សំបួរ","Sngkat Sambuor"],["171009","សៀមរាប","Siem Reab"],["171010","ស្រង៉ែ","Srangae"],["171012","ក្របីរៀល","Krabei Riel"],["171013","ទឹកវិល","Tuek Vil"]]],["1711","សូទ្រនិគម","Soutr Nikom",[["171101","ចាន់ស","Chan Sa"],["171102","ដំដែក","Dam Daek"],["171103","ដានរុន","Dan Run"],["171104","កំពង់ឃ្លាំង","Kampong Khleang"],["171105","កៀនសង្កែ","Kien Sangkae"],["171106","ខ្ចាស់","Khchas"],["171107","ខ្នារពោធិ៍","Khnar Pou"],["171108","ពពេល","Popel"],["171109","សំរោង","Samraong"],["171110","តាយ៉ែក","Ta Yaek"]]],["1712","ស្រីស្នំ","Srei Snam",[["171201","ជ្រោយនាងងួន","Chrouy Neang Nguon"],["171202","ក្លាំងហាយ","Klang Hay"],["171203","ត្រាំសសរ","Tram Sasar"],["171204","មោង","Moung"],["171205","ប្រីយ៍","Prei"],["171206","ស្លែងស្ពាន","Slaeng Spean"]]],["1713","ស្វាយលើ","Svay Leu",[["171301","បឹងមាលា","Boeng Mealea"],["171302","កន្ទួត","Kantuot"],["171303","ខ្នងភ្នំ","Khnang Phnum"],["171304","ស្វាយលើ","Svay Leu"],["171305","តាសៀម","Ta Siem"]]],["1714","វ៉ារិន","Varin",[["171401","ប្រាសាទ","Prasat"],["171402","ល្វាក្រាំង","Lvea Krang"],["171403","ស្រែណូយ","Srae Nouy"],["171404","ស្វាយ ស","Svay Sa"],["171405","វ៉ារិន","Varin"]]],["1715","រុនតាឯកតេជោសែន","Run Ta Aek Techo Sen",[["171501","រុនតាឯក","Run Ta Aek"],["171502","បល្ល័ង្ក","Ballangk"]]]]],["18","ព្រះសីហនុ","Preah Sihanouk",[["1801","ព្រះសីហនុ","Preah Sihanouk",[["180101","លេខ១","lek Muoy"],["180102","២","Pir"],["180103","៣","Bei"],["180104","៤","Buon"]]],["1802","ព្រៃនប់","Prey Nob",[["180201","អណ្ដូងថ្ម","Andoung Thma"],["180204","ជើងគោ","Cheung Kou"],["180207","ព្រៃនប់","Prey Nob"],["180209","សាមគ្គី","Sameakki"],["180210","សំរុង","Samrong"],["180211","ទឹកល្អក់","Tuek L\'ak"],["180212","ទឹកថ្លា","Tuek Thla"],["180213","ទួលទទឹង","Tuol Totueng"],["180214","វាលរេញ","Veal Renh"],["180215","តានៃ","Ta Ney"]]],["1803","ស្ទឹងហាវ","Stueng Hav",[["180301","កំពេញ","Kampenh"],["180302","អូរត្រេះ","Ou Treh"],["180303","ទំនប់រលក","Tumnob Rolok"],["180304","កែវផុស","Kaev Phos"]]],["1804","កំពង់សីលា","Kampong Seila",[["180401","ចំការហ្លួង","Chamkar Luong"],["180402","កំពង់សីលា","Kampong Seila"],["180403","អូរបាក់រទេះ","Ou Bak Roteh"],["180404","ស្ទឹងឆាយ","Stueng Chhay"]]],["1805","កោះរ៉ុង","Kaoh Rung",[["180501","កោះរ៉ុង","Kaoh Rung"],["180502","កោះរ៉ុងសន្លឹម","Koah Rung Sonlem"]]],["1806","កំពង់សោម","Kampong Soam",[["180601","រាម","Ream"],["180602","បិតត្រាង","Bet Trang"],["180603","អូរឧកញ៉ាហេង","Ou Oknha Heng"],["180604","បឹងតាព្រហ្ម","Boeng Ta Prum"],["180605","អូរជ្រៅ","Ou Chrov"]]]]],["19","ស្ទឹងត្រែង","Stung Treng",[["1901","សេសាន","Sesan",[["190101","កំភុន","Kamphun"],["190102","ក្បាលរមាស","Kbal Romeas"],["190103","ភ្លុក","Phluk"],["190104","សាមឃួយ","Samkhuoy"],["190105","ស្ដៅ","Sdau"],["190106","ស្រែគរ","Srae Kor"],["190107","តាឡាត","Ta Lat"]]],["1902","សៀមបូក","Siem Bouk",[["190201","កោះព្រះ","Kaoh Preah"],["190202","កោះសំពាយ","Kaoh Sampeay"],["190203","កោះស្រឡាយ","Kaoh Sralay"],["190204","អូរម្រះ","Ou Mreah"],["190205","អូរឫស្សីកណ្ដាល","Ou Ruessei Kandal"],["190206","សៀមបូក","Siem Bouk"],["190207","ស្រែក្រសាំង","Srae Krasang"]]],["1903","សៀមប៉ាង","Siem Pang",[["190301","ព្រែកមាស","Preaek Meas"],["190302","សេកុង","Sekong"],["190303","សន្ដិភាព","Santepheap"],["190304","ស្រែសំបូរ","Srae Sambour"],["190305","ថ្មកែវ","Tma Kaev"]]],["1904","ស្ទឹងត្រែង","Stueng Traeng",[["190401","ស្ទឹងត្រែង","Stueng Traeng"],["190402","ស្រះឫស្សី","Srah Ruessei"],["190403","ព្រះបាទ","Preah Bat"],["190404","សាមគ្គី","Sameakki"]]],["1905","ថាឡាបរិវ៉ាត់","Thala Barivat",[["190501","អន្លង់ភេ","Anlong Phe"],["190502","ចំការលើ","Chamkar Leu"],["190503","កាំងចាម","Kang Cham"],["190505","អន្លង់ជ្រៃ","Anlong Chrey"],["190506","អូររ៉ៃ","Ou Rai"],["190509","សំអាង","Sam Ang"],["190510","ស្រែឫស្សី","Srae Ruessei"],["190511","ថាឡាបរិវ៉ាត់","Thala Barivat"]]],["1906","បុរីអូរស្វាយសែនជ័យ","Borei Ou Svay Senchey",[["190601","អូរស្វាយ","Ou Svay"],["190602","កោះស្នែង","Kaoh Snaeng"],["190603","ព្រះរំកិល","Preah Rumkel"]]]]],["20","ស្វាយរៀង","Svay Rieng",[["2001","ចន្ទ្រា","Chantrea",[["200103","ចន្ទ្រា","Chantrea"],["200104","ច្រេស","Chres"],["200105","មេ សរថ្ងក","Me Sar Thngak"],["200108","ព្រៃគគីរ","Prey Kokir"],["200109","សំរោង","Samraong"],["200110","ទួលស្ដី","Tuol Sdei"]]],["2002","កំពង់រោទិ៍","Kampong Rou",[["200201","បន្ទាយក្រាំង","Banteay Krang"],["200202","ញរ","Nhor"],["200203","ខ្សែត្រ","Khsaetr"],["200204","ព្រះពន្លា","Preah Ponlea"],["200205","ព្រៃធំ","Prey Thum"],["200206","រាជមន្ទីរ","Reach Montir"],["200207","សំឡី","Samlei"],["200208","សំយ៉ោង","Samyaong"],["200209","ស្វាយតាយាន","Svay Ta Yean"],["200211","ថ្មី","Thmei"],["200212","ត្នោត","Tnaot"]]],["2003","រំដួល","Rumduol",[["200301","បុសមន","Bos Mon"],["200302","ធ្មា","Thmea"],["200303","កំពង់ចក","Kampong Chak"],["200304","ជ្រុងពពេល","Chrung Popel"],["200305","កំពង់អំពិល","Kampong Ampil"],["200306","ម៉ឺនជ័យ","Meun Chey"],["200307","ពងទឹក","Pong Tuek"],["200308","សង្កែ","Sangkae"],["200309","ស្វាយចេក","Svay Chek"],["200310","ថ្នាធ្នង់","Thna Thnong"]]],["2004","រមាសហែក","Romeas Haek",[["200401","អំពិល","Ampil"],["200402","អណ្ដូងពោធិ៍","Andoung Pou"],["200403","អណ្ដូងត្របែក","Andoung Trabaek"],["200404","អង្គប្រស្រែ","Angk Prasrae"],["200405","ចន្ដ្រី","Chantrei"],["200406","ជ្រៃធំ","Chrey Thum"],["200407","ដូង","Doung"],["200408","កំពង់ត្រាច","Kampong Trach"],["200409","គគីរ","Kokir"],["200410","ក្រសាំង","Krasang"],["200411","មុខដា","Mukh Da"],["200412","ម្រាម","Mream"],["200413","សំបួរ","Sambuor"],["200414","សម្បត្ដិមានជ័យ","Sambatt Mean Chey"],["200415","ត្រពាំងស្ដៅ","Trapeang Sdau"],["200416","ត្រស់","Tras"]]],["2005","ស្វាយជ្រំ","Svay Chrum",[["200501","អង្គតាសូ","Angk Ta Sou"],["200502","បាសាក់","Basak"],["200503","ចំបក់","Chambak"],["200504","កំពង់ចំឡង","Kampong Chamlang"],["200505","តាសួស","Ta Suos"],["200507","ឈើទាល","Chheu Teal"],["200508","ដូនស","Doun Sa"],["200509","គោកព្រីង","Kouk Pring"],["200510","ក្រោលគោ","Kraol Kou"],["200511","គ្រួស","Kruos"],["200512","ពោធិរាជ","Pouthi Reach"],["200513","ស្វាយអង្គ","Svay Angk"],["200514","ស្វាយជ្រំ","Svay Chrum"],["200515","ស្វាយធំ","Svay Thum"],["200516","ស្វាយយា","Svay Yea"],["200517","ធ្លក","Thlok"]]],["2006","ស្វាយរៀង","Svay Rieng",[["200601","ស្វាយរៀង","Svay Rieng"],["200602","ព្រៃឆ្លាក់","Prey Chhlak"],["200603","គយត្របែក","Koy Trabaek"],["200604","ពោធិ៍តាហោ","Pou Ta Hao"],["200605","ចេក","Chek"],["200606","ស្វាយតឿ","Svay Toea"],["200607","សង្ឃរ័","Sangkhoar"]]],["2007","ស្វាយទាប","Svay Teab",[["200702","គគីសោម","Koki Saom"],["200703","កណ្ដៀងរាយ","Kandieng Reay"],["200704","មនោរម្យ","Monourom"],["200705","ពពែត","Popeaet"],["200706","ព្រៃតាអី","Prey Ta Ei"],["200707","ប្រសូត្រ","Prasoutr"],["200708","រមាំងថ្កោល","Romeang Thkaol"],["200709","សំបួរ","Sambuor"],["200711","ស្វាយរំពារ","Svay Rumpear"]]],["2008","បាវិត","Bavet",[["200801","បាទី","Bati"],["200802","បាវិត","Bavet"],["200803","ច្រកម្ទេស","Chrak Mtes"],["200804","ប្រាសាទ","Prasat"],["200805","ព្រៃអង្គុញ","Prey Angkunh"]]]]],["21","តាកែវ","Takeo",[["2101","អង្គរបូរី","Angkor Borei",[["210101","អង្គរបូរី","Angkor Borei"],["210102","បាស្រែ","Ba Srae"],["210103","គោកធ្លក","Kouk Thlok"],["210104","ពន្លៃ","Ponley"],["210105","ព្រែកផ្ទោល","Preaek Phtoul"],["210106","ព្រៃផ្គាំ","Prey Phkoam"]]],["2102","បាទី","Bati",[["210201","ចំបក់","Chambak"],["210202","ចំប៉ី","Champei"],["210203","ដូង","Doung"],["210204","កណ្ដឹង","Kandoeng"],["210205","កុមាររាជា","Komar Reachea"],["210206","ក្រាំងលាវ","Krang Leav"],["210207","ក្រាំងធ្នង់","Krang Thnong"],["210208","លំពង់","Lumpong"],["210209","ពារាម","Pea Ream"],["210210","ពត់សរ","Pot Sar"],["210211","សូរភី","Sour Phi"],["210212","តាំងដូង","Tang Doung"],["210213","ត្នោត","Tnaot"],["210214","ត្រពាំងក្រសាំង","Trapeang Krasang"],["210215","ត្រពាំងសាប","Trapeang Sab"]]],["2103","បូរីជលសារ","Borei Cholsar",[["210301","បូរីជលសារ","Borei Cholsar"],["210302","ជ័យជោគ","Chey Chouk"],["210303","ដូងខ្ពស់","Doung Khpos"],["210304","កំពង់ក្រសាំង","Kampong Krasang"],["210305","គោកពោធិ៍","Kouk Pou"]]],["2104","គីរីវង់","Kiri Vong",[["210401","អង្គប្រាសាទ","Angk Prasat"],["210402","ព្រះបាទជាន់ជុំ","Preah Bat Choan Chum"],["210403","កំណប់","Kamnab"],["210404","កំពែង","Kampeaeng"],["210405","គីរីចុងកោះ","Kiri Chong Kaoh"],["210406","គោកព្រេច","Kouk Prech"],["210407","ភ្នំដិន","Phnum Den"],["210408","ព្រៃអំពក","Prey Ampok"],["210409","ព្រៃរំដេង","Prey Rumdeng"],["210410","រាមអណ្ដើក","Ream Andaeuk"],["210411","សោម","Saom"],["210412","តាអូរ","Ta Ou"]]],["2105","កោះអណ្ដែត","Kaoh Andaet",[["210501","ក្រពុំឈូក","Krapum Chhuk"],["210502","ពេជសារ","Pech Sar"],["210503","ព្រៃខ្លា","Prey Khla"],["210504","ព្រៃយុថ្កា","Prey Yuthka"],["210505","រមេញ","Romenh"],["210506","ធ្លាប្រជុំ","Thlea Prachum"]]],["2106","ព្រៃកប្បាស","Prey Kabbas",[["210601","អង្កាញ់","Angkanh"],["210602","បានកាម","Ban Kam"],["210603","ចំប៉ា","Champa"],["210604","ចារ","Char"],["210605","កំពែង","Kampeaeng"],["210606","កំពង់រាប","Kampong Reab"],["210607","ក្ដាញ់","Kdanh"],["210608","ពោធិ៍រំចាក","Pou Rumchak"],["210609","ព្រៃកប្បាស","Prey Kabbas"],["210610","ព្រៃល្វា","Prey Lvea"],["210611","ព្រៃផ្ដៅ","Prey Phdau"],["210612","ស្នោ","Snao"],["210613","តាំងយ៉ាប","Tang Yab"]]],["2107","សំរោង","Samraong",[["210701","បឹងត្រាញ់ខាងជើង","Boeng Tranh Khang Cheung"],["210702","បឹងត្រាញ់ខាងត្បូង","Boeng Tranh Khang Tboung"],["210703","ជើងគួន","Cheung Kuon"],["210704","ជំរះពេន","Chumreah Pen"],["210705","ខ្វាវ","Khvav"],["210706","លំចង់","Lumchang"],["210707","រវៀង","Rovieng"],["210708","សំរោង","Samraong"],["210709","សឹង្ហ","Soengh"],["210710","ស្លា","Sla"],["210711","ទ្រា","Trea"]]],["2108","ដូនកែវ","Doun Kaev",[["210801","បារាយណ៍","Baray"],["210802","រកាក្នុង","Roka Knong"],["210803","រកាក្រៅ","Roka Krau"]]],["2109","ត្រាំកក់","Tram Kak",[["210901","អង្គតាសោម","Angk Ta Saom"],["210902","ជាងទង","Cheang Tong"],["210903","គុស","Kus"],["210904","លាយបូរ","Leay Bour"],["210905","ញ៉ែងញ៉ង","Nhaeng Nhang"],["210906","អូរសារាយ","Ou Saray"],["210907","ត្រពាំងក្រញូង","Trapeang Kranhoung"],["210908","ឧត្ដមសុរិយា","Otdam Soriya"],["210909","ពពេល","Popel"],["210910","សំរោង","Samraong"],["210911","ស្រែរនោង","Srae Ronoung"],["210912","តាភេម","Ta Phem"],["210913","ត្រាំកក់","Tram Kak"],["210914","ត្រពាំងធំខាងជើង","Trapeang Thum Khang Cheung"],["210915","ត្រពាំងធំខាងត្បូង","Trapeang Thum Khang Tboung"]]],["2110","ទ្រាំង","Treang",[["211001","អង្កាញ់","Angkanh"],["211002","អង្គខ្នុរ","Angk Khnor"],["211003","ជីខ្មា","Chi Khma"],["211004","ខ្វាវ","Khvav"],["211005","ប្រាំបីមុំ","Prambei Mum"],["211006","អង្គកែវ","Angk Kaev"],["211007","ព្រៃស្លឹក","Prey Sloek"],["211008","រនាម","Roneam"],["211009","សំបួរ","Sambuor"],["211010","សន្លុង","Sanlung"],["211011","ស្មោង","Smaong"],["211012","ស្រង៉ែ","Srangae"],["211013","ធ្លក","Thlok"],["211014","ត្រឡាច","Tralach"]]]]],["22","ឧត្តរមានជ័យ","Oddar Meanchey",[["2201","អន្លង់វែង","Anlong Veaeng",[["220101","អន្លង់វែង","Anlong Veaeng"],["220103","ត្រពាំងតាវ","Trapeang Tav"],["220104","ត្រពាំងប្រីយ៍","Trapeang Prei"],["220105","ថ្លាត","Thlat"],["220106","លំទង","Lumtong"]]],["2202","បន្ទាយអំពិល","Banteay Ampil",[["220201","អំពិល","Ampil"],["220202","បេង","Beng"],["220203","គោកខ្ពស់","Kouk Khpos"],["220204","គោកមន","Kouk Mon"]]],["2203","ចុងកាល់","Chong Kal",[["220301","ជើងទៀន","Cheung Tien"],["220302","ចុងកាល់","Chong Kal"],["220303","ក្រសាំង","Krasang"],["220304","ពង្រ","Pongro"]]],["2204","សំរោង","Samraong",[["220401","បន្សាយរាក់","Bansay Reak"],["220402","បុស្បូវ","Bos Sbov"],["220403","កូនក្រៀល","Koun Kriel"],["220404","សំរោង","Samraong"],["220405","អូរស្មាច់","Ou Smach"]]],["2205","ត្រពាំងប្រាសាទ","Trapeang Prasat",[["220501","បាក់អន្លូង","Bak Anloung"],["220502","ផ្អាវ","Ph\'av"],["220503","អូរស្វាយ","Ou Svay"],["220504","ព្រះប្រឡាយ","Preah Pralay"],["220505","ទំនប់ដាច់","Tumnob Dach"],["220506","ត្រពាំងប្រាសាទ","Trapeang Prasat"]]]]],["23","កែប","Kep",[["2301","ដំណាក់ចង្អើរ","Damnak Chang\'aeur",[["230101","អង្កោល","Angkaol"],["230103","ពងទឹក","Pong Tuek"]]],["2302","កែប","Kaeb",[["230201","កែប","Kaeb"],["230202","ព្រៃធំ","Prey Thum"],["230203","អូរក្រសារ","Ou Krasar"]]]]],["24","ប៉ៃលិន","Pailin",[["2401","ប៉ៃលិន","Pailin",[["240101","ប៉ៃលិន","Pailin"],["240102","អូរតាវ៉ៅ","Ou Ta Vau"],["240103","ទួលល្វា","Tuol Lvea"],["240104","បរយ៉ាខា","Bar Yakha"]]],["2402","សាលាក្រៅ","Sala Krau",[["240201","សាលាក្រៅ","Sala Krau"],["240202","ស្ទឹងត្រង់","Stueng Trang"],["240203","ស្ទឹងកាច់","Stueng Kach"],["240204","អូរអណ្ដូង","Ou Andoung"]]]]],["25","ត្បូងឃ្មុំ","Tboung Khmum",[["2501","តំបែរ","Dambae",[["250101","ចុងជាច","Chong Cheach"],["250102","តំបែរ","Dambae"],["250103","គោកស្រុក","Kouk Srok"],["250104","នាងទើត","Neang Teut"],["250105","សេដា","Seda"],["250106","ត្រពាំងព្រីង","Trapeang Pring"],["250107","ទឹកជ្រៅ","Tuek Chrov"]]],["2502","ក្រូចឆ្មារ","Krouch Chhmar",[["250201","ឈូក","Chhuk"],["250202","ជំនីក","Chumnik"],["250203","កំពង់ទ្រាស","Kampong Treas"],["250204","កោះពីរ","Kaoh Pir"],["250205","ក្រូចឆ្មារ","Krouch Chhmar"],["250206","ប៉ឺស១","Peus Muoy"],["250207","ប៉ើស២","Peus Pir"],["250208","ព្រែកអាជី","Preaek A chi"],["250209","រការខ្នុរ","Roka Khnor"],["250210","ស្វាយឃ្លាំង","Svay Khleang"],["250211","ទ្រា","Trea"],["250212","ទួលស្នួល","Tuol Snuol"]]],["2503","មេមត់","Memot",[["250301","ចាន់មូល","Chan Mul"],["250302","ជាំ","Choam"],["250303","ជាំក្រវៀន","Choam Kravien"],["250304","ជាំតាម៉ៅ","Choam Ta Mau"],["250305","ដារ","Dar"],["250306","កំពាន់","Kampoan"],["250307","គគីរ","Kokir"],["250308","មេមង","Memong"],["250309","មេមត់","Memot"],["250310","រំចេក","Rumchek"],["250311","រូង","Rung"],["250312","ទន្លូង","Tonlung"],["250313","ត្រមូង","Tramung"],["250314","ទ្រៀក","Triek"]]],["2504","អូររាំងឪ","Ou Reang Ov",[["250401","អំពិលតាពក","Ampil Ta Pok"],["250402","ចក","Chak"],["250403","ដំរិល","Damril"],["250404","គងជ័យ","Kong Chey"],["250405","មៀន","Mien"],["250406","ព្រះធាតុ","Preah Theat"],["250407","ទួលសូភី","Tuol Souphi"]]],["2505","ពញាក្រែក","Ponhea Kraek",[["250501","ដូនតី","Dountei"],["250502","កក់","Kak"],["250503","កណ្ដោលជ្រុំ","Kandaol Chrum"],["250504","កោងកាង","Kaong Kang"],["250505","ក្រែក","Kraek"],["250506","ពពេល","Popel"],["250507","ត្រពាំងផ្លុង","Trapeang Phlong"],["250508","វាលម្លូរ","Veal Mlu"]]],["2506","សួង","Suong",[["250601","សួង","Suong"],["250602","វិហារលួង","Vihear Luong"]]],["2507","ត្បូងឃ្មុំ","Tboung Khmum",[["250701","អញ្ចើម","Anhchaeum"],["250702","បឹងព្រួល","Boeng Pruol"],["250703","ជីគរ","Chikor"],["250704","ជីរោទ៍ ទី១","Chirou Ti Muoy"],["250705","ជីរោទ៍ ទី២","Chirou Ti Pir"],["250706","ជប់","Chob"],["250707","គរ","Kor"],["250708","ល្ងៀង","Lngieng"],["250709","មង់រៀវ","Mong Riev"],["250710","ពាមជីលាំង","Peam Chileang"],["250711","រកាពប្រាំ","Roka Po Pram"],["250712","ស្រឡប់","Sralab"],["250713","ថ្មពេជ្រ","Thma Pech"],["250714","ទន្លេបិទ","Tonle Bet"]]]]]]';
+let KH_ADDR_BUILTIN = null;
+function khBuiltin() {
+  return KH_ADDR_BUILTIN || (KH_ADDR_BUILTIN = JSON.parse(KH_ADDR_JSON));
+}
+const KH_ADDR_TABLES = {
+  province: "kh_provinces",
+  district: "kh_districts",
+  commune: "kh_communes",
+};
+const KH_ADDR_HINT =
+  "តារាង kh_provinces / kh_districts / kh_communes មិនទាន់មាន — សូមរត់ SQL migration Address (មើលកំណត់ចំណាំ Cambodia address master data) សិន";
+
+// Loose key so "Phnom Penh", "រាជធានីភ្នំពេញ", "Phnom Penh City" compare equal.
+function khKey(x) {
+  return String(x || "")
+    .toLowerCase()
+    .replace(/^(រាជធានី|ខេត្ត|ស្រុក|ខណ្ឌ|ក្រុង|ឃុំ|សង្កាត់)/, "")
+    .replace(
+      /\b(province|district|commune|khan|sangkat|municipality|city|krong|srok|khum)\b/g,
+      "",
+    )
+    .replace(/[^a-z0-9\u1780-\u17ff]/g, "");
+}
+function khMatch(row, value) {
+  const k = khKey(value);
+  return !!k && (khKey(row[2]) === k || khKey(row[1]) === k);
+}
+
+// tree -> flat rows (what the tables store)
+function khFlat(tree) {
+  const provinces = [];
+  const districts = [];
+  const communes = [];
+  for (const p of tree) {
+    provinces.push({
+      code: p[0],
+      name_km: p[1],
+      name_en: p[2],
+      status: "Active",
+    });
+    for (const d of p[3]) {
+      districts.push({
+        code: d[0],
+        province_code: p[0],
+        name_km: d[1],
+        name_en: d[2],
+        status: "Active",
+      });
+      for (const c of d[3])
+        communes.push({
+          code: c[0],
+          district_code: d[0],
+          name_km: c[1],
+          name_en: c[2],
+          status: "Active",
+        });
+    }
+  }
+  return { provinces, districts, communes };
+}
+// flat rows -> tree (what the pickers use). A disabled parent hides its children.
+function khBuildTree(provinces, districts, communes, activeOnly = false) {
+  const on = (r) => !activeOnly || r.status !== "Disabled";
+  const group = (rows, key) => {
+    const m = new Map();
+    for (const r of rows) {
+      if (!on(r)) continue;
+      if (!m.has(r[key])) m.set(r[key], []);
+      m.get(r[key]).push(r);
+    }
+    return m;
+  };
+  const cBy = group(communes, "district_code");
+  const dBy = group(districts, "province_code");
+  const row = (r, kids) => [r.code, r.name_km || "", r.name_en || "", kids];
+  return provinces.filter(on).map((p) =>
+    row(
+      p,
+      (dBy.get(p.code) || []).map((d) =>
+        row(
+          d,
+          (cBy.get(d.code) || []).map((c) => row(c, [])),
+        ),
+      ),
+    ),
+  );
+}
+// Supabase returns at most 1000 rows per request; communes are 1,652.
+async function khFetchAll(table) {
+  const out = [];
+  const size = 1000;
+  for (let from = 0; ; from += size) {
+    const { data, error } = await supabase
+      .from(table)
+      .select("*")
+      .order("code", { ascending: true })
+      .range(from, from + size - 1);
+    if (error) throw error;
+    out.push(...(data || []));
+    if (!data || data.length < size) break;
+  }
+  return out;
+}
+
+// Customer portal + Branch form: active rows only; built-in list as fallback.
+let KH_TREE_CACHE = null;
+function useKhGazetteer() {
+  const [tree, setTree] = useState(() => KH_TREE_CACHE || khBuiltin());
+  useEffect(() => {
+    if (!supabase) return undefined;
+    let on = true;
+    (async () => {
+      try {
+        const [p, d, c] = await Promise.all([
+          khFetchAll(KH_ADDR_TABLES.province),
+          khFetchAll(KH_ADDR_TABLES.district),
+          khFetchAll(KH_ADDR_TABLES.commune),
+        ]);
+        if (!p.length) return; // not seeded yet → keep the built-in list
+        const t = khBuildTree(p, d, c, true);
+        KH_TREE_CACHE = t;
+        if (on) setTree(t);
+      } catch {
+        // tables missing / no access → keep the built-in list
+      }
+    })();
+    return () => {
+      on = false;
+    };
+  }, []);
+  return tree;
+}
+
+// Admin: full rows (incl. disabled) + create / edit / import.
+function useKhAddress() {
+  const builtin = React.useMemo(() => khFlat(khBuiltin()), []);
+  const [data, setData] = useState(builtin);
+  const [loading, setLoading] = useState(!!supabase);
+  const [tableReady, setTableReady] = useState(!supabase);
+  const [error, setError] = useState("");
+
+  const refetch = React.useCallback(async () => {
+    if (!supabase) return;
+    setLoading(true);
+    setError("");
+    try {
+      const [provinces, districts, communes] = await Promise.all([
+        khFetchAll(KH_ADDR_TABLES.province),
+        khFetchAll(KH_ADDR_TABLES.district),
+        khFetchAll(KH_ADDR_TABLES.commune),
+      ]);
+      setData({ provinces, districts, communes });
+      setTableReady(true);
+      KH_TREE_CACHE = null; // customer lists reload next time
+    } catch (e) {
+      setTableReady(false);
+      setData(builtin);
+      setError(e?.message || "");
+    } finally {
+      setLoading(false);
+    }
+  }, [builtin]);
+  useEffect(() => {
+    refetch();
+  }, [refetch]);
+
+  async function save(kind, values, existing) {
+    const t = (v) => String(v || "").trim();
+    const code = t(values.code);
+    const name_en = t(values.name_en);
+    const name_km = t(values.name_km);
+    if (!code) throw new Error("Code ត្រូវការ");
+    if (/\s/.test(code)) throw new Error("Code មិនអាចមានដកឃ្លាទេ");
+    if (!name_en) throw new Error("Name EN ត្រូវការ");
+    if (kind === "district" && !values.province_code)
+      throw new Error("សូមជ្រើស Municipality");
+    if (kind === "commune" && !values.district_code)
+      throw new Error("សូមជ្រើស District");
+    if (!supabase || !tableReady) throw new Error(KH_ADDR_HINT);
+    const list =
+      data[
+        kind === "province"
+          ? "provinces"
+          : kind === "district"
+            ? "districts"
+            : "communes"
+      ];
+    if (!existing && list.some((r) => r.code === code))
+      throw new Error(`Code "${code}" មានរួចហើយ`);
+    const row = {
+      code,
+      name_km,
+      name_en,
+      status: values.status || "Active",
+      updated_at: new Date().toISOString(),
+    };
+    if (kind === "district") row.province_code = values.province_code;
+    if (kind === "commune") row.district_code = values.district_code;
+    const table = KH_ADDR_TABLES[kind];
+    const req = existing
+      ? supabase.from(table).update(row).eq("code", existing.code)
+      : supabase.from(table).insert(row);
+    const { error: err } = await req;
+    if (err)
+      throw new Error(
+        err.code === "23505"
+          ? `Code "${code}" មានរួចហើយ`
+          : err.code === "23503"
+            ? "Parent (Municipality / District) មិនត្រឹមត្រូវ"
+            : err.message,
+      );
+    await refetch();
+  }
+
+  function setStatus(kind, row, status) {
+    return save(kind, { ...row, status }, row);
+  }
+
+  // Inserts only the codes that are missing — never overwrites your edits.
+  async function importDefaults() {
+    if (!supabase || !tableReady) throw new Error(KH_ADDR_HINT);
+    const flat = khFlat(khBuiltin());
+    const stamp = new Date().toISOString();
+    for (const [table, rows] of [
+      [KH_ADDR_TABLES.province, flat.provinces],
+      [KH_ADDR_TABLES.district, flat.districts],
+      [KH_ADDR_TABLES.commune, flat.communes],
+    ]) {
+      for (let i = 0; i < rows.length; i += 500) {
+        const chunk = rows
+          .slice(i, i + 500)
+          .map((r) => ({ ...r, updated_at: stamp }));
+        const { error: err } = await supabase
+          .from(table)
+          .upsert(chunk, { onConflict: "code", ignoreDuplicates: true });
+        if (err) throw new Error(err.message);
+      }
+    }
+    await refetch();
+  }
+
+  return {
+    data,
+    loading,
+    tableReady,
+    error,
+    refetch,
+    save,
+    setStatus,
+    importDefaults,
+  };
+}
+
+function KhAddrFormModal({
+  kind,
+  existing,
+  provinces,
+  districts,
+  onClose,
+  onSave,
+}) {
+  const blank = {
+    code: "",
+    name_km: "",
+    name_en: "",
+    province_code: "",
+    district_code: "",
+    status: "Active",
+  };
+  const distOf = (code) => districts.find((d) => d.code === code);
+  const [v, setV] = useState(() => {
+    if (!existing) return blank;
+    const base = { ...blank, ...existing };
+    // a commune form also needs its province to filter the district list
+    if (kind === "commune")
+      base.province_code = distOf(existing.district_code)?.province_code || "";
+    return base;
+  });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const title = {
+    province: "Municipality",
+    district: "District",
+    commune: "Commune",
+  }[kind];
+  const set = (k) => (e) => setV((x) => ({ ...x, [k]: e.target.value }));
+
+  async function submit(e) {
+    e.preventDefault();
+    setSaving(true);
+    setError("");
+    try {
+      await onSave(kind, v, existing);
+      onClose();
+    } catch (err) {
+      setError(err.message || "មិនអាច Save បានទេ");
+    } finally {
+      setSaving(false);
+    }
+  }
+  const hint =
+    kind === "province"
+      ? "ឧ. 12 (លេខ ២ ខ្ទង់តាម NCDD)"
+      : kind === "district"
+        ? "ឧ. 1201 (លេខ ៤ ខ្ទង់)"
+        : "ឧ. 120101 (លេខ ៦ ខ្ទង់)";
+  return (
+    <AppModal
+      title={
+        <>
+          {existing ? "កែ" : "បង្កើត"} {title}
+        </>
+      }
+      maxW="max-w-lg"
+      onClose={onClose}
+      onSubmit={submit}
+      busy={saving}
+      error={error}
+      submitLabel="Save"
+      busyLabel="កំពុង Save..."
+    >
+      {(kind === "district" || kind === "commune") && (
+        <div>
+          <label className={LABEL_CLS}>Municipality *</label>
+          <select
+            value={v.province_code}
+            disabled={kind === "district" && !!existing}
+            onChange={(e) =>
+              setV((x) => ({
+                ...x,
+                province_code: e.target.value,
+                district_code: "",
+              }))
+            }
+            className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
+          >
+            <option value="">— Select —</option>
+            {provinces.map((p) => (
+              <option key={p.code} value={p.code}>
+                {p.name_en} {p.name_km ? `· ${p.name_km}` : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {kind === "commune" && (
+        <div>
+          <label className={LABEL_CLS}>District *</label>
+          <select
+            value={v.district_code}
+            disabled={!v.province_code || !!existing}
+            onChange={set("district_code")}
+            className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
+          >
+            <option value="">— Select —</option>
+            {districts
+              .filter((d) => d.province_code === v.province_code)
+              .map((d) => (
+                <option key={d.code} value={d.code}>
+                  {d.name_en} {d.name_km ? `· ${d.name_km}` : ""}
+                </option>
+              ))}
+          </select>
+        </div>
+      )}
+      <div>
+        <label className={LABEL_CLS}>Code *</label>
+        <input
+          value={v.code}
+          disabled={!!existing}
+          onChange={set("code")}
+          className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
+        />
+        <p className="text-[11px] text-ink-600/50 mt-1">
+          {existing
+            ? "Code មិនអាចប្តូរបានទេ ព្រោះទិន្នន័យផ្សេងប្រើវាជាឯកសារយោង"
+            : hint}
+        </p>
+      </div>
+      <div>
+        <label className={LABEL_CLS}>Name KH</label>
+        <input
+          value={v.name_km}
+          onChange={set("name_km")}
+          className={INPUT_CLS}
+        />
+      </div>
+      <div>
+        <label className={LABEL_CLS}>Name EN *</label>
+        <input
+          value={v.name_en}
+          onChange={set("name_en")}
+          className={INPUT_CLS}
+        />
+        <p className="text-[11px] text-ink-600/50 mt-1">
+          ឈ្មោះ EN ត្រូវបានរក្សាទុកក្នុងអាសយដ្ឋានអតិថិជន និងប្រើផ្គូផ្គងជាមួយ
+          Branch
+        </p>
+      </div>
+      <div>
+        <label className={LABEL_CLS}>Status</label>
+        <select value={v.status} onChange={set("status")} className={INPUT_CLS}>
+          <option value="Active">Active</option>
+          <option value="Disabled">Disabled</option>
+        </select>
+        <p className="text-[11px] text-ink-600/50 mt-1">
+          Disabled = លាក់ពី Customer (និងកូនរបស់វា) ប៉ុន្តែទិន្នន័យចាស់នៅដដែល
+        </p>
+      </div>
+    </AppModal>
+  );
+}
+
+function AddressManagementPage() {
+  const { user } = useAuth();
+  const canManage = hasPermission(user, "warehouse.manage");
+  const ad = useKhAddress();
+  const { provinces, districts, communes } = ad.data;
+  const [tab, setTab] = useState("province");
+  const [fProv, setFProv] = useState("");
+  const [fDist, setFDist] = useState("");
+  const [search, setSearch] = useState("");
+  const [form, setForm] = useState(null); // { kind, existing }
+  const [limit, setLimit] = useState(100);
+  const [busyKey, setBusyKey] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [error, setError] = useState("");
+
+  const provBy = React.useMemo(
+    () => new Map(provinces.map((p) => [p.code, p])),
+    [provinces],
+  );
+  const distBy = React.useMemo(
+    () => new Map(districts.map((d) => [d.code, d])),
+    [districts],
+  );
+  useEffect(() => setLimit(100), [tab, fProv, fDist, search]);
+
+  const q = search.trim().toLowerCase();
+  const matchQ = (r) =>
+    !q || [r.code, r.name_km, r.name_en].join(" ").toLowerCase().includes(q);
+  let all = [];
+  if (tab === "province") all = provinces.filter(matchQ);
+  else if (tab === "district")
+    all = districts.filter(
+      (d) => (!fProv || d.province_code === fProv) && matchQ(d),
+    );
+  else
+    all = communes.filter((c) => {
+      const d = distBy.get(c.district_code);
+      return (
+        (!fDist || c.district_code === fDist) &&
+        (!fProv || d?.province_code === fProv) &&
+        matchQ(c)
+      );
+    });
+  const rows = all.slice(0, limit);
+  const kindLabel = {
+    province: "Municipality",
+    district: "District",
+    commune: "Commune",
+  };
+  const counts = {
+    province: provinces.length,
+    district: districts.length,
+    commune: communes.length,
+  };
+
+  async function toggle(r) {
+    const key = `${tab}:${r.code}`;
+    setBusyKey(key);
+    setError("");
+    try {
+      const next = r.status === "Disabled" ? "Active" : "Disabled";
+      await ad.setStatus(tab, r, next);
+      emitCBToast("ok", "Status updated", `${r.name_en || r.code} → ${next}`);
+    } catch (err) {
+      setError(err.message || "មិនអាចប្តូរ Status បានទេ");
+      emitCBToast("err", "Update failed", err.message || "");
+    } finally {
+      setBusyKey("");
+    }
+  }
+  async function doImport() {
+    setImporting(true);
+    setError("");
+    try {
+      await ad.importDefaults();
+      emitCBToast(
+        "ok",
+        "Imported",
+        "បានបញ្ចូលទិន្នន័យ Cambodia លំនាំដើម (ខេត្ត/ស្រុក/ឃុំ)",
+      );
+    } catch (err) {
+      setError(err.message || "Import មិនបានសម្រេច");
+      emitCBToast("err", "Import failed", err.message || "");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  const linkBtn = "text-xs font-medium text-signal-blue hover:underline";
+  const columns = [
+    { key: "code", label: "Code", strong: true },
+    { key: "name_km", label: "Name KH", render: (r) => r.name_km || "—" },
+    { key: "name_en", label: "Name EN", render: (r) => r.name_en || "—" },
+    ...(tab === "commune"
+      ? [
+          {
+            key: "parent_district",
+            label: "District",
+            render: (r) =>
+              distBy.get(r.district_code)?.name_en || r.district_code,
+          },
+        ]
+      : []),
+    ...(tab !== "province"
+      ? [
+          {
+            key: "parent_province",
+            label: "Municipality",
+            render: (r) => {
+              const pc =
+                tab === "district"
+                  ? r.province_code
+                  : distBy.get(r.district_code)?.province_code;
+              return provBy.get(pc)?.name_en || pc || "—";
+            },
+          },
+        ]
+      : []),
+    { key: "status", label: "Status", status: true },
+    {
+      key: "actions",
+      label: "",
+      render: (r) =>
+        canManage ? (
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              className={linkBtn}
+              onClick={() => setForm({ kind: tab, existing: r })}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              disabled={busyKey === `${tab}:${r.code}`}
+              className={`text-xs font-medium hover:underline disabled:opacity-50 ${
+                r.status === "Disabled" ? "text-signal-teal" : "text-signal-red"
+              }`}
+              onClick={() => toggle(r)}
+            >
+              {r.status === "Disabled" ? "Activate" : "Disable"}
+            </button>
+          </div>
+        ) : null,
+    },
+  ];
+  const selectCls = `${INPUT_CLS} max-w-xs`;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="font-display font-bold text-xl text-ink-900">
+            Address
+          </h1>
+          <p className="text-sm text-ink-600/55 mt-0.5">
+            ទិន្នន័យ ខេត្ត/ក្រុង · ស្រុក/ខណ្ឌ · ឃុំ/សង្កាត់ នៃកម្ពុជា — Customer
+            ជ្រើសរើសពីបញ្ជីនេះ (ឃ្លាំងទទួល ជ្រើសតាម Warehouse Management)
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={ad.refetch}
+            className="flex items-center gap-1.5 bg-white border border-mist-200 text-ink-800 text-sm font-medium px-3.5 py-2 rounded-md hover:bg-mist-50"
+          >
+            <Icon name="RefreshCw" size={14} />
+            Refresh
+          </button>
+          {canManage && ad.tableReady && (
+            <button
+              type="button"
+              disabled={importing}
+              onClick={doImport}
+              title="បន្ថែមតែ Code ដែលខ្វះ — មិនសរសេរជាន់ទិន្នន័យដែលអ្នកបានកែ"
+              className="flex items-center gap-1.5 bg-white border border-mist-200 text-ink-800 text-sm font-medium px-3.5 py-2 rounded-md hover:bg-mist-50 disabled:opacity-50"
+            >
+              <Icon name="Download" size={14} />
+              {importing ? "កំពុង Import..." : "Import default data"}
+            </button>
+          )}
+          {canManage && (
+            <button
+              type="button"
+              disabled={!ad.tableReady}
+              onClick={() => setForm({ kind: tab, existing: null })}
+              className="flex items-center gap-1.5 bg-signal-blue text-white text-sm font-medium px-3.5 py-2 rounded-md hover:bg-signal-blue/90 disabled:opacity-50"
+            >
+              <Plus size={14} />
+              Create
+            </button>
+          )}
+        </div>
+      </div>
+
+      {supabase && !ad.tableReady && !ad.loading && (
+        <div className="flex items-start gap-2 text-sm text-[#8A5A12] bg-signal-amber/10 rounded-md px-3 py-2.5">
+          <TriangleAlert size={14} className="shrink-0 mt-0.5" />
+          {KH_ADDR_HINT} — កំពុងបង្ហាញទិន្នន័យលំនាំដើម (មិនអាច Save បានទេ)។
+        </div>
+      )}
+      {supabase &&
+        ad.tableReady &&
+        !ad.loading &&
+        counts.province === 0 &&
+        canManage && (
+          <div className="flex items-start gap-2 text-sm text-ink-700 bg-mist-50 rounded-md px-3 py-2.5">
+            <TriangleAlert size={14} className="shrink-0 mt-0.5" />
+            តារាងនៅទទេ — ចុច «Import default data»
+            ដើម្បីបញ្ចូលខេត្ត/ស្រុក/ឃុំទាំងអស់នៃកម្ពុជា។ ក្នុងពេលនេះ Customer
+            នៅប្រើបញ្ជីលំនាំដើមក្នុងកម្មវិធី។
+          </div>
+        )}
+      {!canManage && (
+        <div className="text-xs text-ink-600/55 bg-mist-50 rounded-md px-3 py-2">
+          អ្នកមើលបានតែប៉ុណ្ណោះ — ត្រូវមានសិទ្ធិ Manage Warehouses
+          ដើម្បីបង្កើត/កែ។
+        </div>
+      )}
+      {error && (
+        <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2">
+          <TriangleAlert size={14} className="shrink-0" />
+          {error}
+        </div>
+      )}
+
+      <div className="cb-surface cb-card">
+        <div className="flex items-center justify-between gap-3 flex-wrap px-4 lg:px-5 pt-3 border-b border-mist-200">
+          <div className="flex gap-1">
+            {["province", "district", "commune"].map((key) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setTab(key)}
+                className={`text-sm px-3 py-2 border-b-2 whitespace-nowrap ${
+                  tab === key
+                    ? "border-signal-blue text-signal-blue font-medium"
+                    : "border-transparent text-ink-600/60 hover:text-ink-900"
+                }`}
+              >
+                {kindLabel[key]}{" "}
+                <span className="ml-1 bg-mist-100 text-ink-700 text-[11px] px-1.5 py-0.5 rounded-md">
+                  {counts[key]}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 border border-mist-200 rounded-md px-3 py-1.5 mb-2 focus-within:border-signal-blue">
+            <Search size={14} className="text-ink-600/40" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search code / name"
+              className="outline-none text-sm bg-transparent w-56"
+            />
+          </div>
+        </div>
+
+        {tab !== "province" && (
+          <div className="flex flex-wrap gap-4 px-4 lg:px-5 py-4 border-b border-mist-100">
+            <div className="flex-1 min-w-[200px]">
+              <label className={LABEL_CLS}>Municipality</label>
+              <select
+                value={fProv}
+                onChange={(e) => {
+                  setFProv(e.target.value);
+                  setFDist("");
+                }}
+                className={selectCls}
+              >
+                <option value="">All</option>
+                {provinces.map((p) => (
+                  <option key={p.code} value={p.code}>
+                    {p.name_en} {p.name_km ? `· ${p.name_km}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {tab === "commune" && (
+              <div className="flex-1 min-w-[200px]">
+                <label className={LABEL_CLS}>District</label>
+                <select
+                  value={fDist}
+                  disabled={!fProv}
+                  onChange={(e) => setFDist(e.target.value)}
+                  className={`${selectCls} disabled:bg-mist-50`}
+                >
+                  <option value="">All</option>
+                  {districts
+                    .filter((d) => d.province_code === fProv)
+                    .map((d) => (
+                      <option key={d.code} value={d.code}>
+                        {d.name_en} {d.name_km ? `· ${d.name_km}` : ""}
+                      </option>
+                    ))}
+                </select>
+              </div>
+            )}
+          </div>
+        )}
+
+        <DataTable
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => `${tab}:${r.code}`}
+          loading={ad.loading && !ad.data.provinces.length}
+          skeletonRows={6}
+          emptyTitle="No address data"
+          emptyHint={
+            q || fProv || fDist
+              ? "សូមសាកល្បងប្តូរ Filter ឬពាក្យស្វែងរក"
+              : "ចុច Import default data ឬ Create ដើម្បីបន្ថែម"
+          }
+        />
+        {all.length > rows.length && (
+          <div className="flex items-center justify-between px-4 lg:px-5 py-3 border-t border-mist-100 text-sm text-ink-600/70">
+            <span>
+              Showing {rows.length} of {all.length}
+            </span>
+            <button
+              type="button"
+              onClick={() => setLimit((n) => n + 200)}
+              className={linkBtn}
+            >
+              Show more
+            </button>
+          </div>
+        )}
+      </div>
+
+      {form && (
+        <KhAddrFormModal
+          kind={form.kind}
+          existing={form.existing}
+          provinces={provinces}
+          districts={districts}
+          onClose={() => setForm(null)}
+          onSave={ad.save}
+        />
+      )}
     </div>
   );
 }
@@ -36048,91 +36928,168 @@ const CustomerApp = (() => {
   //   create policy "customers read active KH branches" on warehouses
   //     for select to authenticated
   //     using (type = 'cambodia' and status = 'Active');
-  // Select from the areas that really have a branch; "Other" lets the
-  // customer type a place that has no branch yet.
-  function LocPick({ label, value, options, onPick, disabled, ph }) {
-    const { tr } = useApp();
-    const [other, setOther] = useState(false);
-    const typed = other || (value && !options.includes(value));
-    const box =
-      "w-full h-12 px-3.5 rounded-xl bg-white border border-slate-200 text-[15px] outline-none focus:border-blue-500 disabled:bg-slate-50 disabled:text-slate-400";
+  // Province / District / Commune come from the full Cambodia gazetteer
+  // (embedded below). Only the receiving WAREHOUSE is limited to
+  // the branches defined in the admin (warehouses table).
+  // Loose key so "Phnom Penh", "រាជធានីភ្នំពេញ", "Phnom Penh City" all compare equal.
+  const lkey = (x) =>
+    String(x || "")
+      .toLowerCase()
+      .replace(/^(រាជធានី|ខេត្ត|ស្រុក|ខណ្ឌ|ក្រុង|ឃុំ|សង្កាត់)/, "")
+      .replace(
+        /\b(province|district|commune|khan|sangkat|municipality|city|krong|srok|khum)\b/g,
+        "",
+      )
+      .replace(/[^a-z0-9\u1780-\u17ff]/g, "");
+  function LocRow({ label, value, ph, onClick, disabled, required }) {
     return (
-      <label className="block">
-        <span className="text-[13px] font-semibold text-slate-700 mb-1.5 block">
+      <div>
+        <p className="text-[13px] font-semibold text-slate-700 mb-1.5">
           {label}
-        </span>
-        {typed ? (
-          <div className="flex gap-2">
-            <input
-              value={value}
-              onChange={(e) => onPick(e.target.value)}
-              className={box}
-            />
-            {options.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {
-                  setOther(false);
-                  onPick("");
-                }}
-                className="px-3 rounded-xl border border-slate-200 bg-white text-xs text-blue-600 shrink-0"
-              >
-                {tr("List", "បញ្ជី")}
-              </button>
-            )}
-          </div>
-        ) : (
-          <select
-            value={value || ""}
-            disabled={disabled}
-            onChange={(e) => {
-              if (e.target.value === "__other") {
-                setOther(true);
-                onPick("");
-              } else onPick(e.target.value);
-            }}
-            className={box}
+          {required && <span className="text-red-500"> *</span>}
+        </p>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onClick}
+          className="w-full h-12 px-3.5 rounded-xl bg-white border border-slate-200 flex items-center gap-2 text-left disabled:bg-slate-50 disabled:opacity-60"
+        >
+          <span
+            className={`flex-1 text-[15px] truncate ${value ? "text-slate-900" : "text-slate-400"}`}
           >
-            <option value="">— {tr("Select", "ជ្រើសរើស")} —</option>
-            {options.map((o) => (
-              <option key={o} value={o}>
-                {o}
-              </option>
-            ))}
-            <option value="__other">
-              {tr("Other (type it in)", "ផ្សេងទៀត (វាយខ្លួនឯង)")}
-            </option>
-          </select>
-        )}
-      </label>
+            {value || ph}
+          </span>
+          <ChevronRight size={18} className="text-slate-400 shrink-0" />
+        </button>
+      </div>
+    );
+  }
+  // Full-screen "Select …" page: back button, search, tick on the chosen row.
+  function PickPage({
+    title,
+    items,
+    selected,
+    onPick,
+    onClose,
+    q,
+    setQ,
+    empty,
+  }) {
+    const { tr } = useApp();
+    const k = q.trim().toLowerCase();
+    const list = k ? items.filter((it) => it.search.includes(k)) : items;
+    return (
+      <div
+        className="fixed inset-0 z-[70] bg-slate-50 flex flex-col max-w-md mx-auto"
+        style={FONT}
+      >
+        <div
+          className="relative flex items-center justify-center h-14 px-4 shrink-0"
+          style={{ marginTop: "env(safe-area-inset-top)" }}
+        >
+          <button
+            type="button"
+            onClick={onClose}
+            className="absolute left-4 w-10 h-10 rounded-full bg-white border border-slate-200 shadow-sm grid place-items-center"
+          >
+            <ChevronLeft size={20} />
+          </button>
+          <h2 className="font-semibold text-base">{title}</h2>
+        </div>
+        <div className="px-4 pb-2 shrink-0">
+          <div className="h-12 px-3.5 rounded-xl bg-white border border-slate-200 flex items-center gap-2">
+            <Search size={18} className="text-slate-400 shrink-0" />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder={tr("Search", "ស្វែងរក")}
+              className="flex-1 min-w-0 bg-transparent outline-none text-[15px]"
+            />
+          </div>
+        </div>
+        <div
+          className="flex-1 overflow-y-auto px-4 space-y-2"
+          style={{ paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))" }}
+        >
+          {list.map((it) => (
+            <button
+              key={it.id}
+              type="button"
+              onClick={() => onPick(it)}
+              className="w-full text-left bg-white rounded-xl px-4 py-3.5 flex items-center gap-3 active:bg-slate-50"
+            >
+              <span className="flex-1 min-w-0">
+                <b className="block text-[15px] font-medium text-slate-900">
+                  {it.label}
+                </b>
+                {it.sub && (
+                  <span className="block text-xs text-slate-500 mt-0.5">
+                    {it.sub}
+                  </span>
+                )}
+              </span>
+              {selected === it.id && (
+                <span className="w-6 h-6 rounded-full border-2 border-green-600 text-green-600 grid place-items-center shrink-0">
+                  <Check size={14} strokeWidth={3} />
+                </span>
+              )}
+            </button>
+          ))}
+          {!list.length && (
+            <p className="text-center text-sm text-slate-400 py-10 px-4">
+              {empty || tr("No results found", "រកមិនឃើញលទ្ធផល")}
+            </p>
+          )}
+        </div>
+      </div>
     );
   }
   function Addresses() {
-    const { addrs, branches, branchErr, saveAddr, delAddr, setDef, say, tr } =
-      useApp();
+    const {
+      addrs,
+      branches,
+      branchErr,
+      saveAddr,
+      delAddr,
+      setDef,
+      say,
+      tr,
+      lang,
+    } = useApp();
     const [ed, setEd] = useState(null);
     const [busy, setBusy] = useState(false);
-    const [pickBranch, setPickBranch] = useState(false);
+    const [pick, setPick] = useState(null); // province | district | commune | branch
     const [bq, setBq] = useState("");
+    // Same master data the admin manages (Admin → Address); falls back to the built-in list.
+    const kh = useKhGazetteer();
     const branchOf = (code) => branches.find((b) => b.code === code);
-    const norm = (x) =>
-      String(x || "")
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, " ");
-    const uniq = (a) => [...new Set(a.filter(Boolean))];
-    const same = (a, b) => norm(a) === norm(b);
+    // gazetteer rows are [code, nameKm, nameEn, children]
+    const nm = (o) => (lang === "km" ? o[1] || o[2] : o[2] || o[1]);
+    const hit = (o, v) =>
+      !!v && (lkey(o[2]) === lkey(v) || lkey(o[1]) === lkey(v));
+    const resolve = (loc) => {
+      const po = kh?.find((x) => hit(x, loc?.province));
+      const dO = po?.[3].find((x) => hit(x, loc?.district));
+      const cO = dO?.[3].find((x) => hit(x, loc?.commune));
+      return { po, dO, cO };
+    };
+    const { po: provO, dO: distO, cO: commO } = resolve(ed);
     // Branches that serve the chosen area: narrow Province → District →
     // Commune, but never narrow to zero (fall back to the wider level).
+    // A branch's area text may be Khmer or English, so compare against both.
     const matchBranches = (loc) => {
       if (!loc.province) return [];
-      let m = branches.filter((b) => same(b.province, loc.province));
+      const { po, dO, cO } = resolve(loc);
+      const ks = (o, raw) =>
+        (o ? [lkey(o[1]), lkey(o[2])] : [lkey(raw)]).filter(Boolean);
+      const is = (bv, list) => list.includes(lkey(bv));
+      let m = branches.filter((b) => is(b.province, ks(po, loc.province)));
       if (loc.district) {
-        const d = m.filter((b) => same(b.district, loc.district));
+        const d = m.filter((b) => is(b.district, ks(dO, loc.district)));
         if (d.length) m = d;
       }
       if (loc.commune) {
-        const c = m.filter((b) => same(b.commune, loc.commune));
+        const c = m.filter((b) => is(b.commune, ks(cO, loc.commune)));
         if (c.length) m = c;
       }
       return m;
@@ -36150,21 +37107,17 @@ const CustomerApp = (() => {
         next.branch = "";
       setEd(next);
     };
-    const provinces = uniq(branches.map((b) => b.province));
-    const districts = uniq(
-      branches
-        .filter((b) => same(b.province, ed?.province))
-        .map((b) => b.district),
-    );
-    const communes = uniq(
-      branches
-        .filter(
-          (b) =>
-            same(b.province, ed?.province) &&
-            (!ed?.district || same(b.district, ed.district)),
-        )
-        .map((b) => b.commune),
-    );
+    const locItems = (rows) =>
+      (rows || []).map((o) => ({
+        id: o[0],
+        label: nm(o),
+        search: `${o[1]} ${o[2]}`.toLowerCase(),
+        raw: o,
+      }));
+    const closePick = () => {
+      setPick(null);
+      setBq("");
+    };
     const s = (k) => (v) => setEd({ ...ed, [k]: v });
     return (
       <>
@@ -36298,25 +37251,38 @@ const CustomerApp = (() => {
                 v={ed.phone}
                 set={s("phone")}
               />
-              <LocPick
+              <LocRow
+                required
                 label={tr("Province", "ខេត្ត/ក្រុង")}
-                value={ed.province}
-                options={provinces}
-                onPick={(v) => setLoc({ province: v })}
+                value={provO ? nm(provO) : ed.province}
+                ph={tr("Select Province", "ជ្រើសរើសខេត្ត/ក្រុង")}
+                disabled={!kh}
+                onClick={() => {
+                  setBq("");
+                  setPick("province");
+                }}
               />
-              <LocPick
+              <LocRow
+                required
                 label={tr("District", "ស្រុក/ខណ្ឌ")}
-                value={ed.district}
-                options={districts}
-                disabled={!ed.province}
-                onPick={(v) => setLoc({ district: v })}
+                value={distO ? nm(distO) : ed.district}
+                ph={tr("Select District", "ជ្រើសរើសស្រុក/ខណ្ឌ")}
+                disabled={!provO}
+                onClick={() => {
+                  setBq("");
+                  setPick("district");
+                }}
               />
-              <LocPick
+              <LocRow
+                required
                 label={tr("Commune", "ឃុំ/សង្កាត់")}
-                value={ed.commune}
-                options={communes}
-                disabled={!ed.district}
-                onPick={(v) => setLoc({ commune: v })}
+                value={commO ? nm(commO) : ed.commune}
+                ph={tr("Select Commune", "ជ្រើសរើសឃុំ/សង្កាត់")}
+                disabled={!distO}
+                onClick={() => {
+                  setBq("");
+                  setPick("commune");
+                }}
               />
               <Field
                 label={tr("Detailed Address", "អាសយដ្ឋានលម្អិត")}
@@ -36332,7 +37298,7 @@ const CustomerApp = (() => {
                   type="button"
                   onClick={() => {
                     setBq("");
-                    setPickBranch(true);
+                    setPick("branch");
                   }}
                   className="w-full min-h-12 px-3 py-2 rounded-xl border border-slate-200 bg-white flex items-center gap-2 text-left"
                 >
@@ -36385,7 +37351,15 @@ const CustomerApp = (() => {
                 {tr("Set as Default", "កំណត់ជាលំនាំដើម")}
               </label>
               <Btn
-                disabled={busy || !ed.name || !ed.phone || !ed.branch}
+                disabled={
+                  busy ||
+                  !ed.name ||
+                  !ed.phone ||
+                  !ed.province ||
+                  !ed.district ||
+                  !ed.commune ||
+                  !ed.branch
+                }
                 onClick={async () => {
                   setBusy(true);
                   await saveAddr(ed);
@@ -36399,97 +37373,85 @@ const CustomerApp = (() => {
             </div>
           </div>
         )}
-        {ed && pickBranch && (
-          <div
-            className="fixed inset-0 bg-slate-900/40 z-[60] flex items-end justify-center"
-            onClick={() => setPickBranch(false)}
-          >
-            <div
-              onClick={(e) => e.stopPropagation()}
-              className="bg-slate-50 w-full max-w-md rounded-t-3xl p-5 space-y-3 h-[85vh] flex flex-col"
-              style={FONT}
-            >
-              <div className="flex justify-between items-center">
-                <h2 className="font-bold text-lg">
-                  {tr("Select Nearby Warehouse", "ជ្រើសរើសឃ្លាំងនៅជិត")}
-                </h2>
-                <button onClick={() => setPickBranch(false)}>
-                  <X size={22} />
-                </button>
-              </div>
-              <input
-                value={bq}
-                onChange={(e) => setBq(e.target.value)}
-                placeholder={tr("Search warehouse", "ស្វែងរកឃ្លាំង")}
-                className="h-11 px-3 rounded-xl border border-slate-200 bg-white text-sm outline-none"
-              />
-              <div className="flex-1 overflow-y-auto space-y-2">
-                {(() => {
-                  const k = bq.trim().toLowerCase();
-                  const list = branches
-                    .filter(
-                      (b) =>
-                        !k ||
-                        [b.name, b.code, b.province, b.district, b.address]
-                          .join(" ")
-                          .toLowerCase()
-                          .includes(k),
-                    )
-                    // branches serving the customer's area come first
-                    .sort((a, b) => {
-                      const ids = matchBranches(ed).map((x) => x.code);
-                      return ids.includes(b.code) - ids.includes(a.code);
-                    });
-                  if (!list.length)
-                    return (
-                      <p className="text-center text-sm text-slate-400 py-10 px-4">
-                        {branchErr
-                          ? tr(
-                              `Unable to load the branch list. Please contact support. (${branchErr})`,
-                              `មិនអាចទាញយកបញ្ជីសាខាបានទេ សូមទាក់ទងផ្នែកជំនួយ (${branchErr})`,
-                            )
-                          : tr(
-                              "No active receiving branches available.",
-                              "មិនមានសាខាទទួលដែលកំពុងដំណើរការទេ។",
-                            )}
-                      </p>
-                    );
-                  return list.map((b) => (
-                    <button
-                      key={b.code}
-                      type="button"
-                      onClick={() => {
-                        setEd({ ...ed, branch: b.code });
-                        setPickBranch(false);
-                      }}
-                      className={`w-full text-left p-3 rounded-2xl border flex gap-3 ${
-                        ed.branch === b.code
-                          ? "border-blue-500 bg-blue-50"
-                          : "border-slate-200 bg-white"
-                      }`}
-                    >
-                      <span
-                        className={`mt-1 w-4 h-4 rounded-full border-2 shrink-0 ${
-                          ed.branch === b.code
-                            ? "border-blue-600 bg-blue-600"
-                            : "border-slate-300"
-                        }`}
-                      />
-                      <span className="min-w-0">
-                        <b className="block text-sm">{b.name}</b>
-                        <span className="block text-xs text-slate-500 mt-0.5">
-                          {b.address ||
-                            [b.commune, b.district, b.province]
-                              .filter(Boolean)
-                              .join(", ")}
-                        </span>
-                      </span>
-                    </button>
-                  ));
-                })()}
-              </div>
-            </div>
-          </div>
+        {ed && pick && pick !== "branch" && (
+          <PickPage
+            title={
+              pick === "province"
+                ? tr("Select Province", "ជ្រើសរើសខេត្ត/ក្រុង")
+                : pick === "district"
+                  ? tr("Select District", "ជ្រើសរើសស្រុក/ខណ្ឌ")
+                  : tr("Select Commune", "ជ្រើសរើសឃុំ/សង្កាត់")
+            }
+            items={locItems(
+              pick === "province"
+                ? kh
+                : pick === "district"
+                  ? provO?.[3]
+                  : distO?.[3],
+            )}
+            selected={
+              pick === "province"
+                ? provO?.[0]
+                : pick === "district"
+                  ? distO?.[0]
+                  : commO?.[0]
+            }
+            q={bq}
+            setQ={setBq}
+            onClose={closePick}
+            onPick={(it) => {
+              setLoc({ [pick]: it.raw[2] });
+              closePick();
+            }}
+          />
+        )}
+        {ed && pick === "branch" && (
+          <PickPage
+            title={tr("Select Nearby Warehouse", "ជ្រើសរើសឃ្លាំងនៅជិត")}
+            items={(() => {
+              const near = matchBranches(ed).map((x) => x.code);
+              return [...branches]
+                .sort((a, b) => near.includes(b.code) - near.includes(a.code))
+                .map((b) => ({
+                  id: b.code,
+                  label: b.name,
+                  sub:
+                    b.address ||
+                    [b.commune, b.district, b.province]
+                      .filter(Boolean)
+                      .join(", "),
+                  search: [
+                    b.name,
+                    b.code,
+                    b.province,
+                    b.district,
+                    b.commune,
+                    b.address,
+                  ]
+                    .join(" ")
+                    .toLowerCase(),
+                }));
+            })()}
+            selected={ed.branch}
+            q={bq}
+            setQ={setBq}
+            onClose={closePick}
+            onPick={(it) => {
+              setEd({ ...ed, branch: it.id });
+              closePick();
+            }}
+            empty={
+              branchErr
+                ? tr(
+                    `Unable to load the branch list. Please contact support. (${branchErr})`,
+                    `មិនអាចទាញយកបញ្ជីសាខាបានទេ សូមទាក់ទងផ្នែកជំនួយ (${branchErr})`,
+                  )
+                : tr(
+                    "No active receiving branches available.",
+                    "មិនមានសាខាទទួលដែលកំពុងដំណើរការទេ។",
+                  )
+            }
+          />
         )}
       </>
     );
@@ -77126,6 +78088,7 @@ function AdminApp() {
               <Route path="/delivery" element={<DeliveryPage />} />
               <Route path="/sorting" element={<SortingPage />} />
               <Route path="/warehouses" element={<WarehouseManagementPage />} />
+              <Route path="/addresses" element={<AddressManagementPage />} />
               <Route path="/kh-warehouse" element={<KhWarehousePage />} />
               <Route path="/roles" element={<RoleManagementPage />} />
               <Route
@@ -77183,6 +78146,7 @@ function AdminApp() {
                     "/wh-arrived",
                     "/sorting",
                     "/warehouses",
+                    "/addresses", // custom page above
                     "/kh-warehouse",
                     "/roles",
                     "/customer-features",
