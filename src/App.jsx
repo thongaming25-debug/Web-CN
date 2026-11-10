@@ -2385,11 +2385,7 @@ function CopyTkButton({ value }) {
         setTimeout(() => setDone(false), 1400);
         emitCBToast("success", "Copied", String(value));
       }}
-      className={`shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md border transition-colors ${
-        done
-          ? "border-emerald-200 bg-emerald-50 text-emerald-600"
-          : "border-transparent text-signal-blue hover:bg-signal-blue/10 hover:border-signal-blue/20"
-      }`}
+      className={`cb-hc-btn${done ? " is-done" : ""}`}
     >
       {done ? <Check size={14} /> : <Copy size={14} />}
     </button>
@@ -2402,7 +2398,7 @@ function tkTypeCol() {
   return col("tk", "TK Number", {
     render: (row) => (
       <div className="leading-tight">
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 cb-hc-row">
           <Link
             to={pkgRowHref(row)}
             className="font-semibold text-signal-blue hover:underline"
@@ -2425,7 +2421,14 @@ function orderMethodCol(extra) {
   return col("order_no", "Order", {
     render: (row) => (
       <div className="leading-tight">
-        <div className="font-semibold text-ink-900">{row.order_no || "—"}</div>
+        <div className="font-semibold text-ink-900">
+          <HoverCopy
+            value={row.order_no && row.order_no !== "—" ? row.order_no : ""}
+            label="Copy order ID"
+          >
+            <span>{row.order_no || "—"}</span>
+          </HoverCopy>
+        </div>
         <div className="mt-1.5 flex items-center gap-2 flex-wrap">
           <span className="inline-flex items-center gap-1 text-xs font-semibold text-ink-700">
             <ShipMethodIcon
@@ -4520,6 +4523,42 @@ async function cnCopyText(text) {
   }
 }
 
+// Text + a copy button that only appears while hovering the text/cell
+// (always visible on touch screens). Click is isolated so it never opens the row.
+function HoverCopy({ value, copyValue, label = "Copy", children }) {
+  const [done, setDone] = useState(false);
+  const toCopy = String(copyValue ?? value ?? "");
+  if (!toCopy) return <>{children}</>;
+  return (
+    <span className="cb-hc">
+      {children}
+      <button
+        type="button"
+        title={label}
+        aria-label={label}
+        onClick={async (e) => {
+          e.stopPropagation();
+          const ok = await cnCopyText(toCopy);
+          if (!ok) {
+            emitCBToast(
+              "error",
+              "Copy failed",
+              "Please copy the number manually.",
+            );
+            return;
+          }
+          setDone(true);
+          setTimeout(() => setDone(false), 1400);
+          emitCBToast("success", "Copied", toCopy.split("\n").join(", "));
+        }}
+        className={`cb-hc-btn${done ? " is-done" : ""}`}
+      >
+        {done ? <Check size={14} /> : <Copy size={14} />}
+      </button>
+    </span>
+  );
+}
+
 // Tracking-number list for an order row, one click to copy each TK (or all).
 // Clicks are isolated so they never open the order row underneath.
 function CnTrackingCell({ tks }) {
@@ -4550,7 +4589,7 @@ function CnTrackingCell({ tks }) {
       onClick={(e) => e.stopPropagation()}
     >
       {shown.map((tk) => (
-        <div key={tk} className="flex items-center gap-2">
+        <div key={tk} className="flex items-center gap-2 cb-hc-row">
           <span className="font-semibold text-ink-900 tabular-nums tracking-tight">
             {tk}
           </span>
@@ -4559,11 +4598,7 @@ function CnTrackingCell({ tks }) {
             title="Copy tracking number"
             aria-label={`Copy ${tk}`}
             onClick={() => doCopy(tk, tk)}
-            className={`shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md border transition-colors ${
-              copied === tk
-                ? "border-emerald-200 bg-emerald-50 text-emerald-600"
-                : "border-transparent text-signal-blue hover:bg-signal-blue/10 hover:border-signal-blue/20"
-            }`}
+            className={`cb-hc-btn${copied === tk ? " is-done" : ""}`}
           >
             {copied === tk ? <Check size={14} /> : <Copy size={14} />}
           </button>
@@ -22685,6 +22720,10 @@ function normalizeAirLookupRow(r) {
     warehouse_display: a.dest_branch_code || "—",
     shipping_method_display: "AIR",
     status_display: a.status || "—",
+    updated_at: a.updated_at || a.created_at || null,
+    completed: canonicalAirStatus(a.status) === "Complete Order",
+    parcels: 1,
+    total_value: finHasCharge(a) ? finCharge(a) : null,
     customer_display: a.customer || "—",
     customer_code_display:
       String(a.customer || "")
@@ -22701,6 +22740,7 @@ function normalizeCnOrderLookupRow(o) {
   return {
     id: o.id,
     source: "CN",
+    cn_row: o, // full CN order row -> same status badge as the CN Orders page
     order_id: o.order_id,
     type_display: "Parse Link",
     cn_order_display: o.order_id || "",
@@ -22709,11 +22749,93 @@ function normalizeCnOrderLookupRow(o) {
     product_display: o.product_name || "—",
     shop_display: o.shop_name || "",
     warehouse_display: "—",
-    shipping_method_display: "—",
+    shipping_method_display: normShipMethod(o.shipping_method) || "—",
     status_display: o.status || "—",
+    updated_at: o.updated_at || o.created_at || null,
+    completed: cnNormalizeStatus(o.status) === "Complete Order",
+    parcels: 0,
+    total_value: Number.isFinite(Number(o.total_due_usd))
+      ? Number(o.total_due_usd)
+      : null,
     customer_display: customerLabel || "—",
     customer_code_display: String(customerLabel).split(" · ")[0].trim() || "—",
   };
+}
+
+// cn_orders.id -> full CN order row (filled by Shipment Lookup searches).
+// Used to show ONE Parse Link row per CN order with the order's own total.
+const LOOKUP_CN_BY_ID = {};
+const lookupUpdatedAt = (row) => row?.updated_at || row?.created_at || null;
+const lookupIsCompleted = (row) =>
+  row?.completed === true ||
+  ["completed", "complete order"].includes(
+    String(row?.status_display || "")
+      .trim()
+      .toLowerCase(),
+  );
+const lookupHref = (row) => {
+  if (row.source === "CN")
+    return `/cn-orders/${encodeURIComponent(row.order_id || row.cn_order_display)}`;
+  return pkgRowHref(row);
+};
+// Receiving branch(es) of a result row. A Parse Link order with several TKs
+// can sit in more than one branch, so this returns a list.
+function lookupWarehouses(row) {
+  if (row?.warehouse_list?.length) return row.warehouse_list;
+  return row?.warehouse_code
+    ? [{ code: row.warehouse_code, name: row.warehouse_name || "" }]
+    : [];
+}
+function uniqueWarehouses(list) {
+  const seen = new Map();
+  list.forEach((r) => {
+    if (r.warehouse_code && !seen.has(r.warehouse_code))
+      seen.set(r.warehouse_code, {
+        code: r.warehouse_code,
+        name: r.warehouse_name || "",
+      });
+  });
+  return [...seen.values()];
+}
+
+// Parse Link TKs of the same CN order collapse into ONE row (PO style),
+// Shipment TKs stay one row each.
+function groupLookupRows(chinaRows) {
+  const direct = [];
+  const byCn = new Map();
+  chinaRows.forEach((r) => {
+    if (!r.cn_order_id) direct.push(r);
+    else {
+      if (!byCn.has(r.cn_order_id)) byCn.set(r.cn_order_id, []);
+      byCn.get(r.cn_order_id).push(r);
+    }
+  });
+  const grouped = [];
+  byCn.forEach((list, id) => {
+    const cn = LOOKUP_CN_BY_ID[id];
+    if (cn) {
+      grouped.push({
+        ...normalizeCnOrderLookupRow(cn),
+        tk_display: list[0].tk_display,
+        tk_list: list.map((r) => r.tk_display).filter((t) => t && t !== "—"),
+        tk_extra: list.length - 1,
+        parcels: list.length,
+        warehouse_display: list[0].warehouse_display,
+        warehouse_code: list[0].warehouse_code,
+        warehouse_name: list[0].warehouse_name,
+        warehouse_list: uniqueWarehouses(list),
+      });
+    } else {
+      grouped.push({
+        ...list[0],
+        tk_list: list.map((r) => r.tk_display).filter((t) => t && t !== "—"),
+        tk_extra: list.length - 1,
+        parcels: list.length,
+        warehouse_list: uniqueWarehouses(list),
+      });
+    }
+  });
+  return [...direct, ...grouped];
 }
 
 // Search-by options for the Shipment Lookup dropdown.
@@ -22735,7 +22857,6 @@ function inferLookupField(q) {
 function ShipmentLookup() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const canAir = hasPermission(user, "air_order.view");
   const [searchParams] = useSearchParams();
   const { packages } = usePackageTracking();
   const [searchValue, setSearchValue] = useState(searchParams.get("q") || "");
@@ -22743,9 +22864,10 @@ function ShipmentLookup() {
   const [searched, setSearched] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [originFilter, setOriginFilter] = useState(""); // "" | "China" | "Indonesia"
   const [searchField, setSearchField] = useState("customer_id");
   const [fieldOpen, setFieldOpen] = useState(false);
+  const [statusTab, setStatusTab] = useState("processing"); // processing | completed
+  const [whFilter, setWhFilter] = useState(""); // "" = all branches
   const activeField =
     LOOKUP_FIELDS.find((f) => f.key === searchField) || LOOKUP_FIELDS[0];
 
@@ -22776,12 +22898,20 @@ function ShipmentLookup() {
         warehouse_display: warehouse
           ? `${warehouse.code}${warehouse.name ? ` · ${warehouse.name}` : ""}`
           : branchCode || "—",
+        warehouse_code: branchCode || "",
+        warehouse_name: warehouse?.name || "",
         shipping_method_display:
+          (pkg.cn_order_id &&
+            normShipMethod(CN_SHIP_METHOD_BY_ID[pkg.cn_order_id])) ||
           container?.shipping_method ||
           pkg.shipping_method ||
           order?.shipping_method ||
           "—",
         status_display: pkg.status || "—",
+        updated_at: pkg.updated_at || pkg.created_at || null,
+        completed: pkg.status === "Completed",
+        parcels: 1,
+        total_value: shippingFeeOf(pkg).total,
         customer_display: pkg.customer || order?.customer || "—",
         // Human-readable customer code only. Never render the database UUID.
         customer_code_display:
@@ -22813,7 +22943,7 @@ function ShipmentLookup() {
     setSearched(true);
     setError("");
     setRows([]);
-    setOriginFilter("");
+    setWhFilter("");
 
     try {
       if (supabase) {
@@ -22921,6 +23051,7 @@ function ShipmentLookup() {
           cnOrders = [...cnById.values()];
           cnOrders.forEach((o) => {
             if (o.id && o.order_id) {
+              LOOKUP_CN_BY_ID[o.id] = o;
               CN_ORDER_NO_BY_ID[o.id] = o.order_id;
               CN_SHIP_METHOD_BY_ID[o.id] = o.shipping_method || "";
             }
@@ -22954,9 +23085,10 @@ function ShipmentLookup() {
         if (unknownCn.length) {
           const { data: cns } = await supabase
             .from("cn_orders")
-            .select("id,order_id,shipping_method")
+            .select("*")
             .in("id", unknownCn);
           (cns || []).forEach((c) => {
+            LOOKUP_CN_BY_ID[c.id] = c;
             CN_ORDER_NO_BY_ID[c.id] = c.order_id;
             CN_SHIP_METHOD_BY_ID[c.id] = c.shipping_method || "";
           });
@@ -23015,8 +23147,10 @@ function ShipmentLookup() {
             warehouseMap[String(wh.code).trim().toLowerCase()] = wh;
           }
         }
-        const chinaRows = matchedPackages.map((pkg) =>
-          normalize(pkg, containerMap, warehouseMap, orderMap),
+        const chinaRows = groupLookupRows(
+          matchedPackages.map((pkg) =>
+            normalize(pkg, containerMap, warehouseMap, orderMap),
+          ),
         );
 
         // CN orders that have no TK yet become their own rows
@@ -23027,29 +23161,7 @@ function ShipmentLookup() {
           .filter((o) => !withTk.has(o.id))
           .map(normalizeCnOrderLookupRow);
 
-        // 5) AIR (Indonesia). A failure here must never break China search.
-        let airRows = [];
-        try {
-          if (!canAir) throw new Error("no-air-permission");
-          let airQuery = supabase.from("air_orders").select("*");
-          if (isCustomerField) {
-            if (!ids100.length) throw new Error("no-air-match");
-            airQuery = airQuery.in("customer_id", ids100);
-          } else {
-            airQuery = airQuery.ilike(
-              fieldKey === "tk" ? "tk" : "order_id",
-              `%${qa}%`,
-            );
-          }
-          const { data: airData } = await airQuery
-            .order("created_at", { ascending: false })
-            .limit(500);
-          airRows = (airData || []).map(normalizeAirLookupRow);
-        } catch (airErr) {
-          if (!["no-air-permission", "no-air-match"].includes(airErr?.message))
-            console.warn("[shipment-lookup] AIR search skipped", airErr);
-        }
-        setRows([...chinaRows, ...cnOnlyRows, ...airRows]);
+        setRows([...chinaRows, ...cnOnlyRows]);
       } else {
         // UI-only fallback: same per-field rule over the local registry.
         const upper = query.toUpperCase();
@@ -23078,13 +23190,8 @@ function ShipmentLookup() {
             .toUpperCase()
             .includes(upper);
         const matches = packages.filter((p) => hit(p, false));
-        const airMatches = (canAir ? airOrderLocalRows() : [])
-          .map(normalizeAirRow)
-          .filter((r) => hit(r, true))
-          .map(normalizeAirLookupRow);
         setRows([
-          ...matches.map((pkg) => normalize(pkg, {}, {}, {})),
-          ...airMatches,
+          ...groupLookupRows(matches.map((pkg) => normalize(pkg, {}, {}, {}))),
         ]);
       }
     } catch (err) {
@@ -23111,18 +23218,63 @@ function ShipmentLookup() {
   }, [searchParams]);
 
   const handleSearch = () => runSearch(searchValue);
-  const noResults = searched && !loading && !error && rows.length === 0;
-  const visibleRows = originFilter
-    ? rows.filter((r) => lookupOriginOf(r) === originFilter)
-    : rows;
-  const originCounts = {
-    China: rows.filter((r) => lookupOriginOf(r) === "China").length,
-    Indonesia: rows.filter((r) => lookupOriginOf(r) === "Indonesia").length,
+  const handleClear = () => {
+    setSearchValue("");
+    setRows([]);
+    setSearched(false);
+    setError("");
+    setStatusTab("processing");
+    setWhFilter("");
   };
+  // After every search: land on the tab that actually has orders.
+  useEffect(() => {
+    if (!rows.length) return;
+    setStatusTab(rows.every(lookupIsCompleted) ? "completed" : "processing");
+  }, [rows]);
+  const noResults = searched && !loading && !error && rows.length === 0;
+  const originRows = rows;
+  const processingCount = originRows.filter(
+    (r) => !lookupIsCompleted(r),
+  ).length;
+  const completedCount = originRows.length - processingCount;
+  const statusRows = originRows.filter((r) =>
+    statusTab === "completed" ? lookupIsCompleted(r) : !lookupIsCompleted(r),
+  );
+  // Branch summary for the customer header: how many orders per branch.
+  const branchSummary = (() => {
+    const m = new Map();
+    statusRows.forEach((r) =>
+      lookupWarehouses(r).forEach((w) => {
+        const cur = m.get(w.code) || { ...w, orders: 0 };
+        cur.orders += 1;
+        m.set(w.code, cur);
+      }),
+    );
+    return [...m.values()].sort((a, b) => b.orders - a.orders);
+  })();
+  const visibleRows = statusRows
+    .filter(
+      (r) => !whFilter || lookupWarehouses(r).some((w) => w.code === whFilter),
+    )
+    .sort(
+      (a, b) =>
+        (new Date(lookupUpdatedAt(b)).getTime() || 0) -
+        (new Date(lookupUpdatedAt(a)).getTime() || 0),
+    );
+  // One customer in the results → show the customer header (name, ID, copy).
+  const codes = new Set(
+    rows.map((r) => r.customer_code_display).filter((c) => c && c !== "—"),
+  );
+  const headerRow = codes.size === 1 ? rows[0] : null;
+  const headerParts = headerRow
+    ? String(headerRow.customer_display || "").split(" · ")
+    : [];
+  const headerCode = headerRow?.customer_code_display || headerParts[0] || "";
+  const headerName = headerParts.slice(1).join(" · ") || headerCode;
 
   const SkeletonRow = () => (
-    <div className="animate-pulse grid grid-cols-[1.05fr_1.15fr_1.25fr_1.6fr_1.35fr_1.1fr_1fr] gap-4 items-center px-5 py-4 border-t border-mist-100">
-      {Array.from({ length: 7 }).map((_, i) => (
+    <div className="animate-pulse grid grid-cols-[1.05fr_1.15fr_1.25fr_1fr_1.4fr_0.8fr_1fr_1.2fr] gap-4 items-center px-5 py-4 border-t border-mist-100">
+      {Array.from({ length: 8 }).map((_, i) => (
         <div
           key={i}
           className={`h-4 rounded bg-mist-100 ${i === 2 ? "w-32" : "w-20"}`}
@@ -23138,66 +23290,94 @@ function ShipmentLookup() {
           Shipment Lookup
         </h1>
         <p className="text-sm text-ink-600/55 mt-1">
-          Choose what to search by, then enter it. Results cover China (Land /
-          Sea), CN Purchase Orders and Indonesia (AIR).
+          Choose what to search by, then enter it. Results cover Shipment (TK)
+          and Parse Link (CN Purchase Order).
         </p>
       </div>
 
-      <div className="bg-white border border-mist-200 rounded-xl shadow-panel p-3">
-        <div className="relative inline-flex w-full max-w-[460px] items-stretch rounded-lg border border-mist-300 bg-white focus-within:border-signal-blue focus-within:ring-2 focus-within:ring-signal-blue/20">
-          <button
-            type="button"
-            onClick={() => setFieldOpen((o) => !o)}
-            className="flex shrink-0 items-center gap-1.5 rounded-l-lg border-r border-mist-200 px-3 py-2 text-sm font-medium text-ink-800 hover:bg-mist-50"
-          >
-            {activeField.label}
-            <Icons.ChevronDown size={14} className="text-ink-600/50" />
-          </button>
-          {fieldOpen && (
-            <>
-              <div
-                className="fixed inset-0 z-20"
-                onClick={() => setFieldOpen(false)}
-              />
-              <div className="absolute left-0 top-full z-30 mt-1 w-52 rounded-lg border border-mist-200 bg-white py-1 shadow-lg">
-                {LOOKUP_FIELDS.map((f) => (
-                  <button
-                    key={f.key}
-                    type="button"
-                    onClick={() => {
-                      setSearchField(f.key);
-                      setFieldOpen(false);
-                      setRows([]);
-                      setSearched(false);
-                      setError("");
-                    }}
-                    className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-mist-50 ${f.key === searchField ? "font-semibold text-signal-blue" : "text-ink-800"}`}
-                  >
-                    {f.label}
-                    {f.key === searchField && <Icons.Check size={14} />}
-                  </button>
-                ))}
-              </div>
-            </>
+      <div className="bg-white border border-mist-200 rounded-xl shadow-panel p-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2 min-w-0 flex-1">
+          <div className="relative inline-flex w-full max-w-[460px] items-stretch rounded-lg border border-mist-300 bg-white focus-within:border-signal-blue focus-within:ring-2 focus-within:ring-signal-blue/20">
+            <button
+              type="button"
+              onClick={() => setFieldOpen((o) => !o)}
+              className="flex shrink-0 items-center gap-1.5 rounded-l-lg border-r border-mist-200 px-3 py-2 text-sm font-medium text-ink-800 hover:bg-mist-50"
+            >
+              {activeField.label}
+              <Icons.ChevronDown size={14} className="text-ink-600/50" />
+            </button>
+            {fieldOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-20"
+                  onClick={() => setFieldOpen(false)}
+                />
+                <div className="absolute left-0 top-full z-30 mt-1 w-52 rounded-lg border border-mist-200 bg-white py-1 shadow-lg">
+                  {LOOKUP_FIELDS.map((f) => (
+                    <button
+                      key={f.key}
+                      type="button"
+                      onClick={() => {
+                        setSearchField(f.key);
+                        setFieldOpen(false);
+                        setRows([]);
+                        setSearched(false);
+                        setError("");
+                      }}
+                      className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm hover:bg-mist-50 ${f.key === searchField ? "font-semibold text-signal-blue" : "text-ink-800"}`}
+                    >
+                      {f.label}
+                      {f.key === searchField && <Icons.Check size={14} />}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+            <input
+              type="text"
+              value={searchValue}
+              onChange={(e) => setSearchValue(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+              placeholder={`Search ${activeField.label}`}
+              className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none"
+            />
+            <button
+              type="button"
+              onClick={handleSearch}
+              disabled={loading || !searchValue.trim()}
+              aria-label="Search"
+              className="flex shrink-0 items-center rounded-r-lg border-l border-mist-200 px-3 text-ink-600/60 hover:bg-mist-50 hover:text-signal-blue disabled:opacity-40"
+            >
+              <Search size={16} />
+            </button>
+          </div>
+          {(searched || searchValue) && (
+            <button
+              type="button"
+              onClick={handleClear}
+              className="inline-flex items-center gap-1 rounded-lg bg-red-50 px-3 py-2 text-xs font-semibold text-red-600 hover:bg-red-100"
+            >
+              <Icons.X size={12} /> Clear
+            </button>
           )}
-          <input
-            type="text"
-            value={searchValue}
-            onChange={(e) => setSearchValue(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            placeholder={`Search ${activeField.label}`}
-            className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none"
-          />
-          <button
-            type="button"
-            onClick={handleSearch}
-            disabled={loading || !searchValue.trim()}
-            aria-label="Search"
-            className="flex shrink-0 items-center rounded-r-lg border-l border-mist-200 px-3 text-ink-600/60 hover:bg-mist-50 hover:text-signal-blue disabled:opacity-40"
-          >
-            <Search size={16} />
-          </button>
         </div>
+        {searched && !loading && rows.length > 0 && (
+          <div className="inline-flex rounded-lg border border-mist-200 bg-mist-50 p-0.5 text-xs font-semibold">
+            {[
+              ["processing", "Processing", processingCount],
+              ["completed", "Completed Order", completedCount],
+            ].map(([k, label, n]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setStatusTab(k)}
+                className={`rounded-md px-3 py-1.5 transition ${statusTab === k ? "bg-white text-ink-900 shadow-sm" : "text-ink-600/60 hover:text-ink-800"}`}
+              >
+                {label} <span className="opacity-60">{n}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {!searched && !loading && (
@@ -23250,199 +23430,265 @@ function ShipmentLookup() {
       )}
 
       {!loading && rows.length > 0 && (
-        <>
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div>
-              <p className="text-xs uppercase tracking-wide font-semibold text-ink-600/45">
-                Search Results
-              </p>
-              <h2 className="font-display font-bold text-lg text-ink-900 mt-0.5">
-                Order & Package List
-              </h2>
-            </div>
-            <div className="px-3 py-1.5 rounded-full bg-signal-blue/8 text-signal-blue text-sm font-semibold">
-              {visibleRows.length} results
-            </div>
-          </div>
-
-          {canAir && (
-            <div className="flex flex-wrap gap-2">
-              {[
-                ["", "All", rows.length],
-                ["China", "China · Land / Sea", originCounts.China],
-                ["Indonesia", "Indonesia · AIR", originCounts.Indonesia],
-              ].map(([k, label, n]) => (
-                <button
-                  key={k || "all"}
-                  type="button"
-                  onClick={() => setOriginFilter(k)}
-                  className={`rounded-full border px-3.5 py-1.5 text-xs font-bold transition ${originFilter === k ? "border-signal-blue bg-signal-blue text-white" : "border-mist-200 bg-white text-ink-700 hover:bg-mist-50"}`}
-                >
-                  {label} <span className="opacity-70">{n}</span>
-                </button>
-              ))}
+        <div className="bg-white border border-mist-200 rounded-xl shadow-panel p-5 space-y-4">
+          {headerRow && (
+            <div className="flex items-center gap-3 border-b border-dashed border-mist-200 pb-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-signal-blue/10 text-signal-blue font-bold">
+                {String(headerName || "?")
+                  .trim()
+                  .charAt(0)
+                  .toUpperCase()}
+              </div>
+              <div className="min-w-0">
+                <div className="font-semibold text-signal-blue truncate">
+                  {headerName}
+                </div>
+                <div className="text-xs text-ink-600/55 flex items-center gap-2">
+                  <span>ID {headerCode}</span>
+                  <button
+                    type="button"
+                    onClick={() => navigator.clipboard?.writeText(headerCode)}
+                    className="font-semibold text-signal-blue hover:underline"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+              {branchSummary.length > 0 && (
+                <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1.5">
+                  <span className="text-[11px] font-bold uppercase tracking-wide text-ink-600/50">
+                    Warehouses
+                  </span>
+                  {branchSummary.map((w) => {
+                    const on = whFilter === w.code;
+                    return (
+                      <button
+                        key={w.code}
+                        type="button"
+                        title={w.code}
+                        onClick={() => setWhFilter(on ? "" : w.code)}
+                        className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold transition ${on ? "border-signal-blue bg-signal-blue text-white" : "border-mist-200 bg-white text-signal-blue hover:bg-mist-50"}`}
+                      >
+                        <Icons.Warehouse size={12} />
+                        {w.name || w.code}
+                        <span
+                          className={`rounded-full px-1.5 text-[10px] ${on ? "bg-white/25" : "bg-mist-100 text-ink-700"}`}
+                        >
+                          {w.orders}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
-          <div className="cb-surface cb-card overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[1450px] text-sm">
-                <thead>
-                  <tr className="bg-mist-50 border-b border-mist-200 text-left">
-                    {[
-                      "Order ID",
-                      "Origin",
-                      "Type",
-                      "Tracking Number",
-                      "Product",
-                      "Customer",
-                      "Cambodia Receiving Warehouse",
-                      "Shipping Method",
-                      "Status",
-                    ].map((label) => (
-                      <th
-                        key={label}
-                        className="px-5 py-3 text-[11px] font-bold uppercase tracking-wide text-ink-600/50 whitespace-nowrap"
-                      >
-                        {label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleRows.map((row, index) => (
-                    <tr
-                      key={`${row.source || "CHINA"}-${row.id || row.tk}-${index}`}
-                      className="border-b border-mist-100 last:border-b-0 hover:bg-mist-50/60 transition"
-                    >
-                      <td className="px-5 py-4 whitespace-nowrap">
-                        {row.source === "AIR" ? (
-                          <button
-                            onClick={() =>
-                              navigate(
-                                `/air-shipments/${encodeURIComponent(row.order_id)}`,
-                              )
-                            }
-                            className="font-semibold text-ink-900 hover:text-signal-blue hover:underline"
-                          >
-                            {row.order_display}
-                          </button>
-                        ) : row.source === "CN" ? (
-                          <button
-                            onClick={() =>
-                              navigate(
-                                `/cn-orders/${encodeURIComponent(row.order_id || row.cn_order_display)}`,
-                              )
-                            }
-                            className="font-semibold text-ink-900 hover:text-signal-blue hover:underline"
-                          >
-                            {row.order_display}
-                          </button>
-                        ) : (
-                          <>
-                            <div className="font-semibold text-ink-900">
-                              {row.order_display}
-                            </div>
-                            {row.cn_order_display && (
-                              <div className="text-xs text-violet-700 mt-0.5">
-                                {row.cn_order_display}
-                              </div>
-                            )}
-                          </>
-                        )}
-                      </td>
-                      <td className="px-5 py-4 whitespace-nowrap">
-                        <OriginBadge origin={lookupOriginOf(row)} />
-                      </td>
-                      <td className="px-5 py-4 whitespace-nowrap">
-                        <span
-                          className={`inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold ${row.type_display === "Parse Link" ? "bg-violet-50 text-violet-700" : "bg-sky-50 text-sky-700"}`}
-                        >
-                          {row.type_display || "Shipment"}
-                        </span>
-                      </td>
-                      <td className="px-5 py-4 whitespace-nowrap">
-                        {row.source === "AIR" || row.source === "CN" ? (
-                          <span
-                            className={
-                              row.source === "AIR"
-                                ? "font-semibold text-signal-blue"
-                                : "text-ink-600/45"
-                            }
-                          >
-                            {row.tk_display}
-                          </span>
-                        ) : (
-                          <button
-                            onClick={() => navigate(`/packages/${row.tk}`)}
-                            className="font-semibold text-signal-blue hover:underline"
-                          >
-                            {row.tk_display}
-                          </button>
-                        )}
-                      </td>
-                      <td className="px-5 py-4 max-w-[220px]">
-                        <div
-                          className="font-medium text-ink-800 truncate"
-                          title={row.product_display}
-                        >
-                          {row.product_display}
-                        </div>
-                        <div className="text-xs text-ink-600/45 mt-0.5">
-                          {row.source === "AIR"
-                            ? row.shop_display
-                              ? `Shop: ${row.shop_display}`
-                              : "AIR Order"
-                            : row.source === "CN"
-                              ? row.shop_display
-                                ? `Shop: ${row.shop_display}`
-                                : "CN Purchase Order"
-                              : row.cargo_type || row.package_type || "Package"}
-                        </div>
-                      </td>
-                      <td className="px-5 py-4 max-w-[210px]">
-                        <div
-                          className="font-medium text-ink-800 truncate"
-                          title={row.customer_display}
-                        >
-                          {row.customer_display}
-                        </div>
-                        <div className="text-xs text-ink-600/45 mt-0.5">
-                          {row.customer_code_display || "—"}
-                        </div>
-                      </td>
-                      <td className="px-5 py-4 max-w-[270px]">
-                        <div
-                          className="font-medium text-ink-800 truncate"
-                          title={row.warehouse_display}
-                        >
-                          {row.warehouse_display}
-                        </div>
-                        <div className="text-xs text-ink-600/45 mt-0.5">
-                          Cambodia Branch
-                        </div>
-                      </td>
-                      <td className="px-5 py-4 whitespace-nowrap">
-                        <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-sky-50 text-sky-700 font-medium text-xs">
-                          {row.shipping_method_display}
-                        </span>
-                      </td>
-                      <td className="px-5 py-4 whitespace-nowrap">
-                        {row.source === "AIR" ? (
-                          <AirStatusBadge status={row.status_display} />
-                        ) : (
-                          <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-signal-blue/8 text-signal-blue font-semibold text-xs">
-                            {row.status_display}
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2">
+              <h2 className="font-display font-bold text-base text-ink-900">
+                {statusTab === "completed" ? "Completed Order" : "Processing"}
+              </h2>
+              <span className="rounded-full bg-mist-100 px-2 py-0.5 text-xs font-semibold text-ink-700">
+                {visibleRows.length}
+              </span>
             </div>
           </div>
-        </>
+
+          {visibleRows.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-mist-300 p-8 text-center text-sm text-ink-600/55">
+              {statusTab === "completed"
+                ? "No completed orders for this search."
+                : "No processing orders for this search."}
+            </div>
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-mist-200">
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[1100px] text-sm">
+                  <thead>
+                    <tr className="bg-mist-50 border-b border-mist-200 text-left">
+                      {[
+                        "Updated At",
+                        "Order ID",
+                        "Tracking Number",
+                        "Shipping Method",
+                        "Warehouse",
+                        "Parcels",
+                        "Total",
+                        "Status",
+                      ].map((label) => (
+                        <th
+                          key={label}
+                          className="px-5 py-3 text-[11px] font-bold uppercase tracking-wide text-ink-600/50 whitespace-nowrap"
+                        >
+                          {label}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visibleRows.map((row, index) => {
+                      const href = lookupHref(row);
+                      const done = lookupIsCompleted(row);
+                      return (
+                        <tr
+                          key={`${row.source || "CHINA"}-${row.id || row.tk}-${index}`}
+                          onClick={(e) =>
+                            e.metaKey || e.ctrlKey
+                              ? window.open(href, "_blank")
+                              : navigate(href)
+                          }
+                          className="cursor-pointer border-b border-mist-100 last:border-b-0 hover:bg-mist-50/70 transition"
+                        >
+                          <td className="px-5 py-3.5 whitespace-nowrap">
+                            <CreatedAtCell iso={lookupUpdatedAt(row)} />
+                          </td>
+                          <td className="px-5 py-3.5 whitespace-nowrap">
+                            <div className="font-semibold text-ink-900">
+                              <HoverCopy
+                                value={
+                                  row.order_display !== "—"
+                                    ? row.order_display
+                                    : ""
+                                }
+                                label="Copy order ID"
+                              >
+                                <span>{row.order_display}</span>
+                              </HoverCopy>
+                            </div>
+                            <span
+                              className={`mt-1 inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${row.type_display === "Parse Link" ? "bg-violet-50 text-violet-700" : "bg-sky-50 text-sky-700"}`}
+                            >
+                              {row.type_display || "Shipment"}
+                            </span>
+                            {row.cn_order_display && row.source !== "CN" && (
+                              <span className="ml-1.5 text-[11px] text-violet-700">
+                                {row.cn_order_display}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-5 py-3.5 whitespace-nowrap">
+                            {row.tk_display && row.tk_display !== "—" ? (
+                              <span className="font-medium text-ink-800">
+                                <HoverCopy
+                                  value={row.tk_display}
+                                  copyValue={
+                                    row.tk_list && row.tk_list.length > 1
+                                      ? row.tk_list.join("\n")
+                                      : row.tk_display
+                                  }
+                                  label={
+                                    row.tk_extra > 0
+                                      ? `Copy all ${row.tk_extra + 1} tracking numbers`
+                                      : "Copy tracking number"
+                                  }
+                                >
+                                  <span>{row.tk_display}</span>
+                                  {row.tk_extra > 0 && (
+                                    <span className="ml-1.5 rounded-full bg-mist-100 px-1.5 py-0.5 text-[10px] font-semibold text-ink-600">
+                                      +{row.tk_extra}
+                                    </span>
+                                  )}
+                                </HoverCopy>
+                              </span>
+                            ) : (
+                              <span className="text-ink-600/45">
+                                No tracking yet
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-5 py-3.5 whitespace-nowrap">
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-sky-50 text-sky-700 font-medium text-xs">
+                              {row.shipping_method_display || "—"}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3.5 whitespace-nowrap">
+                            {(() => {
+                              const whs = lookupWarehouses(row);
+                              if (!whs.length)
+                                return (
+                                  <span className="text-ink-600/45">—</span>
+                                );
+                              return (
+                                <span
+                                  className="inline-flex items-center gap-1.5 font-medium text-signal-blue"
+                                  title={whs
+                                    .map(
+                                      (w) =>
+                                        `${w.code}${w.name ? ` · ${w.name}` : ""}`,
+                                    )
+                                    .join("\n")}
+                                >
+                                  <Icons.Warehouse size={14} />
+                                  {whs[0].name || whs[0].code}
+                                  {whs.length > 1 && (
+                                    <span className="rounded-full bg-mist-100 px-1.5 py-0.5 text-[10px] font-semibold text-ink-600">
+                                      +{whs.length - 1}
+                                    </span>
+                                  )}
+                                </span>
+                              );
+                            })()}
+                          </td>
+                          <td className="px-5 py-3.5 whitespace-nowrap text-ink-800">
+                            {row.parcels ?? "—"}
+                          </td>
+                          <td className="px-5 py-3.5 whitespace-nowrap font-semibold text-ink-900">
+                            {row.total_value !== null &&
+                            row.total_value !== undefined
+                              ? money(row.total_value)
+                              : "—"}
+                          </td>
+                          <td className="px-5 py-3.5 whitespace-nowrap">
+                            {row.cn_row ? (
+                              // Parse Link: exactly the CN Orders status
+                              // (Inbound Origin, Outbound Origin, Delivery ...)
+                              <CnStatusBadge
+                                status={cnOrderTableStatus(row.cn_row)}
+                                partial={!!row.cn_row.is_partial}
+                                cancelled={cnIsCancelledUnpaid(row.cn_row)}
+                              />
+                            ) : (
+                              // Shipment: the TK's real stage, same as Packages / TK
+                              <StatusBadge
+                                label={
+                                  done
+                                    ? "Completed"
+                                    : pkgDisplayStatus({
+                                        status: row.status_display,
+                                      }) || "—"
+                                }
+                              />
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="flex items-center justify-between bg-mist-50 px-5 py-2.5 text-xs text-ink-600/60">
+                <span>
+                  {visibleRows.length} orders ·{" "}
+                  {visibleRows.reduce(
+                    (n, r) => n + (Number(r.parcels) || 0),
+                    0,
+                  )}{" "}
+                  parcels
+                </span>
+                <span className="font-semibold text-ink-800">
+                  Total{" "}
+                  {money(
+                    visibleRows.reduce(
+                      (n, r) => n + (Number(r.total_value) || 0),
+                      0,
+                    ),
+                  )}
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -52752,6 +52998,78 @@ const CN_STAT_ICONS = {
 };
 const CN_PAGE_SIZE = 20;
 
+// Shared filter dropdown (same look as the Customer Detail status filter):
+// compact popover, search box, flat list, ✓ on the selected item.
+function FilterDropdown({ value, onChange, options, allLabel, icon: Ico }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const needle = query.trim().toLowerCase();
+  const items = options.filter((o) => String(o).toLowerCase().includes(needle));
+  const showAll = !needle || allLabel.toLowerCase().includes(needle);
+  const pick = (v) => {
+    onChange(v);
+    setOpen(false);
+    setQuery("");
+  };
+  const row = (label, v) => (
+    <button
+      key={label}
+      type="button"
+      onClick={() => pick(v)}
+      className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition ${value === v ? "bg-blue-50 font-semibold text-blue-700" : "text-slate-700 hover:bg-slate-100"}`}
+    >
+      <span className="truncate">{label}</span>
+      {value === v && <Icons.Check size={14} className="shrink-0" />}
+    </button>
+  );
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className={`inline-flex h-11 min-w-[150px] items-center justify-between gap-2 rounded-xl border px-3 text-sm font-medium transition ${value ? "border-blue-300 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          {Ico ? <Ico size={15} /> : <Icons.CircleDot size={15} />}
+          <span className="truncate">{value || allLabel}</span>
+        </span>
+        <Icons.ChevronDown size={14} />
+      </button>
+      {open && (
+        <>
+          <button
+            type="button"
+            aria-label="Close menu"
+            className="fixed inset-0 z-30 cursor-default"
+            onClick={() => setOpen(false)}
+          />
+          <div className="absolute left-0 top-full z-40 mt-1.5 w-60 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+            <input
+              autoFocus
+              autoComplete="off"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search"
+              className="mb-1 h-9 w-full rounded-lg bg-slate-100 px-3 text-sm text-slate-700 outline-none placeholder:text-slate-400"
+            />
+            <div className="max-h-72 overflow-y-auto">
+              {showAll && row(allLabel, "")}
+              {items.map((o) => row(o, o))}
+              {!showAll && !items.length && (
+                <div className="px-3 py-5 text-center text-sm text-slate-400">
+                  No matching option
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function CnOrdersPage() {
   const { user } = useAuth();
   const canCreate = hasPermission(user, "cn_order.create");
@@ -53911,12 +54229,14 @@ function CnOrdersPage() {
       label: "Order ID",
       render: (r) => (
         <>
-          <Link
-            to={`/cn-orders/${encodeURIComponent(r.order_id)}`}
-            className="block font-bold text-ink-900 hover:text-signal-blue"
-          >
-            {r.order_id}
-          </Link>
+          <HoverCopy value={r.order_id} label="Copy order ID">
+            <Link
+              to={`/cn-orders/${encodeURIComponent(r.order_id)}`}
+              className="block font-bold text-ink-900 hover:text-signal-blue"
+            >
+              {r.order_id}
+            </Link>
+          </HoverCopy>
           <div className="mt-1.5 flex items-center gap-2 text-xs">
             <span className="inline-flex items-center gap-1 text-ink-600/70">
               <ShipMethodIcon
@@ -54223,44 +54543,29 @@ function CnOrdersPage() {
             />
           </div>
           {activeTab === "tks" ? (
-            <select
+            <FilterDropdown
               value={tkStatus}
-              onChange={(e) => setTkStatus(e.target.value)}
-              className="cbx-select"
-            >
-              <option value="">All TK Statuses</option>
-              {Array.from(new Set(tkRows.map((p) => p.status).filter(Boolean)))
-                .sort()
-                .map((x) => (
-                  <option key={x} value={x}>
-                    {x}
-                  </option>
-                ))}
-            </select>
+              onChange={setTkStatus}
+              allLabel="All TK Statuses"
+              options={Array.from(
+                new Set(tkRows.map((p) => p.status).filter(Boolean)),
+              ).sort()}
+            />
           ) : (
             <>
-              <select
+              <FilterDropdown
                 value={status}
-                onChange={(e) => setStatus(e.target.value)}
-                className="cbx-select"
-              >
-                <option value="">All Status</option>
-                {[...CN_ORDER_TABLE_STATUS_FLOW, CN_ORDER_TERMINAL].map((x) => (
-                  <option key={x} value={x}>
-                    {x}
-                  </option>
-                ))}
-              </select>
-              <select
+                onChange={setStatus}
+                allLabel="All Status"
+                options={[...CN_ORDER_TABLE_STATUS_FLOW, CN_ORDER_TERMINAL]}
+              />
+              <FilterDropdown
                 value={pay}
-                onChange={(e) => setPay(e.target.value)}
-                className="cbx-select"
-              >
-                <option value="">All Payment</option>
-                {CN_PAYMENT_STATUSES.map((x) => (
-                  <option key={x}>{x}</option>
-                ))}
-              </select>
+                onChange={setPay}
+                allLabel="All Payment"
+                icon={Icons.Wallet}
+                options={CN_PAYMENT_STATUSES}
+              />
             </>
           )}
           <CNDateRangeFilter value={dateRange} onChange={setDateRange} />
@@ -78496,6 +78801,14 @@ const CB_DESIGN_CSS = `
 [class~="hover:bg-signal-amber/20"]:hover{background-color:rgba(245,158,11,.20)!important}
 [class~="hover:border-signal-blue/40"]:hover{border-color:rgba(37,99,235,.40)!important}
 [class~="group-hover:bg-mist-50"]:hover{background-color:#f8fafc!important}
+
+/* Hover-to-copy (Shipment Lookup Order ID / Tracking Number) */
+.cb-hc{display:inline-flex;align-items:center;gap:4px}
+.cb-hc-btn{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;width:26px;height:26px;border-radius:6px;border:1px solid transparent;background:transparent;color:#2563eb;cursor:pointer;opacity:0;transition:opacity .12s,background-color .12s}
+.cb-hc:hover .cb-hc-btn,.cb-hc-row:hover .cb-hc-btn,.cb-hc-btn:focus-visible,.cb-hc-btn.is-done{opacity:1}
+.cb-hc-btn:hover{background:rgba(37,99,235,.10);border-color:rgba(37,99,235,.20)}
+.cb-hc-btn.is-done{background:#ecfdf5;border-color:#a7f3d0;color:#059669}
+@media (hover:none){.cb-hc-btn{opacity:1}}
 
 [class~="focus:border-signal-blue"]:focus{border-color:#2563eb!important}
 [class~="focus:ring-signal-blue"]:focus{--tw-ring-color:#2563eb!important}
