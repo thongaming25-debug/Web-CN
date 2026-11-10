@@ -63846,7 +63846,9 @@ function CdTable({
   stages,
   statusGroups,
   getStatus,
+  getRowPath,
 }) {
+  const navigateRow = useNavigate();
   const [q, setQ] = useState("");
   const [stage, setStage] = useState("");
   const [statusOpen, setStatusOpen] = useState(false);
@@ -63925,104 +63927,54 @@ function CdTable({
                     className="fixed inset-0 z-30 cursor-default"
                     onClick={() => setStatusOpen(false)}
                   />
-                  <div className="absolute right-0 top-full z-40 mt-2 w-[min(320px,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl">
-                    <div className="border-b border-slate-100 p-3">
-                      <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-                        Select status
-                      </div>
-                      <div className="relative">
-                        <Icons.Search
-                          size={14}
-                          className="absolute left-3 top-2.5 text-slate-400"
-                        />
-                        <input
-                          autoComplete="off"
-                          value={statusQuery}
-                          onChange={(e) => setStatusQuery(e.target.value)}
-                          placeholder="Search status…"
-                          className="h-9 w-full rounded-lg bg-slate-50 pl-8 pr-3 text-sm outline-none focus:ring-2 focus:ring-blue-500/20"
-                        />
-                      </div>
-                    </div>
-                    <div className="max-h-[min(420px,60vh)] overflow-y-auto p-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setStage("");
-                          setStatusOpen(false);
-                          setStatusQuery("");
-                        }}
-                        className={`mb-2 flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${!stage ? "bg-blue-50 font-bold text-blue-700" : "text-slate-700 hover:bg-slate-50"}`}
-                      >
-                        <span>All Status</span>
-                        <span className="text-xs opacity-70">
-                          {rows.length}
-                        </span>
-                      </button>
-                      {statusOptions.map((group) => {
-                        const items = group.items.filter((s) =>
-                          s
-                            .toLowerCase()
-                            .includes(statusQuery.trim().toLowerCase()),
+                  <div className="absolute left-0 top-full z-40 mt-1.5 w-60 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg">
+                    <input
+                      autoFocus
+                      autoComplete="off"
+                      value={statusQuery}
+                      onChange={(e) => setStatusQuery(e.target.value)}
+                      placeholder="Search"
+                      className="mb-1 h-9 w-full rounded-lg bg-slate-100 px-3 text-sm text-slate-700 outline-none placeholder:text-slate-400"
+                    />
+                    <div className="max-h-72 overflow-y-auto">
+                      {(() => {
+                        const needle = statusQuery.trim().toLowerCase();
+                        const flat = statusOptions.flatMap((g) => g.items);
+                        const items = flat.filter((s) =>
+                          s.toLowerCase().includes(needle),
                         );
-                        if (!items.length) return null;
-                        return (
-                          <div key={group.name} className="mb-2 last:mb-0">
-                            <div className="px-3 pb-1 pt-2 text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
-                              {group.name}
+                        const showAll =
+                          !needle || "all status".includes(needle);
+                        const row = (label, value) => (
+                          <button
+                            key={label}
+                            type="button"
+                            onClick={() => {
+                              setStage(value);
+                              setStatusOpen(false);
+                              setStatusQuery("");
+                            }}
+                            className={`flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition ${stage === value ? "bg-blue-50 font-semibold text-blue-700" : "text-slate-700 hover:bg-slate-100"}`}
+                          >
+                            <span className="truncate">{label}</span>
+                            {stage === value && (
+                              <Icons.Check size={14} className="shrink-0" />
+                            )}
+                          </button>
+                        );
+                        if (!showAll && !items.length)
+                          return (
+                            <div className="px-3 py-5 text-center text-sm text-slate-400">
+                              No matching status
                             </div>
-                            {items.map((s) => {
-                              const count = rows.filter(
-                                (r) => rowStatus(r) === s,
-                              ).length;
-                              return (
-                                <button
-                                  key={s}
-                                  type="button"
-                                  onClick={() => {
-                                    setStage(s);
-                                    setStatusOpen(false);
-                                    setStatusQuery("");
-                                  }}
-                                  className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition ${stage === s ? "bg-blue-50 font-bold text-blue-700" : "text-slate-700 hover:bg-slate-50"}`}
-                                >
-                                  <span className="truncate">{s}</span>
-                                  <span className="ml-3 text-xs text-slate-400">
-                                    {count}
-                                  </span>
-                                </button>
-                              );
-                            })}
-                          </div>
+                          );
+                        return (
+                          <>
+                            {showAll && row("All Status", "")}
+                            {items.map((s) => row(s, s))}
+                          </>
                         );
-                      })}
-                      {!statusOptions.some((g) =>
-                        g.items.some((s) =>
-                          s
-                            .toLowerCase()
-                            .includes(statusQuery.trim().toLowerCase()),
-                        ),
-                      ) && (
-                        <div className="px-3 py-6 text-center text-sm text-slate-400">
-                          No matching statuses
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex items-center justify-between border-t border-slate-100 px-3 py-2">
-                      <span className="text-xs text-slate-400">
-                        {stage ? "1 status selected" : "No status filter"}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setStage("");
-                          setStatusQuery("");
-                          setStatusOpen(false);
-                        }}
-                        className="text-xs font-bold text-blue-600 hover:underline"
-                      >
-                        Clear
-                      </button>
+                      })()}
                     </div>
                   </div>
                 </>
@@ -64087,7 +64039,20 @@ function CdTable({
               </tr>
             ) : (
               slice.map((r, i) => (
-                <tr key={r.id || r.tk || i} className="hover:bg-slate-50/60">
+                <tr
+                  key={r._rowKey || r.id || r.tk || i}
+                  className={`hover:bg-slate-50/60 ${getRowPath ? "cursor-pointer" : ""}`}
+                  onClick={
+                    getRowPath
+                      ? (e) => {
+                          // Links / buttons inside the row handle themselves.
+                          if (e.target.closest("a,button")) return;
+                          const path = getRowPath(r);
+                          if (path) navigateRow(path);
+                        }
+                      : undefined
+                  }
+                >
                   {cols.map((c) => (
                     <td
                       key={c.key}
@@ -65702,22 +65667,63 @@ function CustomerDetailPage() {
 
   // One combined Order section for CN purchase orders and TK/package records.
   // AIR (Indonesia) remains a separate tab and is intentionally not merged.
+  // Parse Link: ONE row per CN order (JZE...). Its TK packages (cn_order_id)
+  // are not listed again. Shipment: one row per package with no CN order.
+  const visibleCnOrders = canViewCnOrders ? cnOrderRows : [];
+  const cnIdSet = new Set(visibleCnOrders.map((r) => String(r.id)));
+  const cnTksById = {}; // cn order id -> its TKs (search only)
+  packages.forEach((p) => {
+    if (p.cn_order_id)
+      (cnTksById[String(p.cn_order_id)] ||= []).push(p.tk || "");
+  });
+  const seenTk = new Set();
+  const seenCn = new Set();
   const orderRows = [
-    ...packages.map((r) => ({
-      ...r,
-      _orderKind: "package",
-      _rowKey: `pkg-${r.id || r.tk}`,
-    })),
-    ...(canViewCnOrders ? cnOrderRows : []).map((r) => ({
-      ...r,
-      _orderKind: "cn",
-      _rowKey: `cn-${r.id || r.order_id}`,
-    })),
+    ...packages
+      .filter((r) => {
+        // hide TKs that already belong to a listed CN order
+        if (r.cn_order_id && cnIdSet.has(String(r.cn_order_id))) return false;
+        if (r.tk) {
+          if (seenTk.has(r.tk)) return false;
+          seenTk.add(r.tk);
+        }
+        return true;
+      })
+      .map((r) => ({
+        ...r,
+        _orderKind: "package",
+        _rowKey: `pkg-${r.id || r.tk}`,
+      })),
+    ...visibleCnOrders
+      .filter((r) => {
+        const k = String(r.id || r.order_id);
+        if (seenCn.has(k)) return false;
+        seenCn.add(k);
+        return true;
+      })
+      .map((r) => ({
+        ...r,
+        _orderKind: "cn",
+        _rowKey: `cn-${r.id || r.order_id}`,
+        _tks: (cnTksById[String(r.id)] || []).join(" "),
+      })),
   ].sort(
     (a, b) =>
       new Date(b.updated_at || b.created_at || 0) -
       new Date(a.updated_at || a.created_at || 0),
   );
+  // Parse Link (has CN order) vs Shipment (customer's own TK)
+  const orderTypeOf = (r) =>
+    r._orderKind === "cn" || r.cn_order_id
+      ? PKG_TYPE.PARSE_LINK
+      : PKG_TYPE.SHIPMENT;
+  // Every row opens its detail page (CN order detail / package detail)
+  const orderPathOf = (r) =>
+    r._orderKind === "cn"
+      ? `/cn-orders/${encodeURIComponent(r.order_id || r.id)}`
+      : r.tk
+        ? `/packages/${encodeURIComponent(r.tk)}`
+        : "";
   // Group existing CN/TK display statuses for one shared Order filter.
   // This only normalizes labels for filtering; stored database statuses remain untouched.
   // Local status normalizer for the Customer Details Order table.
@@ -65802,66 +65808,38 @@ function CustomerDetailPage() {
     },
     {
       key: "order_reference",
-      label: "Order / Tracking Number",
+      label: "Order ID",
       search: (r) =>
-        `${r.order_id || ""} ${r.tk || ""} ${r.tracking_number || ""}`,
-      render: (r) =>
-        r._orderKind === "cn" ? (
-          <Link
-            to={`/cn-orders/${encodeURIComponent(r.order_id || r.id)}`}
-            className="font-bold text-blue-700 hover:underline"
-          >
-            {r.order_id || "—"}
-          </Link>
-        ) : (
-          <Link
-            to={`/packages/${encodeURIComponent(r.tk || "")}`}
-            className="font-bold text-blue-700 hover:underline"
-          >
-            {r.tk || r.tracking_number || "—"}
-          </Link>
-        ),
-    },
-    {
-      key: "product",
-      label: "Product / Details",
-      search: (r) =>
-        `${r.product_name || ""} ${r.shop_name || ""} ${r.platform || ""} ${r.container_no || ""}`,
-      render: (r) =>
-        r._orderKind === "cn" ? (
-          <div className="min-w-[160px] max-w-[260px] whitespace-normal">
-            <div className="font-semibold text-slate-800">
-              {r.product_name || "China purchase order"}
-            </div>
-            <div className="mt-0.5 text-xs text-slate-400">
-              {r.shop_name || r.platform || "CN Purchase"}
-            </div>
-          </div>
-        ) : (
-          <div className="min-w-[160px]">
-            <div className="font-semibold text-slate-800">
-              {r.product_name || r.description || "Package / TK"}
-            </div>
-            <div className="mt-0.5 text-xs text-slate-400">
-              {r.container_no ? `Container ${r.container_no}` : "Package / TK"}
-            </div>
-          </div>
-        ),
+        `${r.order_id || ""} ${r.tk || ""} ${r.tracking_number || ""} ${r._tks || ""}`,
+      render: (r) => (
+        <Link
+          to={orderPathOf(r) || "#"}
+          className="font-bold text-blue-700 hover:underline"
+        >
+          {r._orderKind === "cn"
+            ? r.order_id || "—"
+            : r.tk || r.tracking_number || "—"}
+        </Link>
+      ),
     },
     {
       key: "record_type",
       label: "Type",
-      search: (r) =>
-        r._orderKind === "cn"
-          ? "CN Purchase Order China"
-          : "Package TK Shipment",
+      search: (r) => orderTypeOf(r),
       render: (r) => (
         <span
-          className={`inline-flex rounded-full px-2 py-1 text-[11px] font-bold ${r._orderKind === "cn" ? "bg-violet-50 text-violet-700" : "bg-blue-50 text-blue-700"}`}
+          className={`inline-flex rounded-full px-2 py-1 text-[11px] font-bold ${orderTypeOf(r) === PKG_TYPE.PARSE_LINK ? "bg-violet-50 text-violet-700" : "bg-blue-50 text-blue-700"}`}
         >
-          {r._orderKind === "cn" ? "CN Order" : "Package / TK"}
+          {orderTypeOf(r)}
         </span>
       ),
+    },
+    {
+      key: "status",
+      label: "Status",
+      search: (r) =>
+        `${r.status || ""} ${r._orderKind === "cn" ? r.payment_status || "" : pkgDisplayStatus(r) || ""}`,
+      render: (r) => <StatusBadge label={orderStatusForFilter(r) || "—"} />,
     },
     {
       key: "amount",
@@ -65875,13 +65853,6 @@ function CustomerDetailPage() {
         ) : (
           <ShippingFeeCell row={r} />
         ),
-    },
-    {
-      key: "status",
-      label: "Status",
-      search: (r) =>
-        `${r.status || ""} ${r._orderKind === "cn" ? r.payment_status || "" : pkgDisplayStatus(r) || ""}`,
-      render: (r) => <StatusBadge label={orderStatusForFilter(r) || "—"} />,
     },
   ];
   const tabs = [
@@ -66104,6 +66075,7 @@ function CustomerDetailPage() {
                 rows={orderRows}
                 statusGroups={orderStatusGroups}
                 getStatus={orderStatusForFilter}
+                getRowPath={orderPathOf}
                 empty="No orders or packages for this customer yet."
               />
             )}
