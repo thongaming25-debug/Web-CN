@@ -402,6 +402,31 @@ html.cb-admin-dark{
 .cbx-btn-success:hover:not(:disabled){ filter:brightness(.92); background:var(--cbx-success); }
 .cbx-btn-ghost{ background:transparent; }
 
+/* ---- Row action buttons (Edit / Disable / Activate) ---- */
+.cbx-act-group{ display:inline-flex; align-items:center; justify-content:flex-end; gap:6px; }
+.cbx-act svg{ width:13px; height:13px; flex-shrink:0; }
+.cbx-act{
+  display:inline-flex; align-items:center; gap:4px; height:26px; padding:0 9px;
+  border-radius:6px; border:1px solid transparent; font-size:12px; font-weight:600;
+  line-height:1; white-space:nowrap; cursor:pointer;
+  transition:background-color .12s ease, border-color .12s ease, transform .12s ease;
+}
+.cbx-act:active:not(:disabled){ transform:translateY(1px); }
+.cbx-act:disabled{ opacity:.5; cursor:progress; }
+.cbx-act:focus-visible{ outline:2px solid var(--cbx-blue); outline-offset:2px; }
+.cbx-act.is-edit{ background:rgba(37,99,235,.08); border-color:rgba(37,99,235,.22); color:#1D4ED8; }
+.cbx-act.is-edit:hover:not(:disabled){ background:rgba(37,99,235,.16); border-color:rgba(37,99,235,.4); }
+.cbx-act.is-view{ background:var(--cbx-card); border-color:var(--cbx-border); color:var(--cbx-text); }
+.cbx-act.is-view:hover:not(:disabled){ background:var(--cbx-hover); border-color:var(--cbx-border-strong); }
+.cbx-act.is-off{ background:rgba(220,38,38,.07); border-color:rgba(220,38,38,.22); color:#B91C1C; }
+.cbx-act.is-off:hover:not(:disabled){ background:rgba(220,38,38,.14); border-color:rgba(220,38,38,.4); }
+.cbx-act.is-on{ background:rgba(22,163,74,.09); border-color:rgba(22,163,74,.28); color:#15803D; }
+.cbx-act.is-on:hover:not(:disabled){ background:rgba(22,163,74,.17); border-color:rgba(22,163,74,.45); }
+html.cb-admin-dark .cbx-act.is-edit{ background:rgba(96,165,250,.14); border-color:rgba(96,165,250,.3); color:#93C5FD; }
+html.cb-admin-dark .cbx-act.is-off{ background:rgba(248,113,113,.14); border-color:rgba(248,113,113,.3); color:#FCA5A5; }
+html.cb-admin-dark .cbx-act.is-on{ background:rgba(74,222,128,.14); border-color:rgba(74,222,128,.3); color:#86EFAC; }
+@media (max-width:640px){ .cbx-act .cbx-act-label{ display:none; } .cbx-act{ width:28px; padding:0; justify-content:center; } }
+
 /* ---- Form controls ---- */
 .cbx-field{ display:block; min-width:0; }
 .cbx-label{ display:block; margin-bottom:6px; font-size:13px; font-weight:600; color:var(--cbx-text); }
@@ -11715,26 +11740,34 @@ function AddressManagementPage() {
     { key: "status", label: "Status", status: true },
     {
       key: "actions",
-      label: "",
+      label: "Actions",
+      align: "right",
       render: (r) =>
         canManage ? (
-          <div className="flex items-center gap-3">
+          <div className="cbx-act-group">
             <button
               type="button"
-              className={linkBtn}
+              className="cbx-act is-edit"
+              title="Edit"
               onClick={() => setForm({ kind: tab, existing: r })}
             >
-              Edit
+              <Icon name="Pencil" size={14} />
+              <span className="cbx-act-label">Edit</span>
             </button>
             <button
               type="button"
               disabled={busyKey === `${tab}:${r.code}`}
-              className={`text-xs font-medium hover:underline disabled:opacity-50 ${
-                r.status === "Disabled" ? "text-signal-teal" : "text-signal-red"
-              }`}
+              className={`cbx-act ${r.status === "Disabled" ? "is-on" : "is-off"}`}
+              title={r.status === "Disabled" ? "Activate" : "Disable"}
               onClick={() => toggle(r)}
             >
-              {r.status === "Disabled" ? "Activate" : "Disable"}
+              <Icon
+                name={r.status === "Disabled" ? "CircleCheck" : "Ban"}
+                size={14}
+              />
+              <span className="cbx-act-label">
+                {r.status === "Disabled" ? "Activate" : "Disable"}
+              </span>
             </button>
           </div>
         ) : null,
@@ -12018,34 +12051,44 @@ function WarehouseManagementPage() {
     },
     {
       key: "actions",
-      label: "",
+      label: "Actions",
+      align: "right",
       render: (r) => (
-        <div className="flex items-center gap-3">
+        <div className="cbx-act-group">
           <button
             type="button"
-            className={linkBtn}
+            className="cbx-act is-view"
+            title="View"
             onClick={() => setViewing(r)}
           >
-            View
+            <Icon name="Eye" size={14} />
+            <span className="cbx-act-label">View</span>
           </button>
           {canManage && (
             <>
               <button
                 type="button"
-                className={linkBtn}
+                className="cbx-act is-edit"
+                title="Edit"
                 onClick={() => setForm({ existing: r })}
               >
-                Edit
+                <Icon name="Pencil" size={14} />
+                <span className="cbx-act-label">Edit</span>
               </button>
               <button
                 type="button"
                 disabled={busyId === r.id}
-                className={`text-xs font-medium hover:underline disabled:opacity-50 ${
-                  r.status === "Active" ? "text-signal-red" : "text-signal-teal"
-                }`}
+                className={`cbx-act ${r.status === "Active" ? "is-off" : "is-on"}`}
+                title={r.status === "Active" ? "Disable" : "Activate"}
                 onClick={() => toggle(r)}
               >
-                {r.status === "Active" ? "Disable" : "Activate"}
+                <Icon
+                  name={r.status === "Active" ? "Ban" : "CircleCheck"}
+                  size={14}
+                />
+                <span className="cbx-act-label">
+                  {r.status === "Active" ? "Disable" : "Activate"}
+                </span>
               </button>
             </>
           )}
@@ -12229,34 +12272,44 @@ function KhWarehousePage() {
     { key: "status", label: "Status", status: true },
     {
       key: "actions",
-      label: "",
+      label: "Actions",
+      align: "right",
       render: (r) => (
-        <div className="flex items-center gap-3">
+        <div className="cbx-act-group">
           <button
             type="button"
-            className={linkBtn}
+            className="cbx-act is-view"
+            title="View"
             onClick={() => setViewing(r)}
           >
-            View
+            <Icon name="Eye" size={14} />
+            <span className="cbx-act-label">View</span>
           </button>
           {canManage && (
             <>
               <button
                 type="button"
-                className={linkBtn}
+                className="cbx-act is-edit"
+                title="Edit"
                 onClick={() => setForm({ existing: r })}
               >
-                Edit
+                <Icon name="Pencil" size={14} />
+                <span className="cbx-act-label">Edit</span>
               </button>
               <button
                 type="button"
                 disabled={busyId === r.id}
-                className={`text-xs font-medium hover:underline disabled:opacity-50 ${
-                  r.status === "Active" ? "text-signal-red" : "text-signal-teal"
-                }`}
+                className={`cbx-act ${r.status === "Active" ? "is-off" : "is-on"}`}
+                title={r.status === "Active" ? "Disable" : "Activate"}
                 onClick={() => toggle(r)}
               >
-                {r.status === "Active" ? "Disable" : "Activate"}
+                <Icon
+                  name={r.status === "Active" ? "Ban" : "CircleCheck"}
+                  size={14}
+                />
+                <span className="cbx-act-label">
+                  {r.status === "Active" ? "Disable" : "Activate"}
+                </span>
               </button>
             </>
           )}
@@ -25202,7 +25255,7 @@ const SHIPMENT_DETAIL_LAYOUT_CSS = `
 .shipment-detail-page .shipment-actions{flex:1 1 420px;max-width:760px}
 .shipment-detail-page .shipment-actions>a{min-height:38px;border-radius:8px}
 .shipment-detail-page .shipment-order-number{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;margin-top:8px;font-size:18px;font-weight:650;overflow-wrap:anywhere}
-.shipment-detail-page .shipment-customer-chip{display:inline-flex;align-items:center;gap:8px;padding:7px 12px;margin-top:16px;background:var(--cn-soft);border:1px solid var(--cn-border);border-radius:999px;font-size:13px;font-weight:600;max-width:100%;overflow-wrap:anywhere}
+.shipment-detail-page .shipment-customer-chip{display:inline-flex;align-items:center;gap:8px;padding:4px 12px 4px 6px;margin-top:16px;background:var(--cn-soft);border:1px solid var(--cn-border);border-radius:999px;font-size:13px;font-weight:600;max-width:100%;overflow-wrap:anywhere}
 .shipment-detail-page .shipment-tabs{overflow-x:auto}
 .shipment-detail-page .shipment-tabs button{flex-shrink:0}
 .shipment-detail-page .shipment-sidebar>div{border-radius:12px;min-width:0;overflow-wrap:anywhere}
@@ -25729,11 +25782,52 @@ function PackageDetail() {
             </div>
           </div>
 
-          <div className="shipment-customer-chip">
-            <Icons.User size={15} />
-            <span>
-              {custId} · {custName || "Unknown Customer"}
+          <div className="shipment-customer-chip cn-cust-chip group">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-100 text-[11px] font-bold text-blue-700">
+              {String(custName || "?")
+                .trim()
+                .slice(0, 1)
+                .toUpperCase()}
             </span>
+            <span className="min-w-0 font-semibold text-slate-800">
+              {custName || "Unknown Customer"}
+            </span>
+            {custId && custId !== "—" && (
+              <>
+                <span className="text-slate-300" aria-hidden="true">
+                  ·
+                </span>
+                {isCustomerRole ? (
+                  <span className="shrink-0 font-semibold text-blue-600">
+                    {custId}
+                  </span>
+                ) : (
+                  <Link
+                    to={`/customers/${encodeURIComponent(custId)}`}
+                    title="Open customer detail"
+                    className="shrink-0 font-semibold text-blue-600 hover:underline"
+                  >
+                    {custId}
+                  </Link>
+                )}
+                <button
+                  type="button"
+                  className="cn-cust-copy grid h-6 w-6 shrink-0 place-items-center rounded-md text-slate-400 hover:bg-white hover:text-blue-600"
+                  aria-label="Copy Customer ID"
+                  title="Copy Customer ID"
+                  onClick={async () => {
+                    const ok = await cnCopyText(custId);
+                    emitCBToast(
+                      ok ? "ok" : "err",
+                      ok ? "Customer ID copied" : "Copy failed",
+                      ok ? custId : "Please select and copy the text manually.",
+                    );
+                  }}
+                >
+                  <Icons.Copy size={14} />
+                </button>
+              </>
+            )}
           </div>
         </div>
 
@@ -54473,6 +54567,9 @@ html.cb-admin-dark .cn-detail-page{--cn-surface:#151c2c;--cn-soft:#101827;--cn-b
 .cn-detail-stack{display:flex;flex-direction:column;gap:16px;min-width:0}
 .cn-detail-block{padding:20px}
 .cn-detail-block-title{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--cn-muted);padding-bottom:12px;margin-bottom:4px;border-bottom:1px solid var(--cn-border)}
+.cn-cust-copy{opacity:0;transition:opacity .12s ease,background-color .12s ease,color .12s ease}
+.cn-cust-chip:hover .cn-cust-copy,.cn-cust-copy:focus-visible{opacity:1}
+@media (hover:none){.cn-cust-copy{opacity:1}}
 .cn-detail-info>div{display:grid;grid-template-columns:165px minmax(0,1fr);gap:16px;padding:11px 0;font-size:14px;line-height:1.5;border-bottom:1px solid var(--cn-border)}
 .cn-detail-info>div:last-child{border-bottom:0}
 .cn-detail-info dt{color:var(--cn-muted)}
@@ -55377,9 +55474,39 @@ function CnOrderDetailPage() {
                 </a>
               )}
             </p>
-            <div className="mt-3 inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">
-              <Icons.UserRound size={14} className="shrink-0" />
-              <span className="break-words">{row.customer || "—"}</span>
+            <div className="cn-cust-chip group mt-3 inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-slate-50 py-1 pl-1.5 pr-3 text-sm transition hover:border-blue-200 hover:bg-blue-50/40">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-100 text-[11px] font-bold text-blue-700">
+                {String(customerName || "?")
+                  .trim()
+                  .slice(0, 1)
+                  .toUpperCase()}
+              </span>
+              <span className="min-w-0 truncate font-semibold text-slate-800">
+                {customerName || "—"}
+              </span>
+              {customerCode && (
+                <>
+                  <span className="text-slate-300" aria-hidden="true">
+                    ·
+                  </span>
+                  <Link
+                    to={`/customers/${encodeURIComponent(customerCode)}`}
+                    title="Open customer detail"
+                    className="shrink-0 font-semibold text-blue-600 hover:underline"
+                  >
+                    {customerCode}
+                  </Link>
+                  <button
+                    type="button"
+                    className="cn-cust-copy grid h-6 w-6 shrink-0 place-items-center rounded-md text-slate-400 hover:bg-white hover:text-blue-600"
+                    aria-label="Copy Customer ID"
+                    title="Copy Customer ID"
+                    onClick={() => copyDetailText(customerCode, "Customer ID")}
+                  >
+                    <Icons.Copy size={14} />
+                  </button>
+                </>
+              )}
             </div>
           </div>
           <div className="cn-detail-actions">
@@ -63677,12 +63804,29 @@ function CdCard({ title, icon, children }) {
     </section>
   );
 }
-const CdRow = ({ label, value }) => (
-  <div className="flex items-start justify-between gap-4 py-1.5 text-sm">
-    <span className="text-slate-500">{label}</span>
-    <span className="text-right font-semibold text-slate-800">
-      {value || "—"}
-    </span>
+const CdRow = ({ label, value, icon }) => {
+  const Ic = icon ? Icons[icon] : null;
+  return (
+    <div className="flex items-start justify-between gap-4 py-2 text-sm">
+      <span className="inline-flex items-center gap-2 text-slate-500">
+        {Ic && <Ic size={14} className="shrink-0 text-slate-400" />}
+        {label}
+      </span>
+      <span className="text-right font-semibold text-slate-800">
+        {value || "—"}
+      </span>
+    </div>
+  );
+};
+// Header metric (Customer Detail): small normal-case label, bold value,
+// optional sub line, separated from its neighbour by a vertical divider.
+const CdMetric = ({ label, value, sub, tone = "text-slate-900" }) => (
+  <div className="min-w-[84px] border-l border-slate-200 px-6 first:border-0 first:pl-0">
+    <div className="text-xs font-medium text-slate-500">{label}</div>
+    <div className={`mt-0.5 text-lg font-bold leading-tight ${tone}`}>
+      {value}
+    </div>
+    {sub && <div className="mt-0.5 text-[11px] text-slate-400">{sub}</div>}
   </div>
 );
 const CdStat = ({ label, value, tone = "text-slate-900" }) => (
@@ -65797,7 +65941,7 @@ function CustomerDetailPage() {
 
   return (
     <div className="min-h-full bg-slate-50/70">
-      <div className="mx-auto max-w-[1300px] space-y-5 p-5 md:p-7">
+      <div className="w-full space-y-5 p-4 md:p-6 lg:p-8">
         <button
           type="button"
           onClick={() => navigate("/customers")}
@@ -65858,48 +66002,83 @@ function CustomerDetailPage() {
         )}
 
         {/* Summary header */}
-        <div className="flex flex-wrap items-center gap-x-8 gap-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3">
-            <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-600 text-lg font-bold text-white">
-              <UserAvatar
-                url={cust.avatar_url}
-                initials={(cust.name || "?").slice(0, 1).toUpperCase()}
-              />
-            </div>
-            <div>
-              <div className="text-xs text-slate-400">{cust.customer_code}</div>
-              <div className="flex items-center gap-2">
-                <span className="text-lg font-extrabold text-slate-900">
-                  {cust.name || "—"}
-                </span>
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${isActive ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}
-                >
-                  {isActive ? "Active" : cust.status}
-                </span>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
+          <div className="flex flex-wrap items-center gap-x-7 gap-y-4">
+            <div className="flex items-center gap-3.5">
+              <div className="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-blue-600 text-xl font-bold text-white ring-4 ring-blue-50">
+                <UserAvatar
+                  url={cust.avatar_url}
+                  initials={(cust.name || "?").slice(0, 1).toUpperCase()}
+                />
+              </div>
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-slate-500">
+                  {cust.customer_code}
+                </div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                  <span className="truncate text-lg font-bold text-slate-900">
+                    {cust.name || "—"}
+                  </span>
+                  <span
+                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${isActive ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}
+                  >
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${isActive ? "bg-emerald-500" : "bg-slate-400"}`}
+                    />
+                    {isActive ? "Active" : cust.status}
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
-          <div className="flex flex-wrap gap-5">
-            <CdStat
-              label="Wallet"
-              value={moneyS(cust.balance || 0)}
-              tone={Number(cust.balance) < 0 ? "text-red-600" : "text-blue-700"}
-            />
-            <CdStat label="Total TK" value={packages.length} />
-            {canViewAir && (
-              <CdStat
-                label="AIR Orders"
-                value={airList.length}
-                tone="text-violet-700"
-              />
+
+            <div className="hidden h-12 w-px bg-slate-200 lg:block" />
+
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+              <div className="rounded-xl border border-blue-100 bg-blue-50/70 px-4 py-2.5">
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-blue-700">
+                  <Icons.Wallet size={13} /> Current Balance
+                </div>
+                <div
+                  className={`mt-0.5 text-2xl font-extrabold leading-tight ${Number(cust.balance) < 0 ? "text-red-600" : "text-blue-700"}`}
+                >
+                  {moneyS(cust.balance || 0)}
+                </div>
+              </div>
+              <div className="flex flex-wrap items-stretch gap-y-3">
+                <CdMetric label="Total TK" value={packages.length} />
+                {canViewAir && (
+                  <CdMetric
+                    label="AIR Orders"
+                    value={airList.length}
+                    tone="text-violet-700"
+                  />
+                )}
+                <CdMetric
+                  label="In Progress"
+                  value={active}
+                  tone="text-amber-600"
+                />
+                <CdMetric
+                  label="Completed"
+                  value={done}
+                  tone="text-emerald-600"
+                />
+              </div>
+            </div>
+
+            {canTopUp && (
+              <button
+                type="button"
+                onClick={() => setTopUp(true)}
+                className="ml-auto inline-flex h-10 items-center gap-1.5 rounded-xl bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
+              >
+                <Icons.Plus size={15} /> Top up
+              </button>
             )}
-            <CdStat label="In Progress" value={active} tone="text-amber-600" />
-            <CdStat label="Completed" value={done} tone="text-emerald-600" />
           </div>
         </div>
 
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
           {/* Main: tabs */}
           <div className="space-y-3">
             <div className="flex gap-1 border-b border-slate-200">
@@ -65908,11 +66087,11 @@ function CustomerDetailPage() {
                   key={k}
                   type="button"
                   onClick={() => setTab(k)}
-                  className={`-mb-px inline-flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-bold transition ${tab === k ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+                  className={`-mb-px inline-flex items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-semibold transition ${tab === k ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-800"}`}
                 >
                   {label}
                   <span
-                    className={`rounded-full px-2 py-0.5 text-[11px] ${tab === k ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-500"}`}
+                    className={`rounded-md px-1.5 py-0.5 text-[11px] font-semibold ${tab === k ? "bg-blue-50 text-blue-700" : "bg-slate-100 text-slate-500"}`}
                   >
                     {n}
                   </span>
@@ -65954,31 +66133,22 @@ function CustomerDetailPage() {
 
           {/* Side: separate cards */}
           <div className="space-y-4">
-            <CdCard title="Wallet" icon="Wallet">
-              <div
-                className={`text-2xl font-extrabold ${Number(cust.balance) < 0 ? "text-red-600" : "text-slate-900"}`}
-              >
-                {moneyS(cust.balance || 0)}
-              </div>
-              <p className="mt-0.5 text-xs text-slate-400">
-                {Number(cust.balance) < 0
-                  ? "Customer owes this amount"
-                  : "Available balance"}
-              </p>
-              {canTopUp && (
-                <button
-                  type="button"
-                  onClick={() => setTopUp(true)}
-                  className="mt-3 inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-xl bg-blue-600 text-sm font-bold text-white hover:bg-blue-700"
-                >
-                  <Icons.Plus size={15} /> Top up
-                </button>
-              )}
-            </CdCard>
             <CdCard title="Customer Details" icon="User">
-              <CdRow label="Customer ID" value={cust.customer_code} />
-              <CdRow label="Registered" value={cdDate(cust.created_at)} />
-              <CdRow label="Status" value={isActive ? "Active" : cust.status} />
+              <CdRow
+                label="Customer ID"
+                icon="Hash"
+                value={cust.customer_code}
+              />
+              <CdRow
+                label="Registered"
+                icon="CalendarDays"
+                value={cdDate(cust.created_at)}
+              />
+              <CdRow
+                label="Status"
+                icon="CircleDot"
+                value={isActive ? "Active" : cust.status}
+              />
               <CustomerRoleRow
                 cust={cust}
                 canEdit={hasPermission(user, "customer.edit")}
@@ -65991,8 +66161,16 @@ function CustomerDetailPage() {
               />
             </CdCard>
             <CdCard title="Contact Information" icon="Phone">
-              <CdRow label="Phone" value={cust.phone} />
-              <CdRow label="Email" value={cust.email} />
+              <div className="flex flex-col items-start gap-2">
+                <span className="inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-700">
+                  <Icons.Phone size={14} className="shrink-0 text-slate-400" />
+                  <span className="truncate">{cust.phone || "—"}</span>
+                </span>
+                <span className="inline-flex max-w-full items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-700">
+                  <Icons.Mail size={14} className="shrink-0 text-slate-400" />
+                  <span className="truncate">{cust.email || "—"}</span>
+                </span>
+              </div>
             </CdCard>
             <CdCard title="Warehouse Route" icon="Warehouse">
               <div className="flex items-start justify-between gap-3">
@@ -74901,7 +75079,7 @@ function ShopInvoiceModal({ order, items, onClose }) {
 // Shop order detail uses the same layout tokens as CN and Shipment details.
 const SHOP_DETAIL_LAYOUT_CSS = `
 .shop-detail-page .shop-detail-actions{flex:1 1 420px}
-.shop-detail-page .shop-detail-customer-chip{display:inline-flex;align-items:center;gap:8px;padding:7px 12px;margin-top:14px;border:1px solid var(--cn-border);border-radius:999px;background:var(--cn-soft);font-size:13px;font-weight:600;max-width:100%;overflow-wrap:anywhere}
+.shop-detail-page .shop-detail-customer-chip{display:inline-flex;align-items:center;gap:8px;padding:4px 12px 4px 6px;margin-top:14px;border:1px solid var(--cn-border);border-radius:999px;background:var(--cn-soft);font-size:13px;font-weight:600;max-width:100%;overflow-wrap:anywhere}
 .shop-detail-page .shop-detail-tabs{overflow-x:auto}
 .shop-detail-page .shop-detail-tabs button{white-space:nowrap;flex-shrink:0}
 .shop-detail-page .shop-detail-summary{font-size:14px;margin-top:12px}
@@ -75285,12 +75463,48 @@ function ShopOrderDetailPage() {
               <p className="mt-2 text-sm text-slate-500">
                 Shop purchase · {o.fulfillment_method}
               </p>
-              <div className="shop-detail-customer-chip">
-                <Icons.User size={15} />
-                <span>
-                  {o.customers?.customer_code || "—"} ·{" "}
+              <div className="shop-detail-customer-chip cn-cust-chip group">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-blue-100 text-[11px] font-bold text-blue-700">
+                  {String(o.customers?.name || "?")
+                    .trim()
+                    .slice(0, 1)
+                    .toUpperCase()}
+                </span>
+                <span className="min-w-0 font-semibold text-slate-800">
                   {o.customers?.name || "—"}
                 </span>
+                {o.customers?.customer_code && (
+                  <>
+                    <span className="text-slate-300" aria-hidden="true">
+                      ·
+                    </span>
+                    <Link
+                      to={`/customers/${encodeURIComponent(o.customers.customer_code)}`}
+                      title="Open customer detail"
+                      className="shrink-0 font-semibold text-blue-600 hover:underline"
+                    >
+                      {o.customers.customer_code}
+                    </Link>
+                    <button
+                      type="button"
+                      className="cn-cust-copy grid h-6 w-6 shrink-0 place-items-center rounded-md text-slate-400 hover:bg-white hover:text-blue-600"
+                      aria-label="Copy Customer ID"
+                      title="Copy Customer ID"
+                      onClick={async () => {
+                        const ok = await cnCopyText(o.customers.customer_code);
+                        emitCBToast(
+                          ok ? "ok" : "err",
+                          ok ? "Customer ID copied" : "Copy failed",
+                          ok
+                            ? o.customers.customer_code
+                            : "Please select and copy the text manually.",
+                        );
+                      }}
+                    >
+                      <Icons.Copy size={14} />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
             <div className="cn-detail-actions shop-detail-actions">
