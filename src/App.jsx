@@ -33258,6 +33258,10 @@ const CustomerApp = (() => {
     // false until the shipment list has been fetched once (skeleton, not a
     // blank / "No shipments" flash).
     const [shipsReady, setShipsReady] = useState(!supabase);
+    // false until the CN Purchase Orders list has been fetched once, so the
+    // CN Orders page shows a skeleton only on the very first load (not on
+    // every visit) — same behaviour as shipsReady for My Shipments.
+    const [cnReady, setCnReady] = useState(!supabase);
     // Feature permissions follow the signed-in customer's role.
     useEffect(() => {
       setCurrentCustomerRole(me?.customer_role);
@@ -33317,6 +33321,7 @@ const CustomerApp = (() => {
       const customerId = cid || meIdRef.current;
       if (!supabase || !customerId) {
         setCnOrders([]);
+        setCnReady(true);
         return;
       }
       const { data, error } = await supabase
@@ -33327,7 +33332,10 @@ const CustomerApp = (() => {
         .eq("customer_id", customerId)
         .order("created_at", { ascending: false })
         .limit(200);
-      if (error) return;
+      if (error) {
+        setCnReady(true); // never stay stuck on the skeleton after an error
+        return;
+      }
       const list = data || [];
       // keep already-loaded covers while the fresh rows arrive (no flicker)
       setCnOrders((prev) => {
@@ -33339,6 +33347,7 @@ const CustomerApp = (() => {
             : r;
         });
       });
+      setCnReady(true);
       attachCnCovers(list).then(
         (withCovers) => setCnOrders(withCovers),
         () => {},
@@ -33550,6 +33559,7 @@ const CustomerApp = (() => {
         setMe(null);
         setShips([]);
         setCnOrders([]);
+        setCnReady(false);
         setAddrs([]);
         setLoading(false);
         return;
@@ -34118,6 +34128,8 @@ const CustomerApp = (() => {
       ships,
       airShips,
       cnOrders,
+      cnReady,
+      loadCnOrders,
       notifs,
       unread,
       seenAt,
@@ -39152,50 +39164,25 @@ const CustomerApp = (() => {
   }
 
   function CustomerCnOrders() {
-    const { me, tr } = useApp();
+    // Rows come from the app-level store (loaded once + auto-refreshed every
+    // minute), exactly like My Shipments — so re-opening this page shows the
+    // data instantly. The skeleton only appears until the FIRST load is done.
+    const { tr, cnOrders: rows, cnReady, loadCnOrders } = useApp();
     const nav = useNavigate();
-    const [rows, setRows] = useState([]);
-    const [loading, setLoading] = useState(true);
     const [tab, setTab] = useState("All");
     const [refreshing, setRefreshing] = useState(false);
     const cnTabsScroller = React.useRef(null);
-
-    const load = React.useCallback(async () => {
-      if (!supabase || !me?.id) {
-        setRows([]);
-        setLoading(false);
-        return;
-      }
-      setLoading(true);
-      const { data, error } = await supabase
-        .from("cn_orders")
-        .select(
-          "id,order_id,customer_id,order_type,product_name,product_url,shop_name,platform,quantity,total_due_usd,amount_paid_usd,payment_status,payment_method,status,created_at,updated_at,cn_order_items",
-        )
-        .eq("customer_id", me.id)
-        .order("created_at", { ascending: false })
-        .limit(200);
-      if (!error) {
-        const list = data || [];
-        setRows(list);
-        attachCnCovers(list).then(
-          (withCovers) => setRows(withCovers),
-          () => {},
-        );
-      } else setRows([]);
-      setLoading(false);
-    }, [me?.id]);
-
-    useEffect(() => {
-      load();
-    }, [load]);
+    const loading = !cnReady;
 
     // Refresh button: keep the empty card on screen, spin the icon, and hold
     // for a short minimum so the tap always feels acknowledged.
     const refresh = async () => {
       if (refreshing) return;
       setRefreshing(true);
-      await Promise.all([load(), new Promise((r) => setTimeout(r, 700))]);
+      await Promise.all([
+        loadCnOrders(),
+        new Promise((r) => setTimeout(r, 700)),
+      ]);
       setRefreshing(false);
     };
 
@@ -39328,56 +39315,57 @@ const CustomerApp = (() => {
           ) : (
             <div className="space-y-3">
               {list.map((r) => (
-                <Card
-                  key={r.id}
-                  onClick={() =>
-                    nav(P("/cn-orders/" + encodeURIComponent(r.order_id)))
-                  }
-                  className="p-4 cursor-pointer active:bg-slate-50"
-                >
-                  <div className="flex items-start gap-3">
-                    <AirImg
-                      src={r.cover_url}
-                      alt={r.product_name || r.order_id}
-                      className="w-14 h-14 rounded-xl"
-                      fallbackSize={22}
-                      FallbackIcon={Icons.ShoppingCart}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="font-bold text-slate-900">{r.order_id}</p>
-                      <p className="text-sm text-slate-600 truncate mt-1">
-                        {r.product_name ||
-                          r.product_url ||
-                          tr("CN Purchase", "ការបញ្ជាទិញពីចិន")}
-                        {Array.isArray(r.cn_order_items) &&
-                        r.cn_order_items.length > 1
-                          ? ` + ${r.cn_order_items.length - 1} more item(s)`
-                          : ""}
-                      </p>
-                      <p className="text-xs text-slate-400 mt-1">
-                        {[r.platform, r.shop_name]
-                          .filter(Boolean)
-                          .join(" · ") || "—"}
-                        {r.quantity ? ` · Qty ${r.quantity}` : ""}
-                      </p>
+                <div key={r.id} className="cb-sk-in">
+                  <Card
+                    onClick={() =>
+                      nav(P("/cn-orders/" + encodeURIComponent(r.order_id)))
+                    }
+                    className="p-4 cursor-pointer active:bg-slate-50"
+                  >
+                    <div className="flex items-start gap-3">
+                      <AirImg
+                        src={r.cover_url}
+                        alt={r.product_name || r.order_id}
+                        className="w-14 h-14 rounded-xl"
+                        fallbackSize={22}
+                        FallbackIcon={Icons.ShoppingCart}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="font-bold text-slate-900">{r.order_id}</p>
+                        <p className="text-sm text-slate-600 truncate mt-1">
+                          {r.product_name ||
+                            r.product_url ||
+                            tr("CN Purchase", "ការបញ្ជាទិញពីចិន")}
+                          {Array.isArray(r.cn_order_items) &&
+                          r.cn_order_items.length > 1
+                            ? ` + ${r.cn_order_items.length - 1} more item(s)`
+                            : ""}
+                        </p>
+                        <p className="text-xs text-slate-400 mt-1">
+                          {[r.platform, r.shop_name]
+                            .filter(Boolean)
+                            .join(" · ") || "—"}
+                          {r.quantity ? ` · Qty ${r.quantity}` : ""}
+                        </p>
+                      </div>
+                      <ChevronRight
+                        size={18}
+                        className="text-slate-300 shrink-0"
+                      />
                     </div>
-                    <ChevronRight
-                      size={18}
-                      className="text-slate-300 shrink-0"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between gap-2 mt-3">
-                    <CnCustomerBadge
-                      status={cnCustomerDisplayStatus(r)}
-                      cancelled={cnIsCancelledUnpaid(r)}
-                    />
-                    {r.order_type !== "direct" && (
-                      <span className="text-sm font-bold text-slate-900">
-                        {money(r.total_due_usd)}
-                      </span>
-                    )}
-                  </div>
-                </Card>
+                    <div className="flex items-center justify-between gap-2 mt-3">
+                      <CnCustomerBadge
+                        status={cnCustomerDisplayStatus(r)}
+                        cancelled={cnIsCancelledUnpaid(r)}
+                      />
+                      {r.order_type !== "direct" && (
+                        <span className="text-sm font-bold text-slate-900">
+                          {money(r.total_due_usd)}
+                        </span>
+                      )}
+                    </div>
+                  </Card>
+                </div>
               ))}
             </div>
           )}
@@ -39386,35 +39374,45 @@ const CustomerApp = (() => {
     );
   }
 
+  // Last loaded detail of each CN order (key = customerId:orderId). Re-opening
+  // an order shows it instantly and refreshes silently in the background —
+  // the skeleton is only for the very first visit of an order.
+  const cnDetailCache = new Map();
+
   function CustomerCnOrderDetail() {
     const { id } = useParams();
     const { me, tr, wallet, payCnOrder, payShipping } = useApp();
+    const cacheKey = me?.id && id ? `${me.id}:${id}` : "";
+    const cached = cacheKey ? cnDetailCache.get(cacheKey) : null;
     const nav = useNavigate();
     const customerFeatureOn = useCustomerFeatures();
     const canPayCnOrder = customerFeatureOn("pay_cn_order");
     // Cambodia shipping fee of this order's TKs (after Arrived Destination).
-    const [shipFees, setShipFees] = useState([]);
+    const [shipFees, setShipFees] = useState(cached?.shipFees || []);
     const [shipPayTk, setShipPayTk] = useState(null);
     const [shipPayBusy, setShipPayBusy] = useState(false);
     const [shipPayError, setShipPayError] = useState("");
-    const [row, setRow] = useState(null);
-    const [history, setHistory] = useState([]);
+    const [row, setRow] = useState(cached?.row || null);
+    const [history, setHistory] = useState(cached?.history || []);
     const [walletPayConfirm, setWalletPayConfirm] = useState(false);
     const [walletPayBusy, setWalletPayBusy] = useState(false);
     const [walletPayError, setWalletPayError] = useState("");
-    const [parcels, setParcels] = useState([]);
-    const [priceExtra, setPriceExtra] = useState(null);
-    const [shipMethod, setShipMethod] = useState("");
-    const [cnImages, setCnImages] = useState([]);
-    const [cnImagesLoading, setCnImagesLoading] = useState(true);
-    const [loading, setLoading] = useState(true);
+    const [parcels, setParcels] = useState(cached?.parcels || []);
+    const [priceExtra, setPriceExtra] = useState(cached?.priceExtra ?? null);
+    const [shipMethod, setShipMethod] = useState(cached?.shipMethod || "");
+    const [cnImages, setCnImages] = useState(cached?.cnImages || []);
+    const [cnImagesLoading, setCnImagesLoading] = useState(!cached?.cnImages);
+    const [loading, setLoading] = useState(!cached);
 
     const load = React.useCallback(async () => {
       if (!supabase || !me?.id || !id) {
         setLoading(false);
         return;
       }
-      setLoading(true);
+      const key = `${me.id}:${id}`;
+      // Cached → refresh silently (no skeleton). First visit → skeleton.
+      if (!cnDetailCache.has(key)) setLoading(true);
+      const snap = {};
       const { data } = await supabase
         .from("cn_orders")
         .select(
@@ -39424,6 +39422,7 @@ const CustomerApp = (() => {
         .eq("order_id", id)
         .maybeSingle();
       setRow(data || null);
+      snap.row = data || null;
 
       if (data?.id) {
         // Price breakdown (separate query: never breaks the page if a column
@@ -39437,8 +39436,10 @@ const CustomerApp = (() => {
             .eq("id", data.id)
             .maybeSingle();
           setPriceExtra(ex || null);
+          snap.priceExtra = ex || null;
         } catch (_e) {
           setPriceExtra(null);
+          snap.priceExtra = null;
         }
         try {
           const { data: sm } = await supabase
@@ -39447,13 +39448,19 @@ const CustomerApp = (() => {
             .eq("id", data.id)
             .maybeSingle();
           setShipMethod(sm?.shipping_method || "");
+          snap.shipMethod = sm?.shipping_method || "";
         } catch (_e) {
           setShipMethod("");
+          snap.shipMethod = "";
         }
-        setCnImagesLoading(true);
+        if (!cnDetailCache.get(key)?.cnImages) setCnImagesLoading(true);
         loadCnImages(data.id).then((imgs) => {
           setCnImages(imgs);
           setCnImagesLoading(false);
+          cnDetailCache.set(key, {
+            ...cnDetailCache.get(key),
+            cnImages: imgs,
+          });
         });
         const { data: h } = await supabase
           .from("cn_order_history")
@@ -39461,6 +39468,7 @@ const CustomerApp = (() => {
           .eq("cn_order_id", data.id)
           .order("created_at", { ascending: true });
         setHistory(h || []);
+        snap.history = h || [];
         // Customer-safe parcel info: tracking number + physical TK status only.
         const [{ data: pr }, { data: pk }] = await Promise.all([
           supabase
@@ -39492,32 +39500,34 @@ const CustomerApp = (() => {
         } catch (_e) {
           /* optional */
         }
-        setShipFees(
-          cnShipFeeCustomerRows(
-            (pk || []).map((x) => ({
-              tk: x.tk,
-              ship_pay_requested_at: reqByTk.get(x.tk) || null,
-              tk_status: x.status,
-              freight_fee: feeByTk.get(x.tk)?.freight_fee,
-              paid_amount: feeByTk.get(x.tk)?.paid_amount,
-            })),
-          ),
+        const feeRowsOut = cnShipFeeCustomerRows(
+          (pk || []).map((x) => ({
+            tk: x.tk,
+            ship_pay_requested_at: reqByTk.get(x.tk) || null,
+            tk_status: x.status,
+            freight_fee: feeByTk.get(x.tk)?.freight_fee,
+            paid_amount: feeByTk.get(x.tk)?.paid_amount,
+          })),
         );
+        setShipFees(feeRowsOut);
+        snap.shipFees = feeRowsOut;
         const tkByKey = new Map((pk || []).map((x) => [cnLinkKey(x.tk), x]));
-        setParcels(
-          (pr || []).map((x) => {
-            const m = tkByKey.get(cnLinkKey(x.domestic_tracking));
-            return {
-              tracking: x.domestic_tracking,
-              status: m
-                ? TK_TO_CN_STATUS[m.status] || m.status
-                : "Shipping to China WH",
-            };
-          }),
-        );
+        const parcelRows = (pr || []).map((x) => {
+          const m = tkByKey.get(cnLinkKey(x.domestic_tracking));
+          return {
+            tracking: x.domestic_tracking,
+            status: m
+              ? TK_TO_CN_STATUS[m.status] || m.status
+              : "Shipping to China WH",
+          };
+        });
+        setParcels(parcelRows);
+        snap.parcels = parcelRows;
+        cnDetailCache.set(key, { ...cnDetailCache.get(key), ...snap });
       } else {
         setHistory([]);
         setParcels([]);
+        cnDetailCache.delete(key);
       }
       setLoading(false);
     }, [me?.id, id]);
@@ -39665,7 +39675,7 @@ const CustomerApp = (() => {
 
     return (
       <div className="min-h-screen bg-slate-50 px-4 pt-5 pb-8">
-        <div className="max-w-md mx-auto space-y-4">
+        <div className="max-w-md mx-auto space-y-4 cb-fade-in">
           <div className="flex items-center gap-3">
             <button
               type="button"
