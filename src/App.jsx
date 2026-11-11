@@ -35156,6 +35156,45 @@ const CustomerApp = (() => {
         shell.style.removeProperty("--jz-nav-clearance");
       };
     }, [loading, me?.id, me?.must_change_password, pathname, hideNav]);
+    // Sliding "glass pill" behind the active tab: measured from the active
+    // link so it follows any tab count / language / screen size.
+    const navListRef = useRef(null);
+    const [navInd, setNavInd] = useState(null);
+    const placeNavPill = useRef(() => {});
+    placeNavPill.current = () => {
+      const list = navListRef.current;
+      const a = list?.querySelector('a[aria-current="page"]');
+      if (!a) {
+        setNavInd((p) => (p ? null : p));
+        return;
+      }
+      const left = a.offsetLeft;
+      const width = a.offsetWidth;
+      setNavInd((p) =>
+        p && p.left === left && p.width === width
+          ? p
+          : { left, width, animate: !!p },
+      );
+    };
+    // Every render (route change, tabs loaded, language switch): re-measure.
+    useLayoutEffect(() => {
+      placeNavPill.current();
+    });
+    useEffect(() => {
+      const list = navListRef.current;
+      if (!list) return undefined;
+      const onSize = () => placeNavPill.current();
+      const ro =
+        typeof ResizeObserver !== "undefined"
+          ? new ResizeObserver(onSize)
+          : null;
+      ro?.observe(list);
+      window.addEventListener("resize", onSize, { passive: true });
+      return () => {
+        ro?.disconnect();
+        window.removeEventListener("resize", onSize);
+      };
+    }, [loading, me?.id, hideNav]);
     const feat = useCustomerFeatures();
     // Refresh permissions on route changes, focus/visibility return and at a
     // short interval so an Admin's saved feature switches reach already-open
@@ -35427,18 +35466,32 @@ const CustomerApp = (() => {
             className="jz-bottom-nav fixed bottom-0 inset-x-0 z-40"
           >
             <div
-              className="grid"
+              ref={navListRef}
+              className="grid relative"
               style={{
                 gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))`,
               }}
             >
+              <span
+                aria-hidden="true"
+                className={`jz-nav-pill${navInd?.animate ? " is-anim" : ""}`}
+                style={
+                  navInd
+                    ? {
+                        width: navInd.width,
+                        transform: `translateX(${navInd.left}px)`,
+                        opacity: 1,
+                      }
+                    : { opacity: 0 }
+                }
+              />
               {tabs.map(([to, I, l]) => (
                 <NavLink
                   key={to}
                   to={to}
                   end={to === P()}
                   className={({ isActive }) =>
-                    `min-h-[52px] py-2 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors active:bg-slate-50 ${isActive ? "text-blue-500" : "text-slate-500"}`
+                    `min-h-[52px] py-2 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium ${isActive ? "text-blue-500" : "text-slate-500"}`
                   }
                 >
                   <I size={22} />
@@ -80319,8 +80372,8 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .cb-premium-dialog-body{padding:20px 24px;}
 .cb-premium-dialog-foot{padding:16px 24px;}
 /* Customer app: matching surfaces and a glass bottom navigation dock. */
-.jz-customer{--jz-c-page:#f3f6fb;--jz-c-card:#fff;--jz-c-text:#17263e;--jz-c-muted:#60718a;--jz-c-border:#e1e8f2;--jz-c-glass:rgba(255,255,255,.94);background:var(--jz-c-page);}
-.jz-customer.cb-cust-dark{--jz-c-page:#0b1323;--jz-c-card:#131f33;--jz-c-text:#e8eef8;--jz-c-muted:#a1b1ca;--jz-c-border:#28384f;--jz-c-glass:rgba(19,31,51,.94);}
+.jz-customer{--jz-c-page:#f3f6fb;--jz-c-card:#fff;--jz-c-text:#17263e;--jz-c-muted:#60718a;--jz-c-border:#e1e8f2;--jz-c-glass:rgba(255,255,255,.55);--jz-c-glass-edge:rgba(255,255,255,.75);background:var(--jz-c-page);}
+.jz-customer.cb-cust-dark{--jz-c-page:#0b1323;--jz-c-card:#131f33;--jz-c-text:#e8eef8;--jz-c-muted:#a1b1ca;--jz-c-border:#28384f;--jz-c-glass:rgba(19,31,51,.55);--jz-c-glass-edge:rgba(255,255,255,.12);}
 .jz-customer .bg-slate-50{background-color:var(--jz-c-page);}
 .jz-customer .bg-white{background-color:var(--jz-c-card);}
 .jz-customer .bg-white.rounded-2xl{border-radius:20px;border-color:var(--jz-c-border);box-shadow:0 2px 10px -6px rgba(15,30,60,.18);}
@@ -80338,8 +80391,20 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .jz-customer .jz-customer-content{-webkit-overflow-scrolling:touch;}
 .jz-customer .jz-bottom-nav>div{display:flex;overflow-x:auto;scrollbar-width:thin;}
 .jz-customer .jz-bottom-nav a{flex:1 0 60px;min-width:0;min-height:62px;padding:10px 4px;font-size:11px;line-height:1.4;color:var(--jz-c-muted);}
-.jz-customer .jz-bottom-nav a[aria-current="page"]{color:#3b82f6;background:rgba(59,130,246,.1);box-shadow:inset 0 3px 0 #3b82f6;}
-.jz-customer .jz-bottom-nav a[aria-current="page"] svg{stroke-width:2.3;}
+.jz-customer .jz-bottom-nav a{position:relative;z-index:1;transition:color .3s ease;-webkit-tap-highlight-color:transparent;}
+.jz-customer .jz-bottom-nav a:active{background:transparent!important;}
+.jz-customer .jz-bottom-nav a svg{transition:transform .35s cubic-bezier(.22,1.2,.36,1);}
+.jz-customer .jz-bottom-nav a:active svg{transform:scale(.86);}
+.jz-customer .jz-bottom-nav a[aria-current="page"]{color:#3b82f6;background:transparent;box-shadow:none;}
+.jz-customer .jz-bottom-nav a[aria-current="page"] svg{stroke-width:2.3;transform:translateY(-1px) scale(1.1);}
+.jz-customer .jz-bottom-nav a[aria-current="page"]:active svg{transform:scale(.92);}
+/* Glass dock: frosted blur + soft edge highlight; sliding pill follows the active tab. */
+.jz-customer .jz-bottom-nav{backdrop-filter:blur(22px) saturate(180%);-webkit-backdrop-filter:blur(22px) saturate(180%);border-color:var(--jz-c-glass-edge);box-shadow:0 10px 30px -12px rgba(5,20,45,.38),inset 0 1px 0 var(--jz-c-glass-edge);}
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.jz-customer{--jz-c-glass:rgba(255,255,255,.94);}.jz-customer.cb-cust-dark{--jz-c-glass:rgba(19,31,51,.94);}}
+.jz-customer .jz-bottom-nav>div{position:relative;}
+.jz-customer .jz-nav-pill{position:absolute;top:6px;bottom:6px;left:0;border-radius:16px;pointer-events:none;z-index:0;background:linear-gradient(180deg,rgba(59,130,246,.2),rgba(59,130,246,.1));box-shadow:inset 0 0 0 1px rgba(59,130,246,.22),0 6px 14px -8px rgba(59,130,246,.65);will-change:transform,width;}
+.jz-customer .jz-nav-pill.is-anim{transition:transform .5s cubic-bezier(.22,1.15,.36,1),width .5s cubic-bezier(.22,1.15,.36,1),opacity .2s ease;}
+@media (prefers-reduced-motion:reduce){.jz-customer .jz-nav-pill.is-anim,.jz-customer .jz-bottom-nav a svg{transition-duration:.01ms;}}
 .jz-customer .jz-toast{max-width:calc(100vw - 32px);width:max-content;bottom:calc(100px + env(safe-area-inset-bottom));border:1px solid #3c506c;border-radius:16px;background:#142945;color:#fff;box-shadow:0 12px 28px -12px #071327;padding:12px 18px;}
 
 /* Separate shopping actions from the floating navigation, in both themes. */
