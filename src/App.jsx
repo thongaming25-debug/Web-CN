@@ -15799,27 +15799,129 @@ function AdminPrefsModal({ kind, onClose }) {
 
 // Quick language + theme buttons shown in the corner of the Login page.
 function AdminLoginPrefs() {
-  const { dark, setTheme, lang, setLang, t } = useAdminPrefs();
-  const btn =
-    "h-10 w-10 grid place-items-center rounded-full border border-mist-200 bg-white/90 text-ink-700 shadow-sm hover:bg-white transition";
+  const { theme, dark, setTheme, lang, setLang, t } = useAdminPrefs();
+  const [open, setOpen] = useState(null); // "lang" | "theme" | null
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(null);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") setOpen(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const pill =
+    "inline-flex h-10 items-center gap-2 rounded-full border border-mist-200 bg-white/95 px-3 text-sm font-medium text-ink-800 shadow-sm transition hover:bg-white";
+  const menu =
+    "absolute right-0 top-full mt-2 w-48 rounded-xl border border-mist-200 bg-white p-1.5 shadow-lg";
+  const item = (active) =>
+    `flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm font-medium transition-colors ${
+      active ? "bg-blue-50 text-signal-blue" : "text-ink-800 hover:bg-mist-50"
+    }`;
+  const langs = [
+    ["en", "English"],
+    ["km", "ភាសាខ្មែរ"],
+    ["zh", "中文"],
+  ];
+  const themes = [
+    ["light", t("Light"), Icons.Sun],
+    ["dark", t("Dark"), Icons.Moon],
+    ["system", t("Device"), Icons.Monitor],
+  ];
+  const ThemeIcon = dark ? Icons.Moon : Icons.Sun;
+
   return (
-    <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
-      <button
-        type="button"
-        className={`${btn} text-lg`}
-        aria-label={t("Language")}
-        onClick={() => setLang(nextAdminLang(lang))}
-      >
-        <LangFlag code={lang} size={26} />
-      </button>
-      <button
-        type="button"
-        className={btn}
-        aria-label={t("Appearance")}
-        onClick={() => setTheme(dark ? "light" : "dark")}
-      >
-        {dark ? <Icons.Sun size={18} /> : <Icons.Moon size={18} />}
-      </button>
+    <div
+      ref={ref}
+      className="absolute right-4 top-4 z-20 flex items-center gap-2"
+      data-no-tr
+    >
+      {/* Language dropdown */}
+      <div className="relative">
+        <button
+          type="button"
+          className={pill}
+          aria-label={t("Language")}
+          aria-haspopup="listbox"
+          aria-expanded={open === "lang"}
+          onClick={() => setOpen(open === "lang" ? null : "lang")}
+        >
+          <LangFlag code={lang} size={22} />
+          <span className="hidden sm:inline">{adminLangName(lang)}</span>
+          <Icons.ChevronDown
+            size={15}
+            className={`transition-transform ${open === "lang" ? "rotate-180" : ""}`}
+          />
+        </button>
+        {open === "lang" && (
+          <div role="listbox" className={menu}>
+            {langs.map(([k, name]) => (
+              <button
+                key={k}
+                type="button"
+                role="option"
+                aria-selected={lang === k}
+                className={item(lang === k)}
+                onClick={() => {
+                  setLang(k);
+                  setOpen(null);
+                }}
+              >
+                <LangFlag code={k} size={20} />
+                <span className="flex-1">{name}</span>
+                {lang === k && <Icons.Check size={15} strokeWidth={2.6} />}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Appearance dropdown */}
+      <div className="relative">
+        <button
+          type="button"
+          className={pill}
+          aria-label={t("Appearance")}
+          aria-haspopup="listbox"
+          aria-expanded={open === "theme"}
+          onClick={() => setOpen(open === "theme" ? null : "theme")}
+        >
+          <ThemeIcon size={17} />
+          <Icons.ChevronDown
+            size={15}
+            className={`transition-transform ${open === "theme" ? "rotate-180" : ""}`}
+          />
+        </button>
+        {open === "theme" && (
+          <div role="listbox" className={menu}>
+            {themes.map(([k, name, Ico]) => (
+              <button
+                key={k}
+                type="button"
+                role="option"
+                aria-selected={theme === k}
+                className={item(theme === k)}
+                onClick={() => {
+                  setTheme(k);
+                  setOpen(null);
+                }}
+              >
+                <Ico size={17} />
+                <span className="flex-1">{name}</span>
+                {theme === k && <Icons.Check size={15} strokeWidth={2.6} />}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -20860,34 +20962,31 @@ function Login() {
   const systemSettings = useSystemSettings();
   const loginCompany =
     systemSettings?.company || DEFAULT_SYSTEM_SETTINGS.company;
-  const navigate = useNavigate();
   const location = useLocation();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [transition, setTransition] = useState(null); // null | "loading" | "success"
 
-  // While the sign-in animation is playing we stay on this page; once it
-  // finishes (transition → null) this redirect fires.
   // A customer session shares the same browser storage as admin. Instead of
   // bouncing it to /customer forever (which locked admins out), sign it out
   // here so the admin can log in with their own account.
   const strayCustomer = !!user && user.isStaff !== true;
   useEffect(() => {
-    if (strayCustomer && !transition) {
+    if (strayCustomer) {
       const why = user?.staffLookupError
         ? ` (database error: ${user.staffLookupError})`
         : ` No staff record matches "${user?.email}" in the users table.`;
       logout();
+      setSubmitting(false);
       setError("This account is not a staff account." + why);
     }
-  }, [strayCustomer, transition]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [strayCustomer]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (user && user.isStaff === true && !transition) {
+  // Signed in as staff → straight to the app (no extra animation).
+  if (user && user.isStaff === true) {
     const from = location.state?.from?.pathname || "/";
     return <Navigate to={from} replace />;
   }
@@ -20900,116 +20999,99 @@ function Login() {
       return;
     }
     setSubmitting(true);
-    setTransition("loading");
-    const t0 = Date.now();
     const { error } = await login(email, password);
-    await authWait(Math.max(0, 700 - (Date.now() - t0))); // avoid a flash
     if (error) {
       setSubmitting(false);
-      setTransition(null);
       setError(error.message || t("Incorrect email or password."));
-      return;
     }
-    setTransition("success");
-    await authWait(1100);
-    setSubmitting(false);
-    setTransition(null); // → redirect above runs (honours state.from)
+    // On success the redirect above runs as soon as the session is set;
+    // the button keeps its spinner until then.
   }
 
   return (
-    <div className="cb-login-page min-h-screen relative overflow-hidden bg-[#f6f9fd] flex items-center justify-center px-5 py-8 sm:px-8">
+    <div className="cb-login-page relative flex min-h-screen items-center justify-center overflow-hidden bg-[#f1f2f4] px-5 py-8">
       <AdminLoginPrefs />
-      {transition && (
-        <AuthTransition
-          phase={transition}
-          icon={Waypoints}
-          title={
-            transition === "success" ? t("Welcome back!") : t("Signing you in…")
-          }
-          subtitle={
-            transition === "success"
-              ? t("Redirecting to your dashboard")
-              : t("Preparing your workspace")
-          }
-        />
-      )}
-      {/* Animated background */}
       <style>{`
-        @keyframes cb-float-a {
-          0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
-          50% { transform: translate3d(38px, 26px, 0) rotate(7deg) scale(1.04); }
+        .cb-login-page{--lg-1:#c9d9fb;--lg-2:#93b3f4;--lg-3:#2563eb;--lg-4:#7ea3f0;--lg-5:#b3caf8;}
+        @keyframes cb-wave-a {
+          0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+          50% { transform: translate3d(-26px, 12px, 0) scale(1.025); }
         }
-        @keyframes cb-float-b {
-          0%, 100% { transform: translate3d(0, 0, 0) rotate(0deg) scale(1); }
-          50% { transform: translate3d(-34px, 24px, 0) rotate(-8deg) scale(1.06); }
+        @keyframes cb-wave-b {
+          0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+          50% { transform: translate3d(-42px, -10px, 0) scale(1.04); }
         }
-        @keyframes cb-float-c {
-          0%, 100% { transform: translate3d(0, 0, 0) scale(1); opacity: .36; }
-          50% { transform: translate3d(0, -32px, 0) scale(1.12); opacity: .58; }
-        }
-        @keyframes cb-pulse {
-          0%, 100% { transform: scale(1); opacity: .22; }
-          50% { transform: scale(1.16); opacity: .38; }
-        }
-        @keyframes cb-drift {
-          0% { transform: translate3d(0, 0, 0); }
-          50% { transform: translate3d(0, 16px, 0); }
-          100% { transform: translate3d(0, 0, 0); }
-        }
-        .cb-blob-a { animation: cb-float-a 14s ease-in-out infinite; }
-        .cb-blob-b { animation: cb-float-b 17s ease-in-out infinite; }
-        .cb-blob-c { animation: cb-float-c 11s ease-in-out infinite; }
-        .cb-pulse { animation: cb-pulse 8s ease-in-out infinite; }
-        .cb-drift { animation: cb-drift 7s ease-in-out infinite; }
+        .cb-wave { transform-box: fill-box; transform-origin: 100% 50%; will-change: transform; }
+        .cb-wave-1 { animation: cb-wave-a 13s ease-in-out infinite; }
+        .cb-wave-2 { animation: cb-wave-b 17s ease-in-out infinite; }
+        .cb-wave-3 { animation: cb-wave-a 21s ease-in-out infinite reverse; }
+        .cb-wave-4 { animation: cb-wave-b 15s ease-in-out infinite reverse; }
+        .cb-wave-5 { animation: cb-wave-a 19s ease-in-out infinite; }
         @media (prefers-reduced-motion: reduce) {
-          .cb-blob-a, .cb-blob-b, .cb-blob-c, .cb-pulse, .cb-drift { animation: none !important; }
+          .cb-wave { animation: none !important; }
         }
+        .cb-login-input{width:100%;border:1px solid transparent;border-radius:6px;background:#eaf0fd;padding:10px 12px;font-size:13.5px;color:#0f172a;outline:none;transition:background .15s,border-color .15s,box-shadow .15s;}
+        .cb-login-input:focus{background:#fff;border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12);}
+        html.cb-admin-dark .cb-login-input{background:#0f1626;color:#e5e7eb;border-color:#263043;}
+        html.cb-admin-dark .cb-login-input:focus{background:#0b1120;border-color:#60a5fa;}
       `}</style>
 
-      <div className="pointer-events-none absolute -top-52 -right-48 h-[680px] w-[680px] rounded-full bg-[#2563eb]/10 blur-2xl cb-blob-a" />
-      <div className="pointer-events-none absolute -bottom-56 -left-44 h-[620px] w-[620px] rounded-full bg-[#0f2a55]/10 blur-2xl cb-blob-b" />
-      <div className="pointer-events-none absolute top-[8%] left-[10%] h-24 w-24 rounded-full bg-[#60a5fa]/25 blur-xl cb-pulse" />
-      <div className="pointer-events-none absolute right-[10%] bottom-[12%] h-32 w-32 rounded-full bg-[#93c5fd]/30 blur-2xl cb-blob-c" />
-
-      {/* Decorative flowing shapes behind the card */}
-      <div className="pointer-events-none absolute -right-24 top-1/2 h-[430px] w-[760px] -translate-y-1/2 rounded-[48%] border-[42px] border-[#2563eb]/[0.07] rotate-[-12deg] cb-drift" />
-      <div className="pointer-events-none absolute -left-28 top-[18%] h-[300px] w-[540px] rounded-[48%] border-[30px] border-[#0f2a55]/[0.05] rotate-[18deg] cb-drift" />
-
-      <div className="pointer-events-none absolute inset-0 opacity-40">
-        <div className="absolute left-[7%] top-[28%] h-2 w-2 rounded-full bg-[#2563eb] cb-pulse" />
-        <div className="absolute left-[15%] top-[68%] h-1.5 w-1.5 rounded-full bg-[#60a5fa] cb-drift" />
-        <div className="absolute right-[14%] top-[25%] h-2.5 w-2.5 rounded-full bg-[#2563eb] cb-pulse" />
-        <div className="absolute right-[7%] bottom-[24%] h-1.5 w-1.5 rounded-full bg-[#0f2a55] cb-drift" />
-      </div>
+      {/* Floating waves behind the card */}
+      <svg
+        className="pointer-events-none absolute inset-0 h-full w-full"
+        viewBox="0 0 1280 700"
+        preserveAspectRatio="xMaxYMid slice"
+        aria-hidden="true"
+      >
+        <path
+          className="cb-wave cb-wave-1"
+          fill="var(--lg-1)"
+          d="M470 -40 C515 70 552 140 548 225 C543 330 610 440 750 530 C820 575 870 640 900 800 L1400 800 L1400 -40 Z"
+        />
+        <path
+          className="cb-wave cb-wave-2"
+          fill="var(--lg-2)"
+          d="M548 -40 C566 80 540 190 575 285 C612 385 700 470 830 540 C900 580 960 650 990 800 L1400 800 L1400 -40 Z"
+        />
+        <path
+          className="cb-wave cb-wave-3"
+          fill="var(--lg-3)"
+          d="M556 -40 C590 90 540 200 585 300 C628 395 735 475 880 545 C960 585 1060 640 1100 800 L1400 800 L1400 -40 Z"
+        />
+        <path
+          className="cb-wave cb-wave-4"
+          fill="var(--lg-4)"
+          d="M730 560 C850 640 1020 690 1400 640 L1400 800 L760 800 Z"
+        />
+        <path
+          className="cb-wave cb-wave-5"
+          fill="var(--lg-5)"
+          d="M900 650 C1020 690 1180 700 1400 690 L1400 800 L940 800 Z"
+        />
+      </svg>
 
       {/* Login card */}
-      <div className="relative z-10 w-full max-w-[440px]">
-        <div className="rounded-[24px] border border-white/80 bg-white/95 p-7 shadow-[0_24px_80px_rgba(15,42,85,0.12)] backdrop-blur-xl sm:p-9">
-          <div className="text-center">
-            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl bg-signal-blue shadow-lg shadow-blue-500/20">
-              {loginCompany.logoUrl || loginCompany.logoDataUrl ? (
-                <img
-                  src={loginCompany.logoUrl || loginCompany.logoDataUrl}
-                  alt={`${loginCompany.name || "Company"} logo`}
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <Waypoints size={27} className="text-white" />
-              )}
-            </div>
-            <div className="font-display text-xl font-extrabold tracking-tight text-ink-900">
+      <div className="relative z-10 w-full max-w-[400px]">
+        <div className="rounded-lg border border-white/80 bg-white/95 p-7 shadow-[0_8px_30px_rgba(15,23,42,0.10)]">
+          <div className="mb-6 flex items-center gap-3">
+            {loginCompany.logoUrl || loginCompany.logoDataUrl ? (
+              <img
+                src={loginCompany.logoUrl || loginCompany.logoDataUrl}
+                alt={`${loginCompany.name || "Company"} logo`}
+                className="h-12 w-auto max-w-[180px] object-contain"
+              />
+            ) : (
+              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-signal-blue">
+                <Waypoints size={24} className="text-white" />
+              </span>
+            )}
+            <div className="font-display text-lg font-extrabold tracking-tight text-ink-900">
               {loginCompany.name || "Cargo Bridge"}
             </div>
-            <h2 className="mt-5 font-display text-[26px] font-bold leading-tight text-ink-900">
-              {t("Sign in")}
-            </h2>
-            <p className="mt-2 text-sm leading-6 text-ink-600/55">
-              {t("Sign in to access your logistics management workspace.")}
-            </p>
           </div>
 
           {isMock && (
-            <div className="mt-5 flex items-start gap-2 rounded-xl bg-signal-amber/10 px-3 py-2.5 text-xs leading-relaxed text-[#8A5A12]">
+            <div className="mb-5 flex items-start gap-2 rounded-md bg-signal-amber/10 px-3 py-2.5 text-xs leading-relaxed text-[#8A5A12]">
               <TriangleAlert size={14} className="mt-0.5 shrink-0" />
               <span>
                 Demo mode — Supabase is not connected. Enter any email and
@@ -21018,25 +21100,47 @@ function Login() {
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="mt-7 space-y-5">
+          <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="mb-2 block text-xs font-semibold text-ink-700">
+              <label className="mb-1.5 block text-xs font-medium text-ink-800">
                 {t("Email")}
+                <span className="text-signal-red"> *</span>
               </label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-xl border border-mist-200 bg-[#fbfcfe] px-4 py-3 text-sm text-ink-900 outline-none transition-all placeholder:text-ink-600/35 focus:border-signal-blue focus:bg-white focus:ring-4 focus:ring-signal-blue/10"
+                className="cb-login-input"
                 autoComplete="email"
+                autoFocus
               />
             </div>
 
             <div>
-              <div className="mb-2 flex items-center justify-between">
-                <label className="block text-xs font-semibold text-ink-700">
-                  {t("Password")}
-                </label>
+              <label className="mb-1.5 block text-xs font-medium text-ink-800">
+                {t("Password")}
+                <span className="text-signal-red"> *</span>
+              </label>
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="cb-login-input"
+                  style={{ paddingRight: 40 }}
+                  autoComplete="current-password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-ink-600/40 transition-colors hover:text-ink-700"
+                  tabIndex={-1}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+              <div className="mt-1.5 text-right">
                 <button
                   type="button"
                   className="text-xs font-medium text-signal-blue transition-colors hover:text-blue-700"
@@ -21047,39 +21151,11 @@ function Login() {
                   {t("Forgot password?")}
                 </button>
               </div>
-              <div className="relative">
-                <input
-                  type={showPassword ? "text" : "password"}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full rounded-xl border border-mist-200 bg-[#fbfcfe] px-4 py-3 pr-11 text-sm text-ink-900 outline-none transition-all placeholder:text-ink-600/35 focus:border-signal-blue focus:bg-white focus:ring-4 focus:ring-signal-blue/10"
-                  autoComplete="current-password"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-ink-600/40 transition-colors hover:text-ink-700"
-                  tabIndex={-1}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                >
-                  {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-                </button>
-              </div>
             </div>
 
-            <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-ink-700">
-              <input
-                type="checkbox"
-                checked={remember}
-                onChange={(e) => setRemember(e.target.checked)}
-                className="h-4 w-4 rounded border-mist-200 text-signal-blue focus:ring-signal-blue"
-              />
-              {t("Remember me")}
-            </label>
-
             {error && (
-              <div className="flex items-center gap-2 rounded-xl bg-signal-red/10 px-3 py-2.5 text-sm text-signal-red">
-                <TriangleAlert size={14} className="shrink-0" />
+              <div className="flex items-start gap-2 rounded-md bg-signal-red/10 px-3 py-2.5 text-sm text-signal-red">
+                <TriangleAlert size={14} className="mt-0.5 shrink-0" />
                 {error}
               </div>
             )}
@@ -21087,11 +21163,14 @@ function Login() {
             <button
               type="submit"
               disabled={submitting}
-              className="flex w-full items-center justify-center gap-2 rounded-xl bg-signal-blue py-3.5 text-sm font-semibold text-white shadow-lg shadow-blue-500/20 transition-all hover:-translate-y-0.5 hover:bg-signal-blue/90 hover:shadow-blue-500/30 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:translate-y-0"
+              aria-label={t("Sign in")}
+              className={`flex h-10 w-full items-center justify-center rounded-md text-sm font-semibold transition-colors ${
+                submitting
+                  ? "cursor-wait border border-mist-200 bg-mist-100 text-ink-600/60"
+                  : "bg-signal-blue text-white hover:bg-signal-blue/90"
+              }`}
             >
-              {submitting ? <AuthSpinner size={17} /> : null}
-              {submitting ? t("Signing in...") : t("Sign in")}
-              {!submitting && <ArrowRight size={17} />}
+              {submitting ? <AuthSpinner size={17} /> : t("Sign in")}
             </button>
           </form>
         </div>
