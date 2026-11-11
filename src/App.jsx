@@ -35119,6 +35119,16 @@ const CustomerApp = (() => {
     const first = useRef(true);
     const shellRef = useRef(null);
     const bottomNavRef = useRef(null);
+    // Active-tab check that ignores a trailing slash / index.html. A PWA
+    // opened from the Home Screen can start at "/customer/" (manifest
+    // start_url), which NavLink's strict `end` match treats as NOT Home.
+    const normPath = (x) =>
+      x.replace(/\/index\.html$/, "").replace(/\/+$/, "") || "/";
+    const isTabActive = (to) => {
+      const cur = normPath(pathname);
+      const t = normPath(to);
+      return to === P() ? cur === t : cur === t || cur.startsWith(t + "/");
+    };
     // DRSB-style focus pages: product detail, cart and checkout hide the bottom
     // menu so the only thing on screen is the order bar.
     const hideNav = /\/shop\/(p\/[^/]+|cart|checkout)\/?$/.test(pathname);
@@ -35485,19 +35495,20 @@ const CustomerApp = (() => {
                     : { opacity: 0 }
                 }
               />
-              {tabs.map(([to, I, l]) => (
-                <NavLink
-                  key={to}
-                  to={to}
-                  end={to === P()}
-                  className={({ isActive }) =>
-                    `min-h-[52px] py-2 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium ${isActive ? "text-blue-500" : "text-slate-500"}`
-                  }
-                >
-                  <I size={22} />
-                  {l}
-                </NavLink>
-              ))}
+              {tabs.map(([to, I, l]) => {
+                const active = isTabActive(to);
+                return (
+                  <Link
+                    key={to}
+                    to={to}
+                    aria-current={active ? "page" : undefined}
+                    className={`min-h-[52px] py-2 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium ${active ? "text-blue-500" : "text-slate-500"}`}
+                  >
+                    <I size={22} />
+                    {l}
+                  </Link>
+                );
+              })}
             </div>
           </nav>
         )}
