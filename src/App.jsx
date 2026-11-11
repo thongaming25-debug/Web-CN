@@ -40397,6 +40397,14 @@ const CustomerApp = (() => {
     );
   }
 
+  // Page body that fills the screen, so the order bar (sticky) rests at the
+  // bottom even when the content is short. The subtraction is the Shell's own
+  // bottom padding (nav clearance + 16px), so the page never scrolls needlessly.
+  const SHOP_C_FILL = {
+    minHeight:
+      "calc(100dvh - var(--jz-nav-clearance, calc(90px + env(safe-area-inset-bottom))) - 16px)",
+  };
+
   function ShopCCartLink({ count }) {
     return (
       <Link
@@ -40896,6 +40904,25 @@ const CustomerApp = (() => {
     shopFeedSeed = (Math.random() * 4294967296) >>> 0;
     return shopFeedSeed;
   }
+
+  // ---- Shop data cache (module level: survives page changes, cleared on a
+  // full page reload). Going to a product and pressing Back reuses this
+  // instead of asking the server again. It is refreshed only when it is older
+  // than the TTL, on pull-to-refresh / Retry, or after an order is placed.
+  // Stock is still checked by the server on add-to-cart and on checkout.
+  const SHOP_CACHE_TTL = 5 * 60 * 1000;
+  const shopCache = {
+    catalog: new Map(), // "sort|cat|search" -> { at, items, total, shown }
+    cats: { at: 0, list: null },
+    detail: new Map(), // product id -> { at, data }
+    ui: { q: "", cat: "", sort: "for_you", y: 0 }, // list state + scroll
+  };
+  const shopFresh = (e) => !!e && Date.now() - e.at < SHOP_CACHE_TTL;
+  function shopCacheClear() {
+    shopCache.catalog.clear();
+    shopCache.detail.clear();
+    shopCache.cats = { at: 0, list: null };
+  }
   function shopFeedRng(seed) {
     let a = seed >>> 0;
     return () => {
@@ -40921,15 +40948,32 @@ const CustomerApp = (() => {
   function ShopCHomePage() {
     useShopCss();
     const { tr } = useApp();
-    const [q, setQ] = useState("");
-    const [cat, setCat] = useState("");
-    const [sort, setSort] = useState("for_you");
+    // Restore what the customer was looking at (search / category / sort)
+    // and the cached products, so Back from a product shows the list at once.
+    const [q, setQ] = useState(shopCache.ui.q);
+    const [cat, setCat] = useState(shopCache.ui.cat);
+    const [sort, setSort] = useState(shopCache.ui.sort);
     const [seed, setSeed] = useState(() => shopFeedSeed);
     const feedAll = useRef([]);
-    const [cats, setCats] = useState([]);
-    const [items, setItems] = useState([]);
-    const [total, setTotal] = useState(0);
-    const [loading, setLoading] = useState(true);
+    const [cats, setCats] = useState(() => shopCache.cats.list || []);
+    const initHit = shopCache.catalog.get(
+      `${shopCache.ui.sort}|${shopCache.ui.cat}|${shopCache.ui.q.trim()}`,
+    );
+    const initFresh = shopFresh(initHit);
+    const [items, setItems] = useState(() => {
+      if (!initFresh) return [];
+      const list =
+        shopCache.ui.sort === "for_you"
+          ? shopFeedOrder(initHit.items, shopFeedSeed)
+          : initHit.items;
+      if (shopCache.ui.sort === "for_you") feedAll.current = list;
+      return list.slice(0, Math.max(20, initHit.shown || 0));
+    });
+    const [total, setTotal] = useState(initFresh ? initHit.total : 0);
+    const [loading, setLoading] = useState(!initFresh);
+    const reloadSeen = useRef(0); // reload counter already handled
+    const reloadCatsSeen = useRef(0);
+    const catKey = () => `${sort}|${cat}|${dq.trim()}`;
     const [more, setMore] = useState(false);
     const [err, setErr] = useState("");
     const [cartN] = useShopCartCount();
@@ -40939,11 +40983,22 @@ const CustomerApp = (() => {
     const itemsLen = useRef(0);
     itemsLen.current = items.length;
     const PAGE = 20;
-    const [dq, setDq] = useState("");
+    const [dq, setDq] = useState(shopCache.ui.q);
     useEffect(() => {
       const t = setTimeout(() => setDq(q), 300);
       return () => clearTimeout(t);
     }, [q]);
+    useEffect(() => {
+      shopCache.ui.q = q;
+      shopCache.ui.cat = cat;
+      shopCache.ui.sort = sort;
+    }, [q, cat, sort]);
+    // Back from a product: return to the same scroll position.
+    useLayoutEffect(() => {
+      if (shopCache.ui.y > 0 && items.length > 0)
+        window.scrollTo(0, shopCache.ui.y);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
     useEffect(() => {
       let hiddenAt = 0;
       const onVis = () => {
@@ -40967,6 +41022,9 @@ const CustomerApp = (() => {
       return () => window.removeEventListener("cb-pull-refresh", onPull);
     }, []);
     useEffect(() => {
+      if (shopFresh(shopCache.cats) && reload === reloadCatsSeen.current)
+        return;
+      reloadCatsSeen.current = reload;
       supabase.rpc("shop_categories_public").then(({ data }) => {
         const list = data || [];
         // Respect the admin's drag-and-drop order when the RPC exposes it.
@@ -40976,6 +41034,7 @@ const CustomerApp = (() => {
               .sort((a, b) => a[0].sort_order - b[0].sort_order || a[1] - b[1])
               .map((x) => x[0])
           : list;
+        shopCache.cats = { at: Date.now(), list: ordered };
         setCats(ordered);
       });
     }, [reload]);
@@ -41021,16 +41080,49 @@ const CustomerApp = (() => {
     };
     useEffect(() => {
       let alive = true;
+      const key = catKey();
+      // Pull-to-refresh / Retry bump `reload` → skip the cache that time.
+      const force = reload !== reloadSeen.current;
+      reloadSeen.current = reload;
+      if (force) shopCache.detail.clear();
+      const hit = shopCache.catalog.get(key);
+      if (!force && shopFresh(hit)) {
+        // Cached: only re-order locally (new seed), no request to the server.
+        const list =
+          sort === "for_you" ? shopFeedOrder(hit.items, seed) : hit.items;
+        if (sort === "for_you") feedAll.current = list;
+        const keep = Math.max(PAGE, keepLen.current || 0, hit.shown || 0);
+        keepLen.current = 0;
+        setItems(list.slice(0, keep));
+        setTotal(hit.total);
+        setErr("");
+        setLoading(false);
+        return undefined;
+      }
       const n = Math.max(PAGE, keepLen.current || 0);
       keepLen.current = 0;
       setLoading(true);
       const load =
         sort === "for_you"
           ? fetchAll().then((d) => {
+              shopCache.catalog.set(key, {
+                at: Date.now(),
+                items: d.items,
+                total: d.total,
+                shown: n,
+              });
               feedAll.current = shopFeedOrder(d.items, seed);
               return { items: feedAll.current.slice(0, n), total: d.total };
             })
-          : fetchPage(0, n);
+          : fetchPage(0, n).then((d) => {
+              shopCache.catalog.set(key, {
+                at: Date.now(),
+                items: d.items,
+                total: d.total,
+                shown: d.items.length,
+              });
+              return d;
+            });
       load
         .then((d) => {
           if (!alive) return;
@@ -41049,12 +41141,18 @@ const CustomerApp = (() => {
       if (more) return;
       setMore(true);
       try {
+        const entry = shopCache.catalog.get(catKey());
         if (sort === "for_you") {
           setItems(feedAll.current.slice(0, items.length + PAGE));
+          if (entry) entry.shown = items.length + PAGE;
         } else {
           const d = await fetchPage(items.length);
           setItems((cur) => [...cur, ...d.items]);
           setTotal(d.total);
+          if (entry) {
+            entry.items = [...entry.items, ...d.items];
+            entry.shown = entry.items.length;
+          }
         }
       } catch (e) {
         setErr(shopCErr(e, tr));
@@ -41206,6 +41304,9 @@ const CustomerApp = (() => {
               <Link
                 key={p.id}
                 to={P(`/shop/p/${p.id}`)}
+                onClick={() => {
+                  shopCache.ui.y = window.scrollY || 0;
+                }}
                 className="block cb-shop-up"
                 style={{ "--d": `${Math.min(i, 8) * 45}ms` }}
               >
@@ -41295,15 +41396,26 @@ const CustomerApp = (() => {
     const { id } = useParams();
     const nav = useNavigate();
     const { tr, say } = useApp();
-    const [p, setP] = useState(null);
+    // Reuse the product the server already sent (see shopCache) → no flash,
+    // no extra request when the customer comes back to the same product.
+    const cachedP = shopCache.detail.get(id);
+    const initP = shopFresh(cachedP) ? cachedP.data : null;
+    const initFirst = initP
+      ? initP.variants.find((v) => v.in_stock) || initP.variants[0]
+      : null;
+    const [p, setP] = useState(initP);
     const [err, setErr] = useState("");
-    const [loading, setLoading] = useState(true);
-    const [color, setColor] = useState(null);
-    const [size, setSize] = useState(null);
-    const [vid, setVid] = useState(null);
+    const [loading, setLoading] = useState(!initP);
+    const [color, setColor] = useState(initFirst?.color || null);
+    const [size, setSize] = useState(initFirst?.size || null);
+    const [vid, setVid] = useState(initFirst?.id || null);
     // DRSB-style: one quantity per variant (size / option), so several sizes
     // and colors can be bought in one go.
-    const [qtys, setQtys] = useState({});
+    const [qtys, setQtys] = useState(
+      initP && initP.variants.length === 1 && initFirst?.in_stock
+        ? { [initFirst.id]: 1 }
+        : {},
+    );
     const [gridView, setGridView] = useState(true);
     // DRSB-style: the page shows product info only; Add to cart / Buy now open
     // this sheet ("add" | "buy") where color, size and quantity are chosen.
@@ -41325,12 +41437,39 @@ const CustomerApp = (() => {
     const addedTimer = useRef(0);
     useEffect(() => () => clearTimeout(addedTimer.current), []);
 
+    const detailSeen = useRef(initP ? id : null);
     useEffect(() => {
       let alive = true;
+      const hit = shopCache.detail.get(id);
+      if (shopFresh(hit)) {
+        // Same product as the first render → state is already set from cache.
+        if (detailSeen.current !== id) {
+          const data = hit.data;
+          const first =
+            data.variants.find((v) => v.in_stock) || data.variants[0];
+          setP(data);
+          setColor(first?.color || null);
+          setSize(first?.size || null);
+          setVid(first?.id || null);
+          setQtys(
+            data.variants.length === 1 && first?.in_stock
+              ? { [first.id]: 1 }
+              : {},
+          );
+        }
+        detailSeen.current = id;
+        setErr("");
+        setLoading(false);
+        return undefined;
+      }
+      detailSeen.current = id;
+      setLoading(true);
       supabase
         .rpc("shop_product_detail", { p_product_id: id })
         .then(({ data, error }) => {
           if (!alive) return;
+          if (!error && data)
+            shopCache.detail.set(id, { at: Date.now(), data });
           if (error)
             setErr(
               /not found/i.test(error.message)
@@ -41549,8 +41688,8 @@ const CustomerApp = (() => {
           </div>
           {/* Always-visible action bar: the buttons never scroll out of reach. */}
           <div
-            className="jz-shop-action-bar jz-shop-product-actions sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100 flex items-center gap-2.5"
-            style={SHOP_C_BAR}
+            className="jz-shop-action-bar jz-shop-action-bar--flush jz-shop-product-actions z-30 flex items-center gap-2.5"
+            style={{ bottom: 0 }}
           >
             <button
               type="button"
@@ -41904,9 +42043,9 @@ const CustomerApp = (() => {
     const changed = items.some((i) => i.price_changed);
     const units = items.reduce((a, i) => a + i.quantity, 0);
     return (
-      <>
+      <div className="flex flex-col" style={SHOP_C_FILL}>
         <Top title={tr("My Cart", "កន្ត្រករបស់ខ្ញុំ")} back />
-        <div className="px-4 pt-4 space-y-3 pb-4">
+        <div className="flex-1 px-4 pt-4 space-y-3 pb-4">
           {!cart && !err && (
             <div className="space-y-3" aria-hidden="true">
               <Skeleton className="h-28 rounded-2xl" />
@@ -42084,8 +42223,8 @@ const CustomerApp = (() => {
         </div>
         {items.length > 0 && (
           <div
-            className="jz-shop-action-bar sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100 flex items-center gap-3"
-            style={SHOP_C_BAR}
+            className="jz-shop-action-bar jz-shop-action-bar--flush z-30 flex items-center gap-3"
+            style={{ bottom: 0 }}
           >
             <div className="shrink-0 leading-tight">
               <p className="text-[11px] text-slate-400">
@@ -42108,7 +42247,7 @@ const CustomerApp = (() => {
             </Btn>
           </div>
         )}
-      </>
+      </div>
     );
   }
 
@@ -42224,6 +42363,7 @@ const CustomerApp = (() => {
         setBusy(false);
         return setErr(shopCErr(error, tr));
       }
+      shopCacheClear(); // stock changed → next visit loads fresh data
       nav(P(`/shop/orders/${data.order_id}`), {
         replace: true,
         state: { placed: true },
@@ -42362,13 +42502,35 @@ const CustomerApp = (() => {
             {cart.items.map((i) => (
               <div
                 key={i.variant_id}
-                className="flex justify-between gap-3 text-[13px]"
+                className="flex items-center gap-3 rounded-2xl bg-slate-50 p-2.5"
               >
-                <span className="truncate">
-                  {i.quantity}× {i.name}
-                  {shopCLabel(i) ? ` (${shopCLabel(i)})` : ""}
+                <AirImg
+                  src={i.image}
+                  alt={i.name}
+                  className="w-16 h-16 rounded-xl"
+                  fallbackSize={22}
+                  FallbackIcon={Package}
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-[13px] font-semibold leading-snug line-clamp-2">
+                    {i.name}
+                  </p>
+                  {shopCLabel(i) && (
+                    <p className="text-[12px] text-slate-500 truncate">
+                      {shopCLabel(i)}
+                    </p>
+                  )}
+                  <p className="mt-0.5 text-[14px] font-bold">
+                    {money(
+                      i.final_price != null
+                        ? i.final_price
+                        : i.line_total / Math.max(1, i.quantity),
+                    )}
+                  </p>
+                </div>
+                <span className="shrink-0 rounded-lg bg-white px-2.5 py-1 text-[13px] font-semibold">
+                  × {i.quantity}
                 </span>
-                <span className="shrink-0">{money(i.line_total)}</span>
               </div>
             ))}
             <div className="border-t border-slate-100 pt-2 space-y-1 text-[14px]">
@@ -42431,8 +42593,8 @@ const CustomerApp = (() => {
           )}
         </div>
         <div
-          className="jz-shop-action-bar sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100"
-          style={SHOP_C_BAR}
+          className="jz-shop-action-bar jz-shop-action-bar--flush z-30"
+          style={{ bottom: 0 }}
         >
           <Btn
             loading={busy}
@@ -80103,8 +80265,12 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .jz-customer .jz-shop-option-list>button[aria-pressed="true"]{background:#eff6ff;color:#1d4ed8;border-color:#2563eb;box-shadow:inset 0 0 0 1px #2563eb;}
 .jz-customer.cb-cust-dark .jz-shop-option-list>button[aria-pressed="true"]{background:#172d50;color:#bfdbfe;border-color:#60a5fa;box-shadow:inset 0 0 0 1px #60a5fa;}
 .jz-customer .jz-shop-checkout-content{padding-top:20px;padding-bottom:20px;}
+/* DRSB-style footer: full-width bar glued to the screen bottom, no floating card. */
+.jz-customer .jz-shop-action-bar.jz-shop-action-bar--flush{position:fixed;left:0;right:0;bottom:0!important;width:100%;max-width:448px;margin:0 auto;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));border:0;border-top:1px solid var(--jz-c-border);border-radius:0;box-shadow:0 -8px 24px -14px rgba(15,30,60,.28);}
+.jz-customer .jz-customer-content:has(.jz-shop-action-bar--flush){padding-bottom:calc(96px + env(safe-area-inset-bottom,0px));}
+.jz-customer .jz-shop-action-bar.jz-shop-action-bar--flush>button{width:100%;min-height:52px;border-radius:16px;font-size:16px;font-weight:700;}
 .jz-customer .jz-shop-checkout-content>*+*{margin-top:16px;}
-@media(min-width:640px){.jz-customer .jz-shop-action-bar{margin-inline:auto;max-width:608px;}}
+@media(min-width:640px){.jz-customer .jz-shop-action-bar{margin-inline:auto;max-width:608px;}.jz-customer .jz-shop-action-bar.jz-shop-action-bar--flush{max-width:608px;}}
 
 /* Motion: fade-only page entry avoids creating containing blocks for fixed UI. */
 @keyframes jz-fade{from{opacity:0}to{opacity:1}}
