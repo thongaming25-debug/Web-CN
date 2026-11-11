@@ -40434,8 +40434,287 @@ const CustomerApp = (() => {
     return [n, load];
   }
 
+  // ---------------- Full-screen photo viewer ----------------
+  // Tap a photo in the Shop to see it big. Swipe / arrows to move between
+  // photos, and "Save" puts the photo into the phone's gallery.
+  async function shopSaveImage(url, name) {
+    const base =
+      String(name || "photo")
+        .replace(/[^\w\u1780-\u17FF\u4e00-\u9fff-]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .slice(0, 40) || "photo";
+    try {
+      const res = await fetch(url, { mode: "cors" });
+      if (!res.ok) throw new Error("fetch");
+      const blob = await res.blob();
+      const ext =
+        (blob.type.split("/")[1] || "jpg")
+          .replace("jpeg", "jpg")
+          .split("+")[0] || "jpg";
+      const file = new File([blob], `${base}.${ext}`, {
+        type: blob.type || "image/jpeg",
+      });
+      // Phones: the share sheet has "Save Image" / "Save to Photos".
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file] });
+          return "shared";
+        } catch (e) {
+          if (e && e.name === "AbortError") return "cancelled";
+          // fall through to a normal download
+        }
+      }
+      const href = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = href;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(href), 4000);
+      return "downloaded";
+    } catch {
+      // The image host does not allow reading it from the app: open it so the
+      // customer can press-and-hold and choose "Save image".
+      window.open(url, "_blank", "noopener");
+      return "opened";
+    }
+  }
+
+  function ShopImageViewer({ images, index = 0, name, onClose }) {
+    const { tr } = useApp();
+    const n = images.length;
+    const [i, setI] = useState(index);
+    const [busy, setBusy] = useState(false);
+    const [note, setNote] = useState("");
+    const scRef = useRef(null);
+    const raf = useRef(0);
+
+    const width = () => scRef.current?.clientWidth || 1;
+    // Native scroll-snap carousel: the browser does the swiping on the GPU, so
+    // it follows the finger and stays smooth (no JS in the gesture).
+    const goTo = (k, smooth = true) => {
+      const el = scRef.current;
+      if (!el) return;
+      const t = Math.max(0, Math.min(n - 1, k));
+      el.scrollTo({ left: t * width(), behavior: smooth ? "smooth" : "auto" });
+    };
+
+    useLayoutEffect(() => {
+      goTo(index, false);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    useEffect(() => {
+      const onKey = (e) => {
+        if (e.key === "Escape") onClose();
+        else if (e.key === "ArrowLeft") goTo(i - 1);
+        else if (e.key === "ArrowRight") goTo(i + 1);
+      };
+      const onResize = () => goTo(i, false);
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      window.addEventListener("keydown", onKey);
+      window.addEventListener("resize", onResize);
+      return () => {
+        window.removeEventListener("keydown", onKey);
+        window.removeEventListener("resize", onResize);
+        document.body.style.overflow = prev;
+        cancelAnimationFrame(raf.current);
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [i, n]);
+
+    useEffect(() => {
+      if (!note) return undefined;
+      const t = setTimeout(() => setNote(""), 3200);
+      return () => clearTimeout(t);
+    }, [note]);
+
+    // Only the counter follows the scroll; the images never re-render.
+    const onScroll = () => {
+      cancelAnimationFrame(raf.current);
+      raf.current = requestAnimationFrame(() => {
+        const k = Math.round((scRef.current?.scrollLeft || 0) / width());
+        setI((cur) => (k >= 0 && k < n && k !== cur ? k : cur));
+      });
+    };
+
+    async function save() {
+      if (busy) return;
+      setBusy(true);
+      const r = await shopSaveImage(images[i], name);
+      setBusy(false);
+      if (r === "downloaded")
+        setNote(tr("Photo saved", "បានរក្សាទុករូបភាព", "图片已保存"));
+      else if (r === "shared")
+        setNote(
+          tr(
+            "Choose “Save Image” to keep it",
+            "ជ្រើស “Save Image” ដើម្បីរក្សាទុក",
+            "请选择“存储图像”保存",
+          ),
+        );
+      else if (r === "opened")
+        setNote(
+          tr(
+            "Press and hold the photo, then choose Save",
+            "សូមចុចរូបឱ្យយូរ រួចជ្រើស Save",
+            "长按图片，然后选择保存",
+          ),
+        );
+    }
+
+    return createPortal(
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={tr("Photo", "រូបភាព", "图片")}
+        className="fixed inset-0 z-[2000] flex flex-col text-white"
+        style={{ background: "#303030" }}
+      >
+        <style>{`.jz-viewer-scroll::-webkit-scrollbar{display:none}`}</style>
+        {/* Top bar: Save · "1 of 5" · Close */}
+        <div
+          className="grid grid-cols-[1fr_auto_1fr] items-center px-3"
+          style={{
+            paddingTop: "max(10px, env(safe-area-inset-top))",
+            minHeight: 64,
+          }}
+        >
+          <button
+            type="button"
+            onClick={save}
+            disabled={busy}
+            aria-label={tr("Save", "រក្សាទុក", "保存")}
+            className="justify-self-start h-11 pl-2 pr-3 rounded-full flex items-center gap-1.5 text-[14px] font-semibold text-white/90 active:bg-white/10 disabled:opacity-60"
+          >
+            {busy ? (
+              <Icons.Loader2 size={20} className="animate-spin" />
+            ) : (
+              <Icons.Download size={20} />
+            )}
+            {tr("Save", "រក្សាទុក", "保存")}
+          </button>
+          <span className="text-[15px] font-medium tabular-nums text-white">
+            {n > 1
+              ? tr(`${i + 1} of ${n}`, `${i + 1} នៃ ${n}`, `${i + 1} / ${n}`)
+              : ""}
+          </span>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={tr("Close", "បិទ", "关闭")}
+            className="justify-self-end h-11 w-11 grid place-items-center rounded-full active:bg-white/10"
+          >
+            <Icons.X size={26} strokeWidth={1.75} />
+          </button>
+        </div>
+
+        {/* Photos */}
+        <div className="relative flex-1 min-h-0">
+          <div
+            ref={scRef}
+            onScroll={onScroll}
+            className="jz-viewer-scroll flex h-full w-full overflow-x-auto overflow-y-hidden"
+            style={{
+              scrollSnapType: "x mandatory",
+              overscrollBehaviorX: "contain",
+              WebkitOverflowScrolling: "touch",
+              scrollbarWidth: "none",
+              touchAction: "pan-x pinch-zoom",
+            }}
+          >
+            {images.map((u, k) => (
+              <div
+                key={u + k}
+                className="flex h-full w-full shrink-0 items-center justify-center"
+                style={{ scrollSnapAlign: "center", scrollSnapStop: "always" }}
+              >
+                <img
+                  src={u}
+                  alt={k === i ? name || "" : ""}
+                  draggable={false}
+                  decoding="async"
+                  loading={
+                    Math.abs(k - index) <= 1 || Math.abs(k - i) <= 1
+                      ? "eager"
+                      : "lazy"
+                  }
+                  className="h-full w-full select-none object-contain"
+                  style={{ WebkitTouchCallout: "default" }}
+                />
+              </div>
+            ))}
+          </div>
+          {n > 1 && (
+            <>
+              <button
+                type="button"
+                onClick={() => goTo(i - 1)}
+                disabled={i === 0}
+                aria-label="Previous"
+                className="absolute left-3 top-1/2 hidden h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-white/15 text-white backdrop-blur disabled:opacity-30 sm:grid"
+              >
+                <Icons.ChevronLeft size={22} />
+              </button>
+              <button
+                type="button"
+                onClick={() => goTo(i + 1)}
+                disabled={i === n - 1}
+                aria-label="Next"
+                className="absolute right-3 top-1/2 hidden h-11 w-11 -translate-y-1/2 place-items-center rounded-full bg-white/15 text-white backdrop-blur disabled:opacity-30 sm:grid"
+              >
+                <Icons.ChevronRight size={22} />
+              </button>
+            </>
+          )}
+        </div>
+
+        {/* Bottom spacer keeps the photo centred; also shows save messages */}
+        <div
+          className="flex items-center justify-center px-4"
+          style={{
+            minHeight: 64,
+            paddingBottom: "max(8px, env(safe-area-inset-bottom))",
+          }}
+        >
+          {note && (
+            <span className="rounded-full bg-white/15 px-3.5 py-1.5 text-[13px] font-semibold text-white">
+              {note}
+            </span>
+          )}
+        </div>
+      </div>,
+      document.body,
+    );
+  }
+
+  // [open(images, index), node]: put `node` in the page, call open() on tap.
+  function useShopViewer(name) {
+    const [v, setV] = useState(null);
+    const open = (images, index = 0) => {
+      const list = (images || []).filter(Boolean);
+      if (!list.length) return;
+      const picked = (images || [])[index];
+      setV({
+        images: list,
+        index: Math.max(0, picked ? list.indexOf(picked) : 0),
+      });
+    };
+    const node = v ? (
+      <ShopImageViewer
+        images={v.images}
+        index={v.index}
+        name={name}
+        onClose={() => setV(null)}
+      />
+    ) : null;
+    return [open, node];
+  }
+
   // Swipeable photo gallery (scroll-snap) with dots; taps on thumbnails scroll to the photo.
-  function ShopCGallery({ images, index, onIndex, alt }) {
+  function ShopCGallery({ images, index, onIndex, alt, onOpen }) {
     const ref = useRef(null);
     const raf = useRef(0);
     const fromSwipe = useRef(-1); // index the user's own swipe just produced
@@ -40529,6 +40808,7 @@ const CustomerApp = (() => {
                 className="w-full aspect-square max-h-[46vh]"
                 fallbackSize={56}
                 FallbackIcon={Package}
+                onClick={onOpen ? () => onOpen(i) : undefined}
               />
             </div>
           ))}
@@ -40968,6 +41248,7 @@ const CustomerApp = (() => {
     const [vid, setVid] = useState(null);
     const [qty, setQty] = useState(1);
     const [img, setImg] = useState(0);
+    const [openViewer, viewerNode] = useShopViewer(p?.name);
     const [busy, setBusy] = useState(false);
     const [added, setAdded] = useState(false);
     const [msg, setMsg] = useState("");
@@ -41123,7 +41404,9 @@ const CustomerApp = (() => {
             index={img}
             onIndex={setImg}
             alt={p.name}
+            onOpen={(i) => openViewer(images, i)}
           />
+          {viewerNode}
           {images.length > 1 && (
             <div className="cb-shop-hscroll flex gap-2 overflow-x-auto px-4 pt-3">
               {images.map((u, i) => (
@@ -41361,6 +41644,7 @@ const CustomerApp = (() => {
     useShopCss();
     const nav = useNavigate();
     const { tr } = useApp();
+    const [openViewer, viewerNode] = useShopViewer();
     const [cart, setCart] = useState(null);
     const [err, setErr] = useState("");
     const [busy, setBusy] = useState(false);
@@ -41457,6 +41741,7 @@ const CustomerApp = (() => {
               )}
             </p>
           )}
+          {viewerNode}
           {items.map((i, k) => (
             <div
               key={i.variant_id}
@@ -41474,6 +41759,7 @@ const CustomerApp = (() => {
                       className="w-20 h-20 rounded-xl"
                       fallbackSize={24}
                       FallbackIcon={Package}
+                      onClick={() => openViewer([i.image], 0)}
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-[14px] font-semibold leading-snug line-clamp-2">
@@ -42104,6 +42390,7 @@ const CustomerApp = (() => {
     const { id } = useParams();
     const loc = useLocation();
     const { tr, wallet, refreshMoney, say } = useApp();
+    const [openViewer, viewerNode] = useShopViewer();
     const [o, setO] = useState(null);
     const [err, setErr] = useState("");
     const [busy, setBusy] = useState(false);
@@ -42338,6 +42625,7 @@ const CustomerApp = (() => {
               {tr("Canceled", "បានលុបចោល")}: {o.cancel_reason}
             </p>
           )}
+          {viewerNode}
           <Card className="p-4 space-y-3">
             {o.items.map((i, k) => (
               <div key={k} className="flex gap-3">
@@ -42347,6 +42635,12 @@ const CustomerApp = (() => {
                   className="w-14 h-14 rounded-xl"
                   fallbackSize={20}
                   FallbackIcon={Package}
+                  onClick={() =>
+                    openViewer(
+                      o.items.map((x) => x.image),
+                      k,
+                    )
+                  }
                 />
                 <div className="flex-1 min-w-0">
                   <p className="text-[14px] font-semibold leading-snug line-clamp-2">
