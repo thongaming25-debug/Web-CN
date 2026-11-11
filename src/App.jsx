@@ -21030,7 +21030,7 @@ function Login() {
         @media (prefers-reduced-motion: reduce) {
           .cb-wave { animation: none !important; }
         }
-        .cb-login-input{width:100%;border:1px solid transparent;border-radius:6px;background:#eaf0fd;padding:10px 12px;font-size:13.5px;color:#0f172a;outline:none;transition:background .15s,border-color .15s,box-shadow .15s;}
+        .cb-login-input{width:100%;border:1px solid transparent;border-radius:6px;background:#eaf0fd;padding:13px 14px;font-size:14.5px;color:#0f172a;outline:none;transition:background .15s,border-color .15s,box-shadow .15s;}
         .cb-login-input:focus{background:#fff;border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12);}
         html.cb-admin-dark .cb-login-input{background:#0f1626;color:#e5e7eb;border-color:#263043;}
         html.cb-admin-dark .cb-login-input:focus{background:#0b1120;border-color:#60a5fa;}
@@ -21071,21 +21071,21 @@ function Login() {
       </svg>
 
       {/* Login card */}
-      <div className="relative z-10 w-full max-w-[400px]">
-        <div className="rounded-lg border border-white/80 bg-white/95 p-7 shadow-[0_8px_30px_rgba(15,23,42,0.10)]">
-          <div className="mb-6 flex items-center gap-3">
+      <div className="relative z-10 w-full max-w-[520px]">
+        <div className="rounded-xl border border-white/80 bg-white/95 p-10 shadow-[0_10px_36px_rgba(15,23,42,0.12)]">
+          <div className="mb-9 flex items-center gap-4">
             {loginCompany.logoUrl || loginCompany.logoDataUrl ? (
               <img
                 src={loginCompany.logoUrl || loginCompany.logoDataUrl}
                 alt={`${loginCompany.name || "Company"} logo`}
-                className="h-12 w-auto max-w-[180px] object-contain"
+                className="h-16 w-auto max-w-[220px] object-contain"
               />
             ) : (
-              <span className="flex h-12 w-12 items-center justify-center rounded-xl bg-signal-blue">
-                <Waypoints size={24} className="text-white" />
+              <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-signal-blue">
+                <Waypoints size={30} className="text-white" />
               </span>
             )}
-            <div className="font-display text-lg font-extrabold tracking-tight text-ink-900">
+            <div className="font-display text-xl font-extrabold tracking-tight text-ink-900">
               {loginCompany.name || "Cargo Bridge"}
             </div>
           </div>
@@ -21100,9 +21100,9 @@ function Login() {
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-ink-800">
+              <label className="mb-2 block text-[13px] font-medium text-ink-800">
                 {t("Email")}
                 <span className="text-signal-red"> *</span>
               </label>
@@ -21117,7 +21117,7 @@ function Login() {
             </div>
 
             <div>
-              <label className="mb-1.5 block text-xs font-medium text-ink-800">
+              <label className="mb-2 block text-[13px] font-medium text-ink-800">
                 {t("Password")}
                 <span className="text-signal-red"> *</span>
               </label>
@@ -21127,7 +21127,7 @@ function Login() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   className="cb-login-input"
-                  style={{ paddingRight: 40 }}
+                  style={{ paddingRight: 44 }}
                   autoComplete="current-password"
                 />
                 <button
@@ -21140,10 +21140,10 @@ function Login() {
                   {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
-              <div className="mt-1.5 text-right">
+              <div className="mt-2 text-right">
                 <button
                   type="button"
-                  className="text-xs font-medium text-signal-blue transition-colors hover:text-blue-700"
+                  className="text-[13px] font-medium text-signal-blue transition-colors hover:text-blue-700"
                   onClick={() =>
                     setError(t("Contact an Admin to reset your password."))
                   }
@@ -21164,7 +21164,7 @@ function Login() {
               type="submit"
               disabled={submitting}
               aria-label={t("Sign in")}
-              className={`flex h-10 w-full items-center justify-center rounded-md text-sm font-semibold transition-colors ${
+              className={`flex h-12 w-full items-center justify-center rounded-md text-[15px] font-semibold transition-colors ${
                 submitting
                   ? "cursor-wait border border-mist-200 bg-mist-100 text-ink-600/60"
                   : "bg-signal-blue text-white hover:bg-signal-blue/90"
