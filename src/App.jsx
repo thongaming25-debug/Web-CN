@@ -13983,8 +13983,11 @@ function RowAction({ label, subject, icon, onClick, to, tone = "default" }) {
 function InfoGrid({ items }) {
   return (
     <dl className="grid grid-cols-2 gap-x-4 gap-y-3.5">
-      {items.map((item) => (
-        <div key={item.label} className={item.span ? "col-span-2" : ""}>
+      {items.map((item, idx) => (
+        <div
+          key={typeof item.label === "string" ? item.label : idx}
+          className={`group ${item.span ? "col-span-2" : ""}`}
+        >
           <dt className="cb-info-label">{item.label}</dt>
           <dd className="cb-info-value mt-1">{item.value ?? "—"}</dd>
         </div>
@@ -16545,7 +16548,7 @@ function Topbar({ title, onMenuClick }) {
             aria-label="Search pages"
           >
             <div className="flex items-center gap-3 px-5 h-14 border-b border-mist-100">
-              <Search size={20} className="text-ink-600/45 shrink-0" />
+              <Search size={20} className="text-ink-600/50 shrink-0" />
               <input
                 ref={commandInputRef}
                 value={commandQuery}
@@ -23339,7 +23342,7 @@ function ShipmentLookup() {
               onChange={(e) => setSearchValue(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSearch()}
               placeholder={`Search ${activeField.label}`}
-              className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none"
+              className="cb-lookup-input min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none"
             />
             <button
               type="button"
@@ -25096,7 +25099,232 @@ function PhotoGallery({ tk }) {
   );
 }
 
-function ChangeInternalWarehouseModal({
+// The customer's saved location a TK / CN order is going to: the chosen
+// address, else the one that matches the branch, else the default one.
+function useReceivingLocation({ customerId, addressId, branchCode, bump }) {
+  const [state, setState] = useState({
+    loading: true,
+    address: null,
+    list: [],
+  });
+  useEffect(() => {
+    let alive = true;
+    if (!supabase || !customerId) {
+      setState({ loading: false, address: null, list: [] });
+      return undefined;
+    }
+    setState((p) => ({ ...p, loading: true }));
+    supabase
+      .from("customer_addresses")
+      .select(
+        "id,label,province,district,commune,address,kh_branch_code,is_default",
+      )
+      .eq("customer_id", customerId)
+      .order("is_default", { ascending: false })
+      .order("created_at", { ascending: true })
+      .then(({ data }) => {
+        if (!alive) return;
+        const list = data || [];
+        const byId = list.find((a) => a.id === addressId) || null;
+        const byBranch = branchCode
+          ? list.find((a) => a.kh_branch_code === branchCode) || null
+          : null;
+        // Warehouse and Address are independent: the chosen address always
+        // wins. Only when none was ever chosen: the one at the branch, then
+        // the default.
+        const address = byId || byBranch || list[0] || null;
+        setState({ loading: false, address, list });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [customerId, addressId, branchCode, bump]);
+  return state;
+}
+
+function receivingAddressText(a) {
+  return [a?.address, a?.commune, a?.district, a?.province]
+    .filter(Boolean)
+    .join(", ");
+}
+
+// Edit icon like DRSB: a square-pen that appears when the row is hovered
+// (always visible on touch screens). The row needs the "group" class.
+function EditIconButton({ onClick, title }) {
+  const Ico = Icons.SquarePen || Icons.PenSquare || Icons.Pencil;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      className="inline-flex shrink-0 items-center text-slate-400 opacity-0 transition hover:text-blue-600 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+    >
+      <Ico size={17} />
+    </button>
+  );
+}
+
+// "Internal Warehouse" pill + edit pencil (DRSB style).
+function InternalWarehousePill({ code, canChange, onChange, warn = false }) {
+  const { rows } = useWarehouses();
+  const w = code ? rows.find((x) => x.code === code) : null;
+  return (
+    <span className="inline-flex items-center gap-2">
+      {code ? (
+        <span
+          title={
+            warn ? `${code} — Customer Address is not at this branch yet` : code
+          }
+          className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-semibold ${warn ? "border-signal-red bg-white text-signal-red" : "border-signal-blue text-signal-blue"}`}
+        >
+          {w?.name || code}
+        </span>
+      ) : (
+        <span className="text-ink-600/45">—</span>
+      )}
+      {canChange && (
+        <EditIconButton onClick={onChange} title="Update Internal Warehouse" />
+      )}
+    </span>
+  );
+}
+
+// Branch name (bold) + the customer's address there (grey), like DRSB.
+function ReceivingAddressBlock({
+  branchCode,
+  address,
+  canChange = false,
+  onChange,
+}) {
+  const { rows } = useWarehouses();
+  const code = address?.kh_branch_code || branchCode || "";
+  const w = code ? rows.find((x) => x.code === code) : null;
+  const text = receivingAddressText(address);
+  if (!code && !text && !canChange)
+    return <span className="text-ink-600/45">—</span>;
+  return (
+    <div className="min-w-0">
+      <div className="flex items-center gap-2 font-semibold text-ink-900">
+        {w?.name || code || "—"}
+        {canChange && (
+          <EditIconButton onClick={onChange} title="Update Customer Address" />
+        )}
+      </div>
+      {text && (
+        <div className="text-xs text-ink-600/55 mt-0.5 break-words">{text}</div>
+      )}
+    </div>
+  );
+}
+
+// Themed searchable dropdown (search box + list), used inside modals.
+function SearchableSelect({
+  value,
+  onChange,
+  options,
+  placeholder = "Select an option...",
+  emptyText = "No results",
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDoc = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  const selected = options.find((o) => o.value === value);
+  const needle = q.trim().toLowerCase();
+  const shown = needle
+    ? options.filter((o) =>
+        `${o.label} ${o.sub || ""} ${o.badge || ""}`
+          .toLowerCase()
+          .includes(needle),
+      )
+    : options;
+  return (
+    <div ref={ref}>
+      <button
+        type="button"
+        onClick={() => {
+          setOpen((o) => !o);
+          setQ("");
+        }}
+        className={`w-full flex items-center justify-between gap-2 rounded-lg border bg-white px-3 py-2.5 text-left text-sm ${open ? "border-signal-blue ring-2 ring-signal-blue/20" : "border-mist-200"}`}
+      >
+        <span
+          className={`min-w-0 truncate ${selected ? "text-ink-900" : "text-ink-600/45"}`}
+        >
+          {selected ? selected.label : placeholder}
+        </span>
+        <Icons.ChevronDown
+          size={16}
+          className={`shrink-0 text-ink-600/50 transition ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && (
+        <div className="mt-1 rounded-lg border border-mist-200 bg-white p-1.5 shadow-panel">
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.preventDefault();
+            }}
+            placeholder="Search..."
+            className="mb-1 w-full rounded-md bg-mist-50 px-3 py-2 text-sm outline-none"
+          />
+          <div className="max-h-56 overflow-y-auto">
+            {shown.length === 0 ? (
+              <div className="px-3 py-3 text-xs text-ink-600/50">
+                {emptyText}
+              </div>
+            ) : (
+              shown.map((o) => (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => {
+                    onChange(o.value);
+                    setOpen(false);
+                  }}
+                  className={`flex w-full items-start gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-mist-50 ${o.value === value ? "bg-signal-blue/5" : ""}`}
+                >
+                  {o.badge && (
+                    <span className="shrink-0 rounded-md bg-signal-blue/10 px-2 py-0.5 text-xs font-semibold text-signal-blue">
+                      {o.badge}
+                    </span>
+                  )}
+                  <span className="min-w-0 break-words text-ink-900">
+                    {o.label}
+                    {o.sub && (
+                      <span className="ml-2 text-xs text-ink-600/45">
+                        {o.sub}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// "Update Internal Warehouse" (pick ANY active Cambodia branch) and
+// "Update Customer Address" (pick one of the customer's saved addresses),
+// for a TK or a CN order.
+//  - Warehouse: always allowed. If the customer has no address at the new
+//    branch the pill turns red on the detail page (address is kept).
+//  - Address: the branch follows the chosen address.
+function ReceivingEditModal({
+  mode, // "warehouse" | "address"
   open,
   onClose,
   tk,
@@ -25108,218 +25336,158 @@ function ChangeInternalWarehouseModal({
   savePackage,
   onSaved,
 }) {
+  const isWh = mode === "warehouse";
   const [addresses, setAddresses] = useState(null);
-  const [selectedId, setSelectedId] = useState(currentAddressId || "");
+  const [selected, setSelected] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const branches = (warehouses || []).filter(
-    (w) => w.type === "cambodia" && w.status === "Active",
-  );
+  const branches = (warehouses || [])
+    .filter((w) => w.type === "cambodia" && w.status === "Active")
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const branchName = (code) =>
+    warehouses.find((w) => w.code === code)?.name || code || "";
 
   useEffect(() => {
-    if (!open) return;
-    setSelectedId(currentAddressId || "");
+    if (!open) return undefined;
+    setSelected(isWh ? "" : "");
     setError("");
     setAddresses(null);
     if (!supabase || !customerId) {
       setAddresses([]);
-      return;
+      return undefined;
     }
     let alive = true;
-    (async () => {
-      const { data, error: err } = await supabase
-        .from("customer_addresses")
-        .select(
-          "id,label,recipient_name,phone,province,district,commune,address,kh_branch_code,is_default,source",
-        )
-        .eq("customer_id", customerId)
-        .order("is_default", { ascending: false })
-        .order("created_at", { ascending: true });
-      if (!alive) return;
-      if (err) {
-        setError(err.message || "Unable to load customer locations");
-        setAddresses([]);
-        return;
-      }
-      setAddresses(data || []);
-      if (!currentAddressId && data?.[0]?.id) setSelectedId(data[0].id);
-    })();
+    supabase
+      .from("customer_addresses")
+      .select(
+        "id,label,province,district,commune,address,kh_branch_code,is_default",
+      )
+      .eq("customer_id", customerId)
+      .order("is_default", { ascending: false })
+      .order("created_at", { ascending: true })
+      .then(({ data, error: err }) => {
+        if (!alive) return;
+        if (err) setError(err.message || "Unable to load customer addresses");
+        setAddresses(data || []);
+      });
     return () => {
       alive = false;
     };
-  }, [open, customerId, currentAddressId]);
+  }, [open, customerId, isWh]);
 
   if (!open) return null;
 
-  const hasTwoLocations = (addresses?.length || 0) >= 2;
+  const options = isWh
+    ? branches.map((b) => ({ value: b.code, label: b.name, sub: b.code }))
+    : (addresses || []).map((a) => ({
+        value: a.id,
+        badge: branchName(a.kh_branch_code) || "No branch",
+        label: receivingAddressText(a) || a.label || "No detailed address",
+      }));
+  const pickedAddress =
+    !isWh && addresses ? addresses.find((a) => a.id === selected) : null;
   const currentAddress =
-    addresses?.find((a) => a.id === currentAddressId) || null;
-  const selectedAddress = addresses?.find((a) => a.id === selectedId) || null;
-  const selectedBranch =
-    branches.find((b) => b.code === selectedAddress?.kh_branch_code) || null;
+    addresses && currentAddressId
+      ? addresses.find((a) => a.id === currentAddressId) || null
+      : null;
+  // Warehouse and Address change independently; warn when they won't match.
+  const willMismatch = isWh
+    ? !!selected &&
+      addresses !== null &&
+      currentAddress?.kh_branch_code !== selected
+    : !!pickedAddress &&
+      !!currentBranchCode &&
+      pickedAddress.kh_branch_code !== currentBranchCode;
   const canConfirm =
-    hasTwoLocations &&
-    !!selectedAddress &&
-    selectedAddress.id !== currentAddressId &&
-    !!selectedAddress.kh_branch_code &&
-    !busy;
+    !busy &&
+    !!selected &&
+    (isWh ? selected !== currentBranchCode : selected !== currentAddressId);
 
   async function confirm() {
     if (!canConfirm) return;
     setBusy(true);
     setError("");
     try {
+      // Only the field being edited changes; the other one stays as it is.
+      const nextBranch = isWh
+        ? selected
+        : currentBranchCode || pickedAddress?.kh_branch_code || null;
+      const nextAddress = isWh ? currentAddressId || null : selected;
       const patch = {
-        dest_branch_code: selectedAddress.kh_branch_code,
-        customer_address_id: selectedAddress.id,
+        dest_branch_code: nextBranch,
+        customer_address_id: nextAddress,
         updated_by: user?.name || "System",
         updated_at: new Date().toISOString(),
       };
-      const saved = await savePackage?.(patchWithTk(tk, patch));
-      if (!saved) throw new Error("Package update failed.");
+      const saved = await savePackage?.({ tk, ...patch });
+      if (!saved) throw new Error("Update failed.");
       onSaved?.({
         ...saved,
-        dest_branch_code: selectedAddress.kh_branch_code,
-        customer_address_id: selectedAddress.id,
+        dest_branch_code: nextBranch,
+        customer_address_id: nextAddress,
       });
       emitCBToast(
         "ok",
-        "Internal Warehouse updated",
-        `${tk} → ${selectedAddress.kh_branch_code}`,
+        isWh ? "Internal Warehouse updated" : "Customer Address updated",
+        `${tk} → ${branchName(nextBranch) || "—"}`,
       );
       onClose();
     } catch (err) {
-      setError(err?.message || "មិនអាចប្តូរ Internal Warehouse បានទេ");
+      const msg = String(err?.message || "");
+      setError(
+        /customer_address_id|kh_branch_code/.test(msg) &&
+          /column|schema cache/i.test(msg)
+          ? "Database is missing a column. Run in Supabase SQL: alter table packages add column if not exists customer_address_id uuid; alter table cn_orders add column if not exists kh_branch_code text, add column if not exists customer_address_id uuid; notify pgrst, 'reload schema';"
+          : msg || "Update failed.",
+      );
     } finally {
       setBusy(false);
     }
   }
 
-  function patchWithTk(tkValue, patch) {
-    return { tk: tkValue, ...patch };
-  }
-
-  const addressText = (a) =>
-    [a?.address, a?.commune, a?.district, a?.province]
-      .filter(Boolean)
-      .join(", ") || "No detailed address";
-
   return (
     <AppModal
-      title="Change Internal Warehouse"
-      subtitle="Internal Warehouse = Cambodia receiving branch selected by the customer."
+      title={isWh ? "Update Internal Warehouse" : "Update Customer Address"}
       maxW="max-w-xl"
       onClose={onClose}
       onSubmit={(e) => {
         e.preventDefault();
-        if (canConfirm) confirm();
+        confirm();
       }}
       busy={busy}
       error={error}
-      submitLabel="Confirm Change"
+      submitLabel="Update"
       busyLabel="Saving…"
       submitDisabled={!canConfirm}
     >
-      <div className="rounded-lg bg-signal-blue/5 border border-signal-blue/15 px-3 py-2.5 text-xs text-ink-700">
-        <b>Rule:</b> Customer must have at least <b>2 saved locations</b> before
-        this TK can be moved to another receiving branch.
+      <div>
+        <label className={LABEL_CLS}>
+          {isWh ? "Warehouse" : "Address"}{" "}
+          <span className="text-signal-red">*</span>
+        </label>
+        {addresses === null ? (
+          <div className="py-6 text-center text-sm text-ink-600/45">
+            Loading…
+          </div>
+        ) : !isWh && options.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-mist-200 p-5 text-center text-sm text-ink-600/55">
+            This customer has no saved address yet.
+          </div>
+        ) : (
+          <SearchableSelect
+            value={selected}
+            onChange={setSelected}
+            options={options}
+          />
+        )}
       </div>
-      {addresses === null ? (
-        <div className="py-8 text-center text-sm text-ink-600/45">
-          Loading customer locations…
+      {willMismatch && (
+        <div className="rounded-lg border border-signal-red/25 bg-signal-red/5 px-3 py-2 text-xs text-signal-red">
+          {isWh
+            ? "Customer Address stays as it is. Internal Warehouse will show in red until the Customer Address is at this branch."
+            : "Internal Warehouse stays as it is. It will show in red until it matches this address's branch."}
         </div>
-      ) : !hasTwoLocations ? (
-        <div className="rounded-lg border border-dashed border-mist-200 p-6 text-center">
-          <Icons.MapPin size={28} className="mx-auto text-ink-600/25 mb-2" />
-          <div className="text-sm font-semibold text-ink-900">
-            Not enough saved locations
-          </div>
-          <p className="text-xs text-ink-600/50 mt-1">
-            This customer has {addresses.length} saved location
-            {addresses.length === 1 ? "" : "s"}. Add a second location first.
-          </p>
-        </div>
-      ) : (
-        <>
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wide text-ink-600/45 mb-2">
-              Current Internal Warehouse
-            </div>
-            <div className="rounded-lg border border-mist-200 bg-mist-50 px-3 py-3">
-              <div className="text-sm font-semibold text-ink-900">
-                {currentBranchCode || currentAddress?.kh_branch_code || "—"} ·{" "}
-                {whName(
-                  warehouses,
-                  currentBranchCode || currentAddress?.kh_branch_code,
-                ) || "Cambodia Branch"}
-              </div>
-              <div className="text-xs text-ink-600/50 mt-1">
-                {currentAddress
-                  ? `${currentAddress.label} · ${addressText(currentAddress)}`
-                  : "Current TK branch"}
-              </div>
-            </div>
-          </div>
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-wide text-ink-600/45 mb-2">
-              Customer Saved Locations
-            </div>
-            <div className="space-y-2">
-              {addresses.map((a) => {
-                const branch =
-                  branches.find((b) => b.code === a.kh_branch_code) || null;
-                const isCurrent =
-                  a.id === currentAddressId ||
-                  (!currentAddressId && a.kh_branch_code === currentBranchCode);
-                return (
-                  <label
-                    key={a.id}
-                    className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition ${selectedId === a.id ? "border-signal-blue bg-signal-blue/5" : "border-mist-200 hover:border-signal-blue/40"}`}
-                  >
-                    <input
-                      type="radio"
-                      name="internal-warehouse-location"
-                      checked={selectedId === a.id}
-                      onChange={() => setSelectedId(a.id)}
-                      className="mt-1"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-semibold text-ink-900">
-                          {a.label || "Customer Location"}
-                        </span>
-                        {a.is_default && (
-                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-signal-teal/10 text-signal-teal">
-                            Primary
-                          </span>
-                        )}
-                        {isCurrent && (
-                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-mist-100 text-ink-600">
-                            Current
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-xs font-semibold text-signal-blue mt-1">
-                        {a.kh_branch_code || "No branch"} ·{" "}
-                        {branch?.name || "Unknown Cambodia Branch"}
-                      </div>
-                      <div className="text-xs text-ink-600/50 mt-1">
-                        {addressText(a)}
-                      </div>
-                    </div>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-          {selectedAddress && (
-            <div className="rounded-lg bg-signal-teal/5 border border-signal-teal/15 px-3 py-2 text-xs text-ink-700">
-              New Internal Warehouse: <b>{selectedAddress.kh_branch_code}</b> ·{" "}
-              {selectedBranch?.name || "Cambodia Branch"}
-            </div>
-          )}
-        </>
       )}
     </AppModal>
   );
@@ -25643,6 +25811,7 @@ function PackageDetail() {
     hasPermission(user, "order.change_branch") || canManageInbound;
   const { rows: packageWarehouses } = useWarehouses();
   const [showInternalWarehouse, setShowInternalWarehouse] = useState(false);
+  const [showCustomerAddress, setShowCustomerAddress] = useState(false);
   const [showChangeTk, setShowChangeTk] = useState(false);
   const isCustomerRole = user?.role === "Customer";
   const [showShipMethod, setShowShipMethod] = useState(false);
@@ -25684,6 +25853,19 @@ function PackageDetail() {
       : data.customer;
   const customerAddressId =
     data.customer_address_id || data.customerAddressId || null;
+  const pkgLocation = useReceivingLocation({
+    customerId: data.customer_id,
+    addressId: customerAddressId,
+    branchCode: data.dest_branch_code,
+    bump: data.updated_at,
+  });
+  const pkgBranch =
+    data.dest_branch_code || pkgLocation.address?.kh_branch_code || "";
+  // Red: Customer Address is not at the Internal Warehouse branch.
+  const pkgWarn =
+    !!pkgBranch &&
+    !pkgLocation.loading &&
+    pkgLocation.address?.kh_branch_code !== pkgBranch;
 
   function handleAdvance() {
     // Belt-and-suspenders: the button itself is already hidden for
@@ -26492,20 +26674,34 @@ function PackageDetail() {
                     span: true,
                   },
                   {
-                    label: "Internal Warehouse (Cambodia Branch)",
+                    label: (
+                      <span className={pkgWarn ? "text-signal-red" : ""}>
+                        Internal Warehouse
+                      </span>
+                    ),
                     value: (
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <WhLabel code={data.dest_branch_code} />
-                        {canChangeInternalWarehouse && data.customer_id && (
-                          <button
-                            type="button"
-                            onClick={() => setShowInternalWarehouse(true)}
-                            className="text-[11px] text-signal-blue hover:underline"
-                          >
-                            Change
-                          </button>
-                        )}
-                      </div>
+                      <InternalWarehousePill
+                        code={pkgBranch}
+                        warn={pkgWarn}
+                        canChange={
+                          canChangeInternalWarehouse && !!data.customer_id
+                        }
+                        onChange={() => setShowInternalWarehouse(true)}
+                      />
+                    ),
+                    span: true,
+                  },
+                  {
+                    label: "Customer Address",
+                    value: (
+                      <ReceivingAddressBlock
+                        branchCode={data.dest_branch_code}
+                        address={pkgLocation.address}
+                        canChange={
+                          canChangeInternalWarehouse && !!data.customer_id
+                        }
+                        onChange={() => setShowCustomerAddress(true)}
+                      />
                     ),
                     span: true,
                   },
@@ -26637,20 +26833,29 @@ function PackageDetail() {
       </div>
 
       {canChangeInternalWarehouse && data.customer_id && (
-        <ChangeInternalWarehouseModal
-          open={showInternalWarehouse}
-          onClose={() => setShowInternalWarehouse(false)}
-          tk={data.tk}
-          customerId={data.customer_id}
-          currentBranchCode={data.dest_branch_code}
-          currentAddressId={customerAddressId}
-          warehouses={packageWarehouses}
-          user={user}
-          savePackage={upsertPackage}
-          onSaved={(saved) => {
-            setLivePackage((prev) => ({ ...(prev || data), ...saved }));
-          }}
-        />
+        <>
+          {[
+            ["warehouse", showInternalWarehouse, setShowInternalWarehouse],
+            ["address", showCustomerAddress, setShowCustomerAddress],
+          ].map(([mode, isOpen, setOpen]) => (
+            <ReceivingEditModal
+              key={mode}
+              mode={mode}
+              open={isOpen}
+              onClose={() => setOpen(false)}
+              tk={data.tk}
+              customerId={data.customer_id}
+              currentBranchCode={pkgBranch}
+              currentAddressId={customerAddressId || pkgLocation.address?.id}
+              warehouses={packageWarehouses}
+              user={user}
+              savePackage={upsertPackage}
+              onSaved={(saved) => {
+                setLivePackage((prev) => ({ ...(prev || data), ...saved }));
+              }}
+            />
+          ))}
+        </>
       )}
       {canChangeShipMethodBase && !data.cn_order_id && (
         <PackageShipMethodModal
@@ -55056,6 +55261,15 @@ function CnOrderDetailPage() {
   const reqErrRef = useRef("");
   const [cancelShipTk, setCancelShipTk] = useState(null); // TK to cancel request
   const [custBal, setCustBal] = useState(null);
+  const { rows: cnWarehouses } = useWarehouses();
+  const [cnWhOpen, setCnWhOpen] = useState(false);
+  const [cnAddrOpen, setCnAddrOpen] = useState(false);
+  const cnLocation = useReceivingLocation({
+    customerId: row?.customer_id,
+    addressId: row?.customer_address_id,
+    branchCode: row?.kh_branch_code,
+    bump: row?.updated_at,
+  });
   const canPayShip = hasPermission(user, "payment.manage");
   useEffect(() => {
     let alive = true;
@@ -55491,6 +55705,60 @@ function CnOrderDetailPage() {
   const due = Number(row.total_due_usd || 0),
     paid = Number(row.amount_paid_usd || 0);
   const terminal = CN_ORDER_TERMINAL_STATUSES.has(row.status);
+  const cnBranch =
+    row.kh_branch_code || cnLocation.address?.kh_branch_code || "";
+  const cnWarn =
+    !!cnBranch &&
+    !cnLocation.loading &&
+    cnLocation.address?.kh_branch_code !== cnBranch;
+
+  // Change Internal Warehouse for a Parse Link (CN) order. Needs:
+  //   alter table cn_orders add column if not exists kh_branch_code text,
+  //     add column if not exists customer_address_id uuid;
+  // The order's unfinished TKs follow the order.
+  async function saveCnReceiving(patch) {
+    const by = user?.name || "Admin";
+    const oldCode =
+      row.kh_branch_code || cnLocation.address?.kh_branch_code || "";
+    const { data: saved, error: upErr } = await supabase
+      .from("cn_orders")
+      .update({
+        kh_branch_code: patch.dest_branch_code,
+        customer_address_id: patch.customer_address_id,
+        updated_at: patch.updated_at,
+      })
+      .eq("id", row.id)
+      .select("*")
+      .single();
+    if (upErr) {
+      throw new Error(
+        /kh_branch_code|customer_address_id/.test(upErr.message || "")
+          ? "Run the SQL first: alter table cn_orders add column if not exists kh_branch_code text, add column if not exists customer_address_id uuid;"
+          : upErr.message,
+      );
+    }
+    const { error: pkErr } = await supabase
+      .from("packages")
+      .update({
+        dest_branch_code: patch.dest_branch_code,
+        customer_address_id: patch.customer_address_id,
+        updated_by: by,
+        updated_at: patch.updated_at,
+      })
+      .eq("cn_order_id", row.id)
+      .neq("status", "Completed");
+    if (pkErr) throw new Error(pkErr.message);
+    await logWarehouseChange({
+      entity_type: "cn_order",
+      ref: row.order_id,
+      field: "kh_branch",
+      old_code: oldCode,
+      new_code: patch.dest_branch_code,
+      changed_by: by,
+      reason: "Changed from CN Order detail",
+    });
+    return saved;
+  }
   const next = cnNextStatus(row.status);
   const canAdvance = canPurchase && cnStatusCanAdvance(row.status);
   // Completing the order requires the China → Cambodia shipping fee to be paid.
@@ -56236,7 +56504,7 @@ function CnOrderDetailPage() {
                     <dt>Note</dt>
                     <dd className="whitespace-pre-wrap">{row.note || "—"}</dd>
                   </div>
-                  <div>
+                  <div className="group">
                     <dt>Shipping method</dt>
                     <dd className="flex flex-wrap items-center gap-2">
                       <ShipMethodIcon
@@ -56246,14 +56514,45 @@ function CnOrderDetailPage() {
                       />
                       {normShipMethod(row.shipping_method) || "Land"}
                       {canEdit && !terminal && (
-                        <button
-                          type="button"
+                        <EditIconButton
                           onClick={() => setShipOpen(true)}
-                          className="ml-2 inline-flex items-center gap-1 text-blue-600 hover:underline"
-                        >
-                          <Icons.Pencil size={13} /> Edit
-                        </button>
+                          title="Update Shipping method"
+                        />
                       )}
+                    </dd>
+                  </div>
+                  <div className="group">
+                    <dt style={cnWarn ? { color: "#dc2626" } : undefined}>
+                      Internal Warehouse
+                    </dt>
+                    <dd>
+                      <InternalWarehousePill
+                        code={cnBranch}
+                        warn={cnWarn}
+                        canChange={
+                          !terminal &&
+                          !!row.customer_id &&
+                          (hasPermission(user, "order.change_branch") ||
+                            canEdit)
+                        }
+                        onChange={() => setCnWhOpen(true)}
+                      />
+                    </dd>
+                  </div>
+                  <div className="group">
+                    <dt>Customer Address</dt>
+                    <dd>
+                      <ReceivingAddressBlock
+                        branchCode={row.kh_branch_code}
+                        address={cnLocation.address}
+                        canChange={
+                          !terminal &&
+                          !!row.customer_id &&
+                          (hasPermission(user, "order.change_branch") ||
+                            canEdit)
+                        }
+                        onChange={() => setCnAddrOpen(true)}
+                      />
                     </dd>
                   </div>
                 </dl>
@@ -56264,27 +56563,31 @@ function CnOrderDetailPage() {
               className="cn-detail-stack cn-detail-sidebar"
               aria-label="Customer and order overview"
             >
-              <section className="cb-surface cn-detail-block">
-                <h3 className="cn-detail-block-title">Customer</h3>
-                <div className="cn-detail-person">
-                  <span className="cn-detail-avatar">
-                    <Icons.UserRound size={20} />
-                  </span>
-                  <div className="min-w-0">
-                    <div className="font-semibold text-sm text-slate-900 break-words">
-                      {customerName}
+              {row.customer_id ? (
+                <CustomerDetailsCard customerId={row.customer_id} />
+              ) : (
+                <section className="cb-surface cn-detail-block">
+                  <h3 className="cn-detail-block-title">Customer</h3>
+                  <div className="cn-detail-person">
+                    <span className="cn-detail-avatar">
+                      <Icons.UserRound size={20} />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="font-semibold text-sm text-slate-900 break-words">
+                        {customerName}
+                      </div>
+                      {customerCode && (
+                        <Link
+                          to={`/customers/${encodeURIComponent(customerCode)}`}
+                          className="mt-1 block text-xs text-blue-600 hover:underline"
+                        >
+                          {customerCode}
+                        </Link>
+                      )}
                     </div>
-                    {customerCode && (
-                      <Link
-                        to={`/customers/${encodeURIComponent(customerCode)}`}
-                        className="mt-1 block text-xs text-blue-600 hover:underline"
-                      >
-                        {customerCode}
-                      </Link>
-                    )}
                   </div>
-                </div>
-              </section>
+                </section>
+              )}
               <section className="cb-surface cn-detail-block">
                 <h3 className="cn-detail-block-title">Purchased by</h3>
                 <div className="cn-detail-person">
@@ -57074,6 +57377,35 @@ function CnOrderDetailPage() {
         onClose={() => setEditOpen(false)}
         onSaved={load}
       />
+      {row.customer_id &&
+        [
+          ["warehouse", cnWhOpen, setCnWhOpen],
+          ["address", cnAddrOpen, setCnAddrOpen],
+        ].map(([mode, isOpen, setOpen]) => (
+          <ReceivingEditModal
+            key={mode}
+            mode={mode}
+            open={isOpen}
+            onClose={() => setOpen(false)}
+            tk={row.order_id}
+            customerId={row.customer_id}
+            currentBranchCode={cnBranch}
+            currentAddressId={
+              row.customer_address_id || cnLocation.address?.id || null
+            }
+            warehouses={cnWarehouses}
+            user={user}
+            savePackage={saveCnReceiving}
+            onSaved={(saved) => {
+              setRow((r) => ({
+                ...r,
+                kh_branch_code: saved.dest_branch_code,
+                customer_address_id: saved.customer_address_id,
+              }));
+              refetchPackages?.();
+            }}
+          />
+        ))}
       <CnShipMethodModal
         open={shipOpen}
         row={row}
@@ -79436,6 +79768,14 @@ html.cb-admin-dark .cb-app main table td :is(.rounded-full,.rounded-md){border:1
 .cb-app .cbx-topbar .cbx-user-name{font-weight:600;}
 /* Command palette rows: plain icon, label left, route right */
 .cbx-cmd button:hover{background:var(--cbx-hover,#f1f5f9);}
+/* Search box: no box / blue focus border, just icon + text over a divider */
+.cbx-cmd input,.cbx-cmd input:hover,.cbx-cmd input:focus,.cbx-cmd input:focus-visible,.cbx-cmd input:active{outline:none!important;border:0!important;box-shadow:none!important;background:transparent!important;border-radius:0!important;padding:0!important;height:auto!important;min-height:0!important;-webkit-appearance:none;appearance:none;}
+.cbx-cmd input::placeholder{color:#9ca3af;opacity:1;}
+.cbx-cmd:focus-within{outline:none;}
+.cbx-cmd button{font-weight:400;}
+/* Shipment Lookup search box: the wrapper owns the border/focus ring, the input is plain */
+.cb-lookup-input,.cb-lookup-input:hover,.cb-lookup-input:focus,.cb-lookup-input:focus-visible,.cb-lookup-input:active{outline:none!important;border:0!important;box-shadow:none!important;background:transparent!important;border-radius:0!important;-webkit-appearance:none;appearance:none;}
+.cbx-cmd button span:nth-child(2){font-weight:450;}
 .cb-app .cbx-kpi-cell span.rounded-full.w-8.h-8{display:none;}
 .cb-app .cbx-kpi-cell .flex.items-center>span:last-child{color:var(--cbx-muted);font-weight:500;}
 .cb-app .cbx-kpi-strip{box-shadow:none;border-radius:16px;}
