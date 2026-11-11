@@ -36402,9 +36402,19 @@ const CustomerApp = (() => {
   // ---------- Tracking (customer view: status + dates ONLY) ----------
   function Detail() {
     const { tk } = useParams();
-    const { ships, wallet, payShipping, say, tr } = useApp();
+    const { ships, wallet, payShipping, say, tr, branches } = useApp();
     const feat = useCustomerFeatures();
     const s = ships.find((x) => x.tk === tk);
+    const [khBranch, setKhBranch] = useState("");
+    useEffect(() => {
+      if (!supabase || !tk) return;
+      supabase
+        .from("packages")
+        .select("dest_branch_code")
+        .eq("tk", tk)
+        .maybeSingle()
+        .then(({ data }) => setKhBranch(data?.dest_branch_code || ""));
+    }, [tk]);
     const [confirmPay, setConfirmPay] = useState(false);
     const [paying, setPaying] = useState(false);
     const [payErr, setPayErr] = useState("");
@@ -36445,6 +36455,13 @@ const CustomerApp = (() => {
           back
         />
         <div className="px-4 pt-4 space-y-4">
+          <CustomerWarehouseCard
+            code={khBranch}
+            branches={branches}
+            tr={tr}
+            Card={Card}
+            shipMethod={s.shipMethod}
+          />
           <Card className="p-4 flex items-center gap-3">
             <Icon i={Package} />
             <div className="flex-1 min-w-0">
@@ -36461,35 +36478,6 @@ const CustomerApp = (() => {
             <Badge n={s.step} />
           </Card>
           <ShipmentPhotosCard tk={s.tk} tr={tr} Card={Card} />
-          {s.shipMethod && (
-            <Card className="p-5 relative overflow-hidden">
-              <span className="absolute top-0 right-0 w-14 h-12 rounded-bl-3xl bg-rose-400 text-white grid place-items-center">
-                <Icons.MapPin size={20} />
-              </span>
-              <h2 className="font-bold text-slate-900">
-                {tr("Shipping Information", "ព័ត៌មានការដឹកជញ្ជូន")}
-              </h2>
-              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-3 text-sm">
-                <span className="text-slate-700">
-                  {tr("Shipping Method", "វិធីសាស្ត្រដឹកជញ្ជូន")}
-                </span>
-                <span className="flex items-center gap-2 font-bold text-slate-900">
-                  <ShipMethodIcon
-                    m={s.shipMethod}
-                    size={24}
-                    className="text-indigo-700"
-                  />
-                  {
-                    {
-                      Land: tr("By Land", "ផ្លូវគោក"),
-                      Sea: tr("By Sea", "ផ្លូវទឹក"),
-                      Air: tr("By Air", "ផ្លូវអាកាស"),
-                    }[s.shipMethod]
-                  }
-                </span>
-              </div>
-            </Card>
-          )}
           <Card className="p-5">
             <h2 className="font-bold mb-3">
               {tr("Order Information", "ព័ត៌មាន Order")}
@@ -39381,7 +39369,7 @@ const CustomerApp = (() => {
 
   function CustomerCnOrderDetail() {
     const { id } = useParams();
-    const { me, tr, wallet, payCnOrder, payShipping } = useApp();
+    const { me, tr, wallet, payCnOrder, payShipping, branches } = useApp();
     const cacheKey = me?.id && id ? `${me.id}:${id}` : "";
     const cached = cacheKey ? cnDetailCache.get(cacheKey) : null;
     const nav = useNavigate();
@@ -39400,6 +39388,7 @@ const CustomerApp = (() => {
     const [parcels, setParcels] = useState(cached?.parcels || []);
     const [priceExtra, setPriceExtra] = useState(cached?.priceExtra ?? null);
     const [shipMethod, setShipMethod] = useState(cached?.shipMethod || "");
+    const [khBranch, setKhBranch] = useState(cached?.khBranch || "");
     const [cnImages, setCnImages] = useState(cached?.cnImages || []);
     const [cnImagesLoading, setCnImagesLoading] = useState(!cached?.cnImages);
     const [loading, setLoading] = useState(!cached);
@@ -39452,6 +39441,61 @@ const CustomerApp = (() => {
         } catch (_e) {
           setShipMethod("");
           snap.shipMethod = "";
+        }
+        // Receiving branch (Cambodia): from the order, else from its TKs.
+        try {
+          const { data: kb } = await supabase
+            .from("cn_orders")
+            .select("kh_branch_code,customer_address_id")
+            .eq("id", data.id)
+            .maybeSingle();
+          let code = kb?.kh_branch_code || "";
+          // Order has no branch of its own → use the branch of the delivery
+          // address chosen for the order (same fallback as the admin page).
+          if (!code && kb?.customer_address_id) {
+            const { data: ad } = await supabase
+              .from("customer_addresses")
+              .select("kh_branch_code")
+              .eq("id", kb.customer_address_id)
+              .maybeSingle();
+            code = ad?.kh_branch_code || "";
+          }
+          if (!code) {
+            const { data: pb } = await supabase
+              .from("packages")
+              .select("dest_branch_code")
+              .eq("cn_order_id", data.id)
+              .not("dest_branch_code", "is", null)
+              .limit(1);
+            code = pb?.[0]?.dest_branch_code || "";
+          }
+          // Same fallback as the admin page (useReceivingAddress): when the
+          // order never stored a branch/address, use the customer's default
+          // (else first) saved address, then the customer's default branch.
+          if (!code) {
+            const { data: addrs } = await supabase
+              .from("customer_addresses")
+              .select("kh_branch_code,is_default")
+              .eq("customer_id", me.id)
+              .not("kh_branch_code", "is", null)
+              .order("is_default", { ascending: false })
+              .order("created_at", { ascending: true })
+              .limit(1);
+            code = addrs?.[0]?.kh_branch_code || "";
+          }
+          if (!code) {
+            const { data: cu } = await supabase
+              .from("customers")
+              .select("default_kh_branch")
+              .eq("id", me.id)
+              .maybeSingle();
+            code = cu?.default_kh_branch || "";
+          }
+          setKhBranch(code);
+          snap.khBranch = code;
+        } catch (_e) {
+          setKhBranch("");
+          snap.khBranch = "";
         }
         if (!cnDetailCache.get(key)?.cnImages) setCnImagesLoading(true);
         loadCnImages(data.id).then((imgs) => {
@@ -39693,6 +39737,15 @@ const CustomerApp = (() => {
             </div>
           </div>
 
+          <CustomerWarehouseCard
+            code={khBranch}
+            branches={branches}
+            tr={tr}
+            Card={Card}
+            showEmpty
+            shipMethod={shipMethod}
+          />
+
           <CnProductInfoCard
             row={row}
             images={cnImages}
@@ -39700,36 +39753,6 @@ const CustomerApp = (() => {
             tr={tr}
             Card={Card}
           />
-
-          {normShipMethod(shipMethod) && (
-            <Card className="p-5 relative overflow-hidden">
-              <span className="absolute top-0 right-0 w-14 h-12 rounded-bl-3xl bg-rose-400 text-white grid place-items-center">
-                <Icons.MapPin size={20} />
-              </span>
-              <h2 className="font-bold text-slate-900">
-                {tr("Shipping Information", "ព័ត៌មានការដឹកជញ្ជូន")}
-              </h2>
-              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-3 text-sm">
-                <span className="text-slate-700">
-                  {tr("Shipping Method", "វិធីសាស្ត្រដឹកជញ្ជូន")}
-                </span>
-                <span className="flex items-center gap-2 font-bold text-slate-900">
-                  <ShipMethodIcon
-                    m={shipMethod}
-                    size={24}
-                    className="text-indigo-700"
-                  />
-                  {
-                    {
-                      Land: tr("By Land", "ផ្លូវគោក"),
-                      Sea: tr("By Sea", "ផ្លូវទឹក"),
-                      Air: tr("By Air", "ផ្លូវអាកាស"),
-                    }[normShipMethod(shipMethod)]
-                  }
-                </span>
-              </div>
-            </Card>
-          )}
 
           {parcels.length > 0 && (
             <Card className="p-4">
@@ -50242,6 +50265,65 @@ async function makeCnImagePrimary(images, img, user) {
 // price × qty), grouped under the shop they were bought from. View only.
 // Photos are stored per order (not per item): item #1 gets photo #1, item #2
 // gets photo #2 … ; the rest stay reachable from "View all photos".
+// Customer: "Warehouse Information" card — shows which Cambodia branch will
+// receive the goods (orders.kh_branch_code / packages.dest_branch_code).
+function CustomerWarehouseCard({
+  code,
+  branches,
+  tr,
+  Card,
+  showEmpty = false,
+  shipMethod = "",
+}) {
+  const c = String(code || "").trim();
+  const sm = normShipMethod(shipMethod);
+  if (!c && !showEmpty && !sm) return null;
+  const b = (branches || []).find(
+    (x) => String(x.code || "").toUpperCase() === c.toUpperCase(),
+  );
+  const name = b?.name || c || tr("Not assigned yet", "មិនទាន់កំណត់");
+  const sub = [b?.district, b?.province].filter(Boolean).join(", ");
+  return (
+    <Card className="p-5 relative overflow-hidden">
+      <span className="absolute top-0 right-0 w-14 h-12 rounded-bl-3xl bg-rose-400 text-white grid place-items-center">
+        <Icons.MapPin size={20} />
+      </span>
+      <h2 className="font-bold text-slate-900">
+        {tr("Warehouse Information", "ព័ត៌មានឃ្លាំង")}
+      </h2>
+      <div className="mt-4 pt-3 border-t border-slate-100 flex items-start justify-between gap-3 text-sm">
+        <span className="text-slate-700 shrink-0">
+          {tr("Branch Receiving Goods", "សាខាទទួលទំនិញ")}
+        </span>
+        <span className="text-right font-bold text-slate-900 break-words min-w-0">
+          {name}
+          {sub && (
+            <span className="block text-xs font-normal text-slate-500 mt-0.5">
+              {sub}
+            </span>
+          )}
+        </span>
+      </div>
+      {sm && (
+        <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between gap-3 text-sm">
+          <span className="text-slate-700">
+            {tr("Shipping Method", "វិធីសាស្ត្រដឹកជញ្ជូន")}
+          </span>
+          <span className="flex items-center gap-2 font-bold text-slate-900">
+            <ShipMethodIcon m={sm} size={24} className="text-indigo-700" />
+            {
+              {
+                Land: tr("By Land", "ផ្លូវគោក"),
+                Sea: tr("By Sea", "ផ្លូវទឹក"),
+                Air: tr("By Air", "ផ្លូវអាកាស"),
+              }[sm]
+            }
+          </span>
+        </div>
+      )}
+    </Card>
+  );
+}
 function CnProductInfoCard({ row, images, loading, tr, Card }) {
   const [viewer, setViewer] = useState(false);
   const [start, setStart] = useState(0);
