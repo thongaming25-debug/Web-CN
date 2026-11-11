@@ -40531,6 +40531,26 @@ const CustomerApp = (() => {
       return () => clearTimeout(t);
     }, [note]);
 
+    // Warm the browser cache for every photo once the viewer has opened, so
+    // swiping never waits on the network.
+    useEffect(() => {
+      const warm = () =>
+        images.forEach((u) => {
+          const im = new Image();
+          im.decoding = "async";
+          im.src = u;
+        });
+      const id = window.requestIdleCallback
+        ? window.requestIdleCallback(warm, { timeout: 1200 })
+        : setTimeout(warm, 350);
+      return () => {
+        if (window.cancelIdleCallback && window.requestIdleCallback)
+          window.cancelIdleCallback(id);
+        else clearTimeout(id);
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     // Only the counter follows the scroll; the images never re-render.
     const onScroll = () => {
       cancelAnimationFrame(raf.current);
@@ -40570,10 +40590,15 @@ const CustomerApp = (() => {
         role="dialog"
         aria-modal="true"
         aria-label={tr("Photo", "រូបភាព", "图片")}
-        className="fixed inset-0 z-[2000] flex flex-col text-white"
-        style={{ background: "#303030" }}
+        className="jz-viewer-root fixed inset-0 z-[2000] flex flex-col text-white"
+        style={{ background: "#060606", contain: "layout paint" }}
       >
-        <style>{`.jz-viewer-scroll::-webkit-scrollbar{display:none}`}</style>
+        <style>{`
+          .jz-viewer-scroll::-webkit-scrollbar{display:none}
+          @keyframes jz-viewer-in{from{opacity:0;transform:scale(.985)}to{opacity:1;transform:none}}
+          .jz-viewer-root{animation:jz-viewer-in .22s cubic-bezier(.2,.8,.2,1) both;will-change:opacity,transform}
+          @media (prefers-reduced-motion: reduce){.jz-viewer-root{animation:none}}
+        `}</style>
         {/* Top bar: Save · "1 of 5" · Close */}
         <div
           className="grid grid-cols-[1fr_auto_1fr] items-center px-3"
@@ -40631,19 +40656,17 @@ const CustomerApp = (() => {
                 className="flex h-full w-full shrink-0 items-center justify-center"
                 style={{ scrollSnapAlign: "center", scrollSnapStop: "always" }}
               >
-                <img
-                  src={u}
-                  alt={k === i ? name || "" : ""}
-                  draggable={false}
-                  decoding="async"
-                  loading={
-                    Math.abs(k - index) <= 1 || Math.abs(k - i) <= 1
-                      ? "eager"
-                      : "lazy"
-                  }
-                  className="h-full w-full select-none object-contain"
-                  style={{ WebkitTouchCallout: "default" }}
-                />
+                {Math.abs(k - i) <= 1 && (
+                  <img
+                    src={u}
+                    alt={k === i ? name || "" : ""}
+                    draggable={false}
+                    decoding="async"
+                    loading="eager"
+                    className="h-full w-full select-none object-contain"
+                    style={{ WebkitTouchCallout: "default" }}
+                  />
+                )}
               </div>
             ))}
           </div>
@@ -40690,27 +40713,44 @@ const CustomerApp = (() => {
     );
   }
 
-  // [open(images, index), node]: put `node` in the page, call open() on tap.
-  function useShopViewer(name) {
+  // The viewer keeps its own state in a host, so opening it does NOT
+  // re-render the (big) page underneath; that was the stutter on open.
+  const SHOP_VIEWER_EVT = "jz-shop-viewer";
+  function ShopViewerHost() {
     const [v, setV] = useState(null);
-    const open = (images, index = 0) => {
-      const list = (images || []).filter(Boolean);
-      if (!list.length) return;
-      const picked = (images || [])[index];
-      setV({
-        images: list,
-        index: Math.max(0, picked ? list.indexOf(picked) : 0),
-      });
-    };
-    const node = v ? (
+    useEffect(() => {
+      const on = (e) => {
+        const { images, index, name } = e.detail || {};
+        const list = (images || []).filter(Boolean);
+        if (!list.length) return;
+        const picked = (images || [])[index];
+        setV({
+          images: list,
+          index: Math.max(0, picked ? list.indexOf(picked) : 0),
+          name,
+        });
+      };
+      window.addEventListener(SHOP_VIEWER_EVT, on);
+      return () => window.removeEventListener(SHOP_VIEWER_EVT, on);
+    }, []);
+    return v ? (
       <ShopImageViewer
         images={v.images}
         index={v.index}
-        name={name}
+        name={v.name}
         onClose={() => setV(null)}
       />
     ) : null;
-    return [open, node];
+  }
+  const SHOP_VIEWER_NODE = <ShopViewerHost />; // stable element: never re-renders with the page
+
+  // [open(images, index), node]: put `node` in the page, call open() on tap.
+  function useShopViewer(name) {
+    const open = (images, index = 0) =>
+      window.dispatchEvent(
+        new CustomEvent(SHOP_VIEWER_EVT, { detail: { images, index, name } }),
+      );
+    return [open, SHOP_VIEWER_NODE];
   }
 
   // Swipeable photo gallery (scroll-snap) with dots; taps on thumbnails scroll to the photo.
