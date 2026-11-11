@@ -35107,11 +35107,22 @@ const CustomerApp = (() => {
     const first = useRef(true);
     const shellRef = useRef(null);
     const bottomNavRef = useRef(null);
+    // DRSB-style focus pages: product detail, cart and checkout hide the bottom
+    // menu so the only thing on screen is the order bar.
+    const hideNav = /\/shop\/(p\/[^/]+|cart|checkout)\/?$/.test(pathname);
     // Use the actual dock height: language, enabled tabs and screen size can
     // change it. This shared clearance keeps every shop action above the dock.
     useLayoutEffect(() => {
       const shell = shellRef.current;
       const dock = bottomNavRef.current;
+      if (shell && !dock) {
+        // Menu hidden: order bars sit on the screen edge, no dock clearance.
+        shell.style.setProperty(
+          "--jz-nav-clearance",
+          "calc(env(safe-area-inset-bottom, 0px) + 8px)",
+        );
+        return () => shell.style.removeProperty("--jz-nav-clearance");
+      }
       if (!shell || !dock) return undefined;
       const measure = () => {
         const bottom = parseFloat(window.getComputedStyle(dock).bottom) || 0;
@@ -35132,7 +35143,7 @@ const CustomerApp = (() => {
         window.removeEventListener("resize", measure);
         shell.style.removeProperty("--jz-nav-clearance");
       };
-    }, [loading, me?.id, me?.must_change_password, pathname]);
+    }, [loading, me?.id, me?.must_change_password, pathname, hideNav]);
     const feat = useCustomerFeatures();
     // Refresh permissions on route changes, focus/visibility return and at a
     // short interval so an Admin's saved feature switches reach already-open
@@ -35357,7 +35368,9 @@ const CustomerApp = (() => {
           WebkitTapHighlightColor: "transparent",
         }}
       >
-        <div className="jz-customer-content max-w-md mx-auto pb-24 relative">
+        <div
+          className={`jz-customer-content max-w-md mx-auto relative ${hideNav ? "pb-4" : "pb-24"}`}
+        >
           {supabase && customerFeatureStore.serverStatus === "error" && (
             <div
               role="alert"
@@ -35395,32 +35408,34 @@ const CustomerApp = (() => {
             </div>
           )}
         </div>
-        <nav
-          ref={bottomNavRef}
-          aria-label={tr("Main navigation", "ម៉ឺនុយមេ")}
-          className="jz-bottom-nav fixed bottom-0 inset-x-0 z-40"
-        >
-          <div
-            className="grid"
-            style={{
-              gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))`,
-            }}
+        {!hideNav && (
+          <nav
+            ref={bottomNavRef}
+            aria-label={tr("Main navigation", "ម៉ឺនុយមេ")}
+            className="jz-bottom-nav fixed bottom-0 inset-x-0 z-40"
           >
-            {tabs.map(([to, I, l]) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={to === P()}
-                className={({ isActive }) =>
-                  `min-h-[52px] py-2 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors active:bg-slate-50 ${isActive ? "text-blue-500" : "text-slate-500"}`
-                }
-              >
-                <I size={22} />
-                {l}
-              </NavLink>
-            ))}
-          </div>
-        </nav>
+            <div
+              className="grid"
+              style={{
+                gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))`,
+              }}
+            >
+              {tabs.map(([to, I, l]) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={to === P()}
+                  className={({ isActive }) =>
+                    `min-h-[52px] py-2 flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium transition-colors active:bg-slate-50 ${isActive ? "text-blue-500" : "text-slate-500"}`
+                  }
+                >
+                  <I size={22} />
+                  {l}
+                </NavLink>
+              ))}
+            </div>
+          </nav>
+        )}
       </div>
     );
   }
@@ -41286,7 +41301,21 @@ const CustomerApp = (() => {
     const [color, setColor] = useState(null);
     const [size, setSize] = useState(null);
     const [vid, setVid] = useState(null);
-    const [qty, setQty] = useState(1);
+    // DRSB-style: one quantity per variant (size / option), so several sizes
+    // and colors can be bought in one go.
+    const [qtys, setQtys] = useState({});
+    const [gridView, setGridView] = useState(true);
+    // DRSB-style: the page shows product info only; Add to cart / Buy now open
+    // this sheet ("add" | "buy") where color, size and quantity are chosen.
+    const [sheet, setSheet] = useState(null);
+    useEffect(() => {
+      if (!sheet) return undefined;
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      return () => {
+        document.body.style.overflow = prev;
+      };
+    }, [sheet]);
     const [img, setImg] = useState(0);
     const [openViewer, viewerNode] = useShopViewer(p?.name);
     const [busy, setBusy] = useState(false);
@@ -41316,6 +41345,9 @@ const CustomerApp = (() => {
               setColor(first.color || null);
               setSize(first.size || null);
               setVid(first.id);
+              // A product with a single choice starts with 1 selected.
+              if (data.variants.length === 1 && first.in_stock)
+                setQtys({ [first.id]: 1 });
             }
           }
           setLoading(false);
@@ -41328,62 +41360,84 @@ const CustomerApp = (() => {
 
     const vars = p?.variants || [];
     const colors = [...new Set(vars.map((v) => v.color).filter(Boolean))];
-    const sizes = [...new Set(vars.map((v) => v.size).filter(Boolean))];
-    const byOptions = colors.length > 0 || sizes.length > 0;
-    const sel = byOptions
-      ? vars.find(
-          (v) =>
-            (colors.length === 0 || v.color === color) &&
-            (sizes.length === 0 || v.size === size),
-        )
-      : vars.find((v) => v.id === vid) || vars[0];
-    const avail = sel ? sel.available : 0;
-    useEffect(() => {
-      if (qty > Math.max(avail, 1)) setQty(Math.max(avail, 1));
-    }, [avail]); // eslint-disable-line react-hooks/exhaustive-deps
+    const hasSize = vars.some((v) => v.size);
+    // Rows = the variants of the chosen color (every variant when no colors).
+    const rows = colors.length ? vars.filter((v) => v.color === color) : vars;
+    const rowLabel = (v) =>
+      v.size ||
+      Object.values(v.options || {})
+        .filter(Boolean)
+        .join(" / ") ||
+      v.sku ||
+      v.color ||
+      "";
+    const setQ = (v, n) =>
+      setQtys((m) => ({
+        ...m,
+        [v.id]: Math.max(0, Math.min(n, v.available || 0)),
+      }));
+    const picked = vars.filter((v) => (qtys[v.id] || 0) > 0);
+    const totalQty = picked.reduce((a, v) => a + qtys[v.id], 0);
+    const totalPrice = picked.reduce(
+      (a, v) => a + v.final_price * qtys[v.id],
+      0,
+    );
+    const colorVar = (c) =>
+      vars.find((v) => v.color === c && v.image && v.in_stock) ||
+      vars.find((v) => v.color === c && v.image) ||
+      vars.find((v) => v.color === c);
+    const sel = colors.length
+      ? colorVar(color)
+      : vars.find((v) => v.in_stock) || vars[0];
 
     const images = [
       ...(sel?.image ? [sel.image] : []),
       ...(p?.images || []),
     ].filter((u, i, a) => a.indexOf(u) === i);
-    // Choosing another color / size shows that variant's own photo first.
+    // Choosing another color shows that color's own photo first.
     useEffect(() => {
       setImg(0);
     }, [sel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Picking a color that does not come in the chosen size jumps to a size it does come in.
     function pickColor(c) {
       setColor(c);
-      if (sizes.length) {
-        const opts = vars.filter((v) => v.color === c);
-        if (!opts.some((v) => v.size === size)) {
-          const next = opts.find((v) => v.in_stock) || opts[0];
-          if (next) setSize(next.size || null);
-        }
-      }
     }
 
     async function add(buyNow) {
-      if (!sel || busy) return;
+      if (!picked.length || busy) return;
       setBusy(true);
       setMsg("");
       try {
-        await shopCAddToCart(sel.id, qty);
+        let already = false;
+        for (const v of picked) {
+          try {
+            await shopCAddToCart(v.id, qtys[v.id]);
+          } catch (e) {
+            if (e?.code === "ALREADY_IN_CART") already = true;
+            else throw e;
+          }
+        }
         shopCBuzz();
-        if (buyNow) nav(P("/shop/cart"));
-        else {
+        if (buyNow) {
+          nav(P("/shop/cart"));
+          return;
+        }
+        if (already) {
+          setMsg(
+            tr(
+              "Some items are already in your cart. Open the cart to change them.",
+              "ទំនិញខ្លះមានក្នុងកន្ត្រករួចហើយ។ សូមបើកកន្ត្រកដើម្បីកែ។",
+            ),
+          );
+        } else {
           say(tr("Added to cart", "បានដាក់ក្នុងកន្ត្រក"));
+          setQtys({});
+          setSheet(null);
           setAdded(true);
           clearTimeout(addedTimer.current);
           addedTimer.current = setTimeout(() => setAdded(false), 1600);
         }
       } catch (e) {
-        // "Buy now" on an item that is already in the cart: just open the cart.
-        if (buyNow && e?.code === "ALREADY_IN_CART") {
-          setBusy(false);
-          nav(P("/shop/cart"));
-          return;
-        }
         setMsg(shopCErr(e, tr));
       }
       setBusy(false);
@@ -41412,25 +41466,12 @@ const CustomerApp = (() => {
           </div>
         </>
       );
-    const chip = (active, disabled, soldOut) =>
-      `cb-shop-press min-w-[48px] min-h-[44px] px-4 py-2.5 rounded-xl border text-[14px] font-semibold ${active ? "bg-blue-600 text-white border-blue-600 shadow-[0_6px_16px_-8px_rgba(37,99,235,.8)]" : "bg-white text-slate-700 border-slate-200 active:bg-slate-50"} ${disabled ? "opacity-30 pointer-events-none" : ""} ${soldOut && !active ? "line-through text-slate-400 opacity-70" : ""}`;
-    const pct =
-      sel && sel.unit_discount > 0
-        ? Math.round((sel.unit_discount / sel.unit_price) * 100)
-        : 0;
-    const canBuy = !!sel && avail > 0 && !busy;
-    const stockTone =
-      avail <= 0
-        ? "text-red-600"
-        : avail <= 5
-          ? "text-amber-600"
-          : "text-emerald-600";
-    const dot =
-      avail <= 0
-        ? "bg-red-500"
-        : avail <= 5
-          ? "bg-amber-500"
-          : "bg-emerald-500";
+    const canBuy = totalQty > 0 && !busy;
+    const soldOut = !vars.some((v) => v.in_stock);
+    const prices = rows.map((v) => v.final_price);
+    const minP = prices.length ? Math.min(...prices) : 0;
+    const maxP = prices.length ? Math.max(...prices) : 0;
+    const minV = rows.find((v) => v.final_price === minP);
     return (
       <>
         <Top
@@ -41469,153 +41510,22 @@ const CustomerApp = (() => {
                 </p>
               )}
               <h1 className="text-xl font-bold leading-snug">{p.name}</h1>
-              {sel && (
-                <div
-                  key={sel.id}
-                  className="mt-1 flex items-center gap-2 cb-shop-tick"
-                >
-                  <ShopCPrice
-                    big
-                    final={sel.final_price}
-                    list={sel.unit_discount > 0 ? sel.unit_price : null}
-                  />
-                  {pct > 0 && (
-                    <span className="text-[11px] font-bold text-red-600 bg-red-50 rounded-full px-2 py-0.5">
-                      −{pct}%
+              {minV && (
+                <div className="mt-1 flex items-center gap-2 flex-wrap">
+                  {minP === maxP ? (
+                    <ShopCPrice
+                      big
+                      final={minV.final_price}
+                      list={minV.unit_discount > 0 ? minV.unit_price : null}
+                    />
+                  ) : (
+                    <span className="text-[22px] font-extrabold">
+                      {money(minP)} – {money(maxP)}
                     </span>
                   )}
                 </div>
               )}
             </div>
-            {colors.length > 0 && (
-              <div>
-                <p className="text-[13px] font-semibold mb-2">
-                  {tr("Color", "ពណ៌")}:{" "}
-                  <span className="font-normal text-slate-500">{color}</span>
-                </p>
-                <div className="jz-shop-option-list flex flex-wrap gap-2">
-                  {colors.map((c) => {
-                    const anyStock = vars.some(
-                      (v) => v.color === c && v.in_stock,
-                    );
-                    return (
-                      <button
-                        key={c}
-                        aria-pressed={color === c}
-                        className={chip(color === c, false, !anyStock)}
-                        onClick={() => pickColor(c)}
-                      >
-                        {c}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            {sizes.length > 0 && (
-              <div>
-                <p className="text-[13px] font-semibold mb-2">
-                  {tr("Size", "ទំហំ")}:{" "}
-                  <span className="font-normal text-slate-500">{size}</span>
-                </p>
-                <div className="jz-shop-option-list flex flex-wrap gap-2">
-                  {sizes.map((s) => {
-                    const match = vars.filter(
-                      (v) =>
-                        v.size === s &&
-                        (colors.length === 0 || v.color === color),
-                    );
-                    return (
-                      <button
-                        key={s}
-                        aria-pressed={size === s}
-                        disabled={match.length === 0}
-                        className={chip(
-                          size === s,
-                          match.length === 0,
-                          !match.some((v) => v.in_stock),
-                        )}
-                        onClick={() => setSize(s)}
-                      >
-                        {s}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            {!byOptions && vars.length > 1 && (
-              <div>
-                <p className="text-[13px] font-semibold mb-2">
-                  {tr("Option", "ជម្រើស")}
-                </p>
-                <div className="jz-shop-option-list flex flex-wrap gap-2">
-                  {vars.map((v) => (
-                    <button
-                      key={v.id}
-                      aria-pressed={vid === v.id}
-                      className={chip(vid === v.id, false, !v.in_stock)}
-                      onClick={() => setVid(v.id)}
-                    >
-                      {Object.values(v.options || {})
-                        .filter(Boolean)
-                        .join(" / ") || v.sku}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {!sel && byOptions && (
-              <p className="text-sm text-amber-700 bg-amber-50 rounded-xl px-3 py-2 cb-shop-fade">
-                {tr("This combination is not available.", "ជម្រើសនេះមិនមានទេ។")}
-              </p>
-            )}
-            {sel && (
-              <div className="flex items-center justify-between">
-                <p
-                  key={`${sel.id}-${avail}`}
-                  className={`cb-shop-tick inline-flex items-center gap-2 text-[14px] font-semibold ${stockTone}`}
-                >
-                  <span
-                    className={`w-2 h-2 rounded-full ${dot}`}
-                    aria-hidden="true"
-                  />
-                  {avail > 0
-                    ? avail <= 5
-                      ? tr(`Only ${avail} left`, `នៅសល់ត្រឹម ${avail}`)
-                      : tr("In stock", "មានស្តុក")
-                    : tr("Out of stock", "អស់ស្តុក")}
-                </p>
-                <div
-                  className="flex items-center gap-1"
-                  aria-label={tr("Quantity", "ចំនួន")}
-                >
-                  <button
-                    aria-label="-"
-                    disabled={qty <= 1 || avail < 1}
-                    onClick={() => setQty(qty - 1)}
-                    className="cb-shop-press w-11 h-11 rounded-xl border border-slate-200 bg-white grid place-items-center disabled:opacity-40"
-                  >
-                    <Icons.Minus size={17} />
-                  </button>
-                  <span
-                    key={qty}
-                    className="cb-shop-tick w-10 text-center font-bold text-[16px]"
-                    data-testid="qty"
-                  >
-                    {qty}
-                  </span>
-                  <button
-                    aria-label="+"
-                    disabled={qty >= avail}
-                    onClick={() => setQty(qty + 1)}
-                    className="cb-shop-press w-11 h-11 rounded-xl border border-slate-200 bg-white grid place-items-center disabled:opacity-40"
-                  >
-                    <Icons.Plus size={17} />
-                  </button>
-                </div>
-              </div>
-            )}
             {p.description && (
               <p className="text-[14px] leading-relaxed text-slate-600 whitespace-pre-line">
                 {p.description}
@@ -41642,23 +41552,10 @@ const CustomerApp = (() => {
             className="jz-shop-action-bar jz-shop-product-actions sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100 flex items-center gap-2.5"
             style={SHOP_C_BAR}
           >
-            {sel && (
-              <div className="jz-shop-action-total shrink-0 pr-1 leading-tight">
-                <p className="text-[11px] text-slate-400">
-                  {tr("Total", "សរុប")}
-                </p>
-                <p
-                  key={`${qty}-${sel.id}`}
-                  className="cb-shop-tick font-extrabold text-[16px]"
-                >
-                  {money(sel.final_price * qty)}
-                </p>
-              </div>
-            )}
             <button
               type="button"
-              disabled={!canBuy}
-              onClick={() => add(false)}
+              disabled={soldOut}
+              onClick={() => setSheet("add")}
               aria-live="polite"
               className={`cb-shop-press flex-1 h-12 rounded-xl border font-semibold text-[15px] flex items-center justify-center gap-2 disabled:opacity-50 ${added ? "border-emerald-300 bg-emerald-50 text-emerald-700" : "border-blue-200 bg-white text-blue-700 active:bg-blue-50"}`}
             >
@@ -41667,13 +41564,282 @@ const CustomerApp = (() => {
             </button>
             <button
               type="button"
-              disabled={!canBuy}
-              onClick={() => add(true)}
+              disabled={soldOut}
+              onClick={() => setSheet("buy")}
               className="cb-shop-press flex-1 h-12 rounded-xl bg-blue-600 text-white font-semibold text-[15px] shadow-[0_8px_20px_-8px_rgba(37,99,235,.65)] disabled:opacity-50 active:bg-blue-700"
             >
               {tr("Buy now", "ទិញឥឡូវ")}
             </button>
           </div>
+          {sheet && (
+            <div
+              className="fixed inset-0 z-[70] flex items-end justify-center"
+              role="dialog"
+              aria-modal="true"
+            >
+              <button
+                type="button"
+                aria-label={tr("Close", "បិទ")}
+                onClick={() => setSheet(null)}
+                className="absolute inset-0 bg-black/45"
+              />
+              <div
+                className="relative flex w-full max-w-md max-h-[88vh] flex-col rounded-t-3xl bg-white cb-shop-up"
+                style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+              >
+                <div className="flex items-start gap-3 px-4 pt-4 pb-3">
+                  {sel?.image ? (
+                    <AirImg
+                      src={sel.image}
+                      alt=""
+                      className="w-20 h-20 shrink-0 rounded-xl"
+                    />
+                  ) : (
+                    <div className="w-20 h-20 shrink-0 rounded-xl bg-slate-100" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[22px] font-extrabold text-red-600 leading-tight">
+                      {minP === maxP
+                        ? money(minP)
+                        : `${money(minP)} – ${money(maxP)}`}
+                    </p>
+                    {colors.length > 0 && color && (
+                      <p className="mt-1 text-[13px] text-slate-500 break-words">
+                        {tr("Color", "ពណ៌")}: {color}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    aria-label={tr("Close", "បិទ")}
+                    onClick={() => setSheet(null)}
+                    className="cb-shop-press w-9 h-9 shrink-0 rounded-full grid place-items-center text-slate-500 active:bg-slate-100"
+                  >
+                    <Icons.X size={20} />
+                  </button>
+                </div>
+                <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-5">
+                  {colors.length > 0 && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <p className="text-[13px] font-semibold">
+                          {tr("Color", "ពណ៌")}:{" "}
+                          <span className="font-normal text-slate-500">
+                            {color}
+                          </span>
+                        </p>
+                        {colors.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => setGridView((g) => !g)}
+                            className="cb-shop-press text-[12px] font-semibold text-slate-600 rounded-lg px-2.5 py-1.5 bg-slate-100"
+                          >
+                            {gridView
+                              ? tr("List", "បញ្ជី")
+                              : tr("Grid", "ក្រឡា")}
+                          </button>
+                        )}
+                      </div>
+                      {gridView ? (
+                        <div className="cb-shop-hscroll flex gap-2.5 overflow-x-auto pb-1">
+                          {colors.map((c) => {
+                            const cv = colorVar(c);
+                            const active = color === c;
+                            const n = vars
+                              .filter((v) => v.color === c)
+                              .reduce((a, v) => a + (qtys[v.id] || 0), 0);
+                            const anyStock = vars.some(
+                              (v) => v.color === c && v.in_stock,
+                            );
+                            return (
+                              <button
+                                key={c}
+                                type="button"
+                                aria-pressed={active}
+                                onClick={() => pickColor(c)}
+                                className={`cb-shop-press relative shrink-0 w-[92px] overflow-hidden rounded-xl border-2 text-left ${active ? "border-blue-600" : "border-slate-200"} ${anyStock ? "" : "opacity-50"}`}
+                              >
+                                {cv?.image ? (
+                                  <AirImg
+                                    src={cv.image}
+                                    alt=""
+                                    className="w-full aspect-square"
+                                  />
+                                ) : (
+                                  <div className="w-full aspect-square bg-slate-100" />
+                                )}
+                                {n > 0 && (
+                                  <span className="absolute top-1 right-1 min-w-[20px] h-5 px-1 rounded-full bg-red-500 text-white text-[11px] font-bold grid place-items-center">
+                                    {n}
+                                  </span>
+                                )}
+                                <span
+                                  className={`block px-2 py-1.5 text-[12px] font-semibold leading-tight line-clamp-2 min-h-[2.4rem] ${active ? "bg-blue-600 text-white" : "bg-slate-50 text-slate-700"}`}
+                                >
+                                  {c}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {colors.map((c) => {
+                            const cv = colorVar(c);
+                            const active = color === c;
+                            const n = vars
+                              .filter((v) => v.color === c)
+                              .reduce((a, v) => a + (qtys[v.id] || 0), 0);
+                            return (
+                              <button
+                                key={c}
+                                type="button"
+                                aria-pressed={active}
+                                onClick={() => pickColor(c)}
+                                className={`cb-shop-press max-w-full flex items-center gap-2 rounded-xl border-2 pr-3 text-left text-[13px] font-semibold ${active ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 bg-slate-50 text-slate-700"}`}
+                              >
+                                {cv?.image ? (
+                                  <AirImg
+                                    src={cv.image}
+                                    alt=""
+                                    className="w-10 h-10 rounded-l-[10px]"
+                                  />
+                                ) : (
+                                  <span className="w-2" />
+                                )}
+                                <span className="py-2 break-words">{c}</span>
+                                {n > 0 && (
+                                  <span className="ml-1 min-w-[20px] h-5 px-1 rounded-full bg-red-500 text-white text-[11px] font-bold grid place-items-center">
+                                    {n}
+                                  </span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {rows.length > 0 && (
+                    <div>
+                      {(hasSize || rows.length > 1) && (
+                        <p className="text-[13px] font-semibold mb-1">
+                          {hasSize
+                            ? tr("Size", "ទំហំ")
+                            : tr("Option", "ជម្រើស")}
+                        </p>
+                      )}
+                      <div className="divide-y divide-slate-100">
+                        {rows.map((v) => {
+                          const q = qtys[v.id] || 0;
+                          const out = (v.available || 0) <= 0;
+                          return (
+                            <div
+                              key={v.id}
+                              className={`flex items-center justify-between gap-3 py-3 ${out ? "opacity-50" : ""}`}
+                            >
+                              <div className="min-w-0">
+                                <p className="text-[15px] font-semibold break-words">
+                                  {rowLabel(v)}
+                                </p>
+                                <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[13px]">
+                                  <span className="font-bold text-red-600">
+                                    {money(v.final_price)}
+                                  </span>
+                                  {v.unit_discount > 0 && (
+                                    <s className="text-[11px] text-slate-400">
+                                      {money(v.unit_price)}
+                                    </s>
+                                  )}
+                                  <span
+                                    className={
+                                      out
+                                        ? "text-red-600"
+                                        : v.available <= 5
+                                          ? "text-amber-600"
+                                          : "text-slate-400"
+                                    }
+                                  >
+                                    {out
+                                      ? tr("Out of stock", "អស់ស្តុក")
+                                      : `${tr("Stock", "ស្តុក")} ${v.available}`}
+                                  </span>
+                                </p>
+                              </div>
+                              <div
+                                className="flex shrink-0 items-center gap-1"
+                                aria-label={tr("Quantity", "ចំនួន")}
+                              >
+                                <button
+                                  type="button"
+                                  aria-label="-"
+                                  disabled={q <= 0}
+                                  onClick={() => setQ(v, q - 1)}
+                                  className="cb-shop-press w-10 h-10 rounded-xl bg-slate-100 grid place-items-center disabled:opacity-40"
+                                >
+                                  <Icons.Minus size={17} />
+                                </button>
+                                <span
+                                  key={q}
+                                  className="cb-shop-tick w-9 text-center font-bold text-[16px]"
+                                  data-testid="qty"
+                                >
+                                  {q}
+                                </span>
+                                <button
+                                  type="button"
+                                  aria-label="+"
+                                  disabled={out || q >= v.available}
+                                  onClick={() => setQ(v, q + 1)}
+                                  className="cb-shop-press w-10 h-10 rounded-xl bg-slate-100 grid place-items-center disabled:opacity-40"
+                                >
+                                  <Icons.Plus size={17} />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  {msg && (
+                    <p
+                      role="alert"
+                      className="text-sm font-semibold text-red-600 cb-shop-fade"
+                    >
+                      {msg}
+                    </p>
+                  )}
+                </div>
+                <div className="border-t border-slate-100 px-4 pt-3 pb-3">
+                  <div className="mb-2.5 flex items-baseline justify-between">
+                    <p className="text-[13px] text-slate-500">
+                      {tr("Total", "សរុប")}
+                      {totalQty > 0 ? ` · ${totalQty}` : ""}
+                    </p>
+                    <p
+                      key={`${totalQty}-${totalPrice}`}
+                      className="cb-shop-tick text-[20px] font-extrabold"
+                    >
+                      {money(totalPrice)}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!canBuy}
+                    onClick={() => add(sheet === "buy")}
+                    className="cb-shop-press h-12 w-full rounded-xl bg-blue-600 text-[15px] font-semibold text-white shadow-[0_8px_20px_-8px_rgba(37,99,235,.65)] disabled:opacity-50 active:bg-blue-700"
+                  >
+                    {busy
+                      ? "…"
+                      : sheet === "buy"
+                        ? tr("Buy now", "ទិញឥឡូវ")
+                        : tr("Add to cart", "ដាក់ក្នុងកន្ត្រក")}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </>
     );
