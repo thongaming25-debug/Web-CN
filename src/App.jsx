@@ -36097,12 +36097,13 @@ const CustomerApp = (() => {
       <>
         <Top title={tr("My Shipments", "ការដឹកជញ្ជូនរបស់ខ្ញុំ")} />
         <div className="px-4 pt-4 space-y-3">
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          <div className="jz-chip-row flex gap-2 overflow-x-auto pb-1">
             {Object.keys(tabs).map((k) => (
               <button
                 key={k}
                 onClick={() => setT(k)}
-                className={`px-4 h-9 rounded-full text-[13px] font-semibold whitespace-nowrap ${t === k ? "bg-blue-600 text-white" : "bg-white text-slate-600"}`}
+                aria-pressed={t === k}
+                className={`shrink-0 px-4 h-9 rounded-full text-[13px] font-semibold whitespace-nowrap ${t === k ? "bg-blue-600 text-white" : "bg-white text-slate-600"}`}
               >
                 {tr(...TAB_TX[k])}
               </button>
@@ -36225,11 +36226,12 @@ const CustomerApp = (() => {
               </div>
             </div>
           </div>
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          <div className="jz-chip-row flex gap-2 overflow-x-auto pb-1">
             {Object.keys(tabs).map((k) => (
               <button
                 key={k}
                 onClick={() => setT(k)}
+                aria-pressed={t === k}
                 className={`px-4 h-9 rounded-full text-[13px] font-semibold whitespace-nowrap shrink-0 ${t === k ? "bg-blue-600 text-white" : "bg-white text-slate-600"}`}
               >
                 {TAB_TX[k] ? tr(...TAB_TX[k]) : airTx(lang, k)}
@@ -39300,7 +39302,7 @@ const CustomerApp = (() => {
           {
             <div
               ref={cnTabsScroller}
-              className="flex gap-2 overflow-x-auto overflow-y-hidden pb-1 scroll-smooth"
+              className="jz-chip-row flex gap-2 overflow-x-auto overflow-y-hidden pb-1 scroll-smooth"
             >
               {CN_TABS.map(([k, en, km, names]) => {
                 const n = rows.filter((r) => inTab(r, names)).length;
@@ -41298,7 +41300,7 @@ const CustomerApp = (() => {
           </div>
           <div
             ref={chipsRef}
-            className="cb-shop-hscroll flex gap-2 overflow-x-auto -mx-4 px-4 pb-1"
+            className="jz-chip-row cb-shop-hscroll flex gap-2 overflow-x-auto -mx-4 px-4 pb-1"
             role="tablist"
           >
             {[{ id: "", name: tr("All", "ទាំងអស់") }, ...cats].map((c) => (
@@ -42763,7 +42765,7 @@ const CustomerApp = (() => {
       <>
         <Top title={tr("My Shop Orders", "ការបញ្ជាទិញក្នុងហាង")} back />
         <div className="px-4 pt-4 space-y-3 pb-6">
-          <div className="cb-shop-hscroll flex gap-2 overflow-x-auto -mx-4 px-4 pb-1">
+          <div className="jz-chip-row cb-shop-hscroll flex gap-2 overflow-x-auto -mx-4 px-4 pb-1">
             {SHOP_C_FILTERS.map((s) => (
               <button
                 key={s || "all"}
@@ -80416,6 +80418,13 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .jz-customer .jz-nav-pill{position:absolute;top:6px;bottom:6px;left:0;border-radius:16px;pointer-events:none;z-index:0;background:linear-gradient(180deg,rgba(59,130,246,.2),rgba(59,130,246,.1));box-shadow:inset 0 0 0 1px rgba(59,130,246,.22),0 6px 14px -8px rgba(59,130,246,.65);will-change:transform,width;}
 .jz-customer .jz-nav-pill.is-anim{transition:transform .5s cubic-bezier(.22,1.15,.36,1),width .5s cubic-bezier(.22,1.15,.36,1),opacity .2s ease;}
 @media (prefers-reduced-motion:reduce){.jz-customer .jz-nav-pill.is-anim,.jz-customer .jz-bottom-nav a svg{transition-duration:.01ms;}}
+/* Status chip rows (CN Orders / Shipments / AIR): same look, no visible scrollbar. */
+.jz-customer .jz-chip-row{scrollbar-width:none;-ms-overflow-style:none;-webkit-overflow-scrolling:touch;}
+.jz-customer .jz-chip-row::-webkit-scrollbar{display:none;width:0;height:0;}
+.jz-customer{--jz-c-chip-bg:linear-gradient(180deg,rgba(255,255,255,.82),rgba(255,255,255,.5));}
+.jz-customer.cb-cust-dark{--jz-c-chip-bg:linear-gradient(180deg,rgba(255,255,255,.12),rgba(255,255,255,.05));}
+.jz-customer .jz-chip-row>button{background:var(--jz-c-chip-bg)!important;color:var(--jz-c-dock-ink)!important;border:1px solid var(--jz-c-dock-edge)!important;backdrop-filter:blur(18px) saturate(190%);-webkit-backdrop-filter:blur(18px) saturate(190%);box-shadow:0 8px 18px -12px rgba(5,20,45,.35),inset 0 1px 0 var(--jz-c-dock-edge)!important;transition:background .2s ease,color .2s ease,box-shadow .2s ease;}
+.jz-customer .jz-chip-row>button[aria-pressed="true"],.jz-customer .jz-chip-row>button[aria-selected="true"]{background:var(--jz-c-pill-bg)!important;color:var(--jz-c-brand)!important;box-shadow:0 6px 14px -10px rgba(5,20,45,.4),inset 0 1px 0 var(--jz-c-pill-edge),inset 0 -1px 0 rgba(255,255,255,.12)!important;}
 /* Liquid-glass dock v2: big fully-rounded capsule, brand-orange active tab. */
 .jz-customer{--jz-c-brand:#f47c20;--jz-c-brand-rgb:244,124,32;--jz-c-dock-bg:linear-gradient(180deg,rgba(255,255,255,.72),rgba(255,255,255,.42));--jz-c-dock-edge:rgba(255,255,255,.85);--jz-c-dock-ink:#1b2740;}
 .jz-customer.cb-cust-dark{--jz-c-brand:#ff8f3a;--jz-c-brand-rgb:255,143,58;--jz-c-dock-bg:linear-gradient(180deg,rgba(30,44,68,.72),rgba(19,31,51,.5));--jz-c-dock-edge:rgba(255,255,255,.16);--jz-c-dock-ink:#e8eef8;}
