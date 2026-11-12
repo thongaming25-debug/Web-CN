@@ -47262,18 +47262,30 @@ function AirImg({
   );
 }
 
-// Centered, view-only gallery popup (smooth open, zoom / rotate toolbar).
+// DRSB-style image viewer: the picture is shown large on a dim backdrop (no
+// card around it) with a round-button toolbar (zoom, 1:1, reset, prev / play /
+// next, rotate, flip), a caption and a thumbnail strip. Drag to pan when zoomed.
 function AirImageViewer({ images, start = 0, onClose }) {
   const [i, setI] = useState(Math.min(start, Math.max(images.length - 1, 0)));
   const [failed, setFailed] = useState(false);
   const [shown, setShown] = useState(false); // drives the open animation
   const [scale, setScale] = useState(1);
   const [rot, setRot] = useState(0);
+  const [flipX, setFlipX] = useState(1);
+  const [flipY, setFlipY] = useState(1);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const [playing, setPlaying] = useState(false);
   const touchX = useRef(null);
+  const imgRef = useRef(null);
+  const drag = useRef(null);
   const n = images.length;
   const resetView = () => {
     setScale(1);
     setRot(0);
+    setFlipX(1);
+    setFlipY(1);
+    setPos({ x: 0, y: 0 });
   };
   const go = (d) => {
     setFailed(false);
@@ -47281,11 +47293,30 @@ function AirImageViewer({ images, start = 0, onClose }) {
     setI((v) => (v + d + n) % n);
   };
   const zoom = (d) =>
-    setScale((v) => Math.min(4, Math.max(0.5, +(v + d).toFixed(2))));
+    setScale((v) => {
+      const next = Math.min(8, Math.max(0.2, +(v + d).toFixed(2)));
+      if (next <= 1) setPos({ x: 0, y: 0 });
+      return next;
+    });
+  const actualSize = () => {
+    const el = imgRef.current;
+    if (!el || !el.clientWidth) return;
+    setScale(+(el.naturalWidth / el.clientWidth).toFixed(3) || 1);
+    setPos({ x: 0, y: 0 });
+  };
   useEffect(() => {
     const t = requestAnimationFrame(() => setShown(true));
     return () => cancelAnimationFrame(t);
   }, []);
+  useEffect(() => {
+    if (!playing || n < 2) return undefined;
+    const id = window.setInterval(() => {
+      setFailed(false);
+      resetView();
+      setI((v) => (v + 1) % n);
+    }, 2800);
+    return () => window.clearInterval(id);
+  }, [playing, n]);
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === "Escape") onClose();
@@ -47304,19 +47335,19 @@ function AirImageViewer({ images, start = 0, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [n]);
   if (!n) return null;
-  const circle =
-    "absolute w-10 h-10 rounded-full bg-slate-900/50 hover:bg-slate-900/70 text-white grid place-items-center transition-colors";
-  const tool =
-    "w-9 h-9 rounded-full text-white grid place-items-center hover:bg-white/15 transition-colors";
+  const cur = images[i] || {};
+  const caption = cur.name || cur.caption || cur.title || cur.label || "";
+  const btn =
+    "w-9 h-9 shrink-0 rounded-full bg-black/55 hover:bg-black/75 text-white grid place-items-center transition-colors disabled:opacity-40";
   return createPortal(
     <div
-      className={`fixed inset-0 z-[80] flex items-center justify-center p-4 sm:p-10 bg-slate-950/55 backdrop-blur-sm transition-opacity duration-200 ${
+      className={`fixed inset-0 z-[80] bg-black/60 transition-opacity duration-200 ${
         shown ? "opacity-100" : "opacity-0"
       }`}
       onClick={onClose}
       onTouchStart={(e) => (touchX.current = e.touches[0].clientX)}
       onTouchEnd={(e) => {
-        if (touchX.current == null || n < 2 || scale !== 1) return;
+        if (touchX.current == null || n < 2 || scale > 1) return;
         const dx = e.changedTouches[0].clientX - touchX.current;
         touchX.current = null;
         if (Math.abs(dx) > 50) go(dx < 0 ? 1 : -1);
@@ -47325,114 +47356,228 @@ function AirImageViewer({ images, start = 0, onClose }) {
       <button
         type="button"
         aria-label="Close"
-        onClick={onClose}
-        className={`${circle} right-4`}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
+        className="absolute right-4 w-10 h-10 rounded-full bg-black/55 hover:bg-black/75 text-white grid place-items-center transition-colors z-10"
         style={{ top: "calc(env(safe-area-inset-top, 0px) + 16px)" }}
       >
         <Icons.X size={20} />
       </button>
-      {/* Centered stage — image stays inside, never edge-to-edge */}
+
+      {/* Stage: the image itself, as large as the screen allows */}
       <div
-        onClick={(e) => e.stopPropagation()}
+        className="absolute inset-x-0 top-0 flex items-center justify-center overflow-hidden"
+        style={{
+          bottom: "calc(env(safe-area-inset-bottom, 0px) + 150px)",
+          padding: "24px 16px 0",
+        }}
         onWheel={(e) => zoom(e.deltaY < 0 ? 0.15 : -0.15)}
-        className={`relative flex items-center justify-center overflow-hidden rounded-2xl bg-slate-900/40 shadow-2xl ring-1 ring-white/10 transition-all duration-200 ease-out ${
-          shown ? "scale-100 opacity-100" : "scale-95 opacity-0"
-        }`}
-        style={{ width: "min(92vw, 860px)", height: "min(74vh, 680px)" }}
       >
-        {failed || !images[i].url ? (
+        {failed || !cur.url ? (
           <div className="text-center text-white/70 text-sm">
             <Icons.ImageOff className="mx-auto mb-2" size={32} />
             Image unavailable
           </div>
         ) : (
           <img
-            src={images[i].url}
-            alt=""
+            ref={imgRef}
+            key={i}
+            src={cur.url}
+            alt={caption}
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              if (scale > 1.01) resetView();
+              else actualSize();
+            }}
             onError={() => setFailed(true)}
-            className="max-w-full max-h-full object-contain select-none transition-transform duration-200 ease-out"
-            style={{ transform: `rotate(${rot}deg) scale(${scale})` }}
+            onPointerDown={(e) => {
+              if (scale <= 1) return;
+              e.preventDefault();
+              e.currentTarget.setPointerCapture?.(e.pointerId);
+              drag.current = {
+                sx: e.clientX,
+                sy: e.clientY,
+                ox: pos.x,
+                oy: pos.y,
+              };
+              setDragging(true);
+            }}
+            onPointerMove={(e) => {
+              const d = drag.current;
+              if (!d) return;
+              setPos({
+                x: d.ox + (e.clientX - d.sx),
+                y: d.oy + (e.clientY - d.sy),
+              });
+            }}
+            onPointerUp={() => {
+              drag.current = null;
+              setDragging(false);
+            }}
+            onPointerCancel={() => {
+              drag.current = null;
+              setDragging(false);
+            }}
+            className={`max-w-full max-h-full object-contain select-none shadow-2xl touch-none ${
+              shown ? "opacity-100" : "opacity-0"
+            } ${dragging ? "" : "transition-[transform,opacity] duration-200 ease-out"}`}
+            style={{
+              transform: `translate(${pos.x}px, ${pos.y}px) rotate(${rot}deg) scale(${scale * flipX}, ${scale * flipY})`,
+              cursor: scale > 1 ? (dragging ? "grabbing" : "grab") : "default",
+            }}
             draggable={false}
           />
         )}
       </div>
-      {n > 1 && (
-        <>
-          <button
-            type="button"
-            aria-label="Previous"
-            onClick={(e) => {
-              e.stopPropagation();
-              go(-1);
-            }}
-            className={`${circle} left-3 sm:left-6`}
-          >
-            <Icons.ChevronLeft size={22} />
-          </button>
-          <button
-            type="button"
-            aria-label="Next"
-            onClick={(e) => {
-              e.stopPropagation();
-              go(1);
-            }}
-            className={`${circle} right-3 sm:right-6`}
-          >
-            <Icons.ChevronRight size={22} />
-          </button>
-        </>
+
+      {/* Caption */}
+      {(caption || n > 1) && (
+        <div
+          className="absolute left-1/2 -translate-x-1/2 max-w-[90vw] truncate text-center text-xs text-white/70 pointer-events-none"
+          style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 128px)" }}
+        >
+          {caption}
+          {caption && n > 1 ? " · " : ""}
+          {n > 1 ? `${i + 1} / ${n}` : ""}
+        </div>
       )}
-      {/* Toolbar: zoom out / zoom in / fit / rotate left / rotate right */}
+
+      {/* Toolbar */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1 px-3 py-1.5 rounded-full bg-slate-900/60 backdrop-blur"
-        style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)" }}
+        className="absolute left-1/2 -translate-x-1/2 flex max-w-[96vw] items-center gap-2 overflow-x-auto px-1 py-1"
+        style={{ bottom: "calc(env(safe-area-inset-bottom, 0px) + 80px)" }}
       >
         <button
           type="button"
-          aria-label="Zoom out"
-          className={tool}
-          onClick={() => zoom(-0.25)}
-        >
-          <Icons.ZoomOut size={18} />
-        </button>
-        <button
-          type="button"
           aria-label="Zoom in"
-          className={tool}
+          className={btn}
           onClick={() => zoom(0.25)}
         >
-          <Icons.ZoomIn size={18} />
+          <Icons.Plus size={18} />
         </button>
         <button
           type="button"
-          aria-label="Fit"
-          className={tool}
+          aria-label="Zoom out"
+          className={btn}
+          onClick={() => zoom(-0.25)}
+        >
+          <Icons.Minus size={18} />
+        </button>
+        <button
+          type="button"
+          aria-label="Actual size"
+          className={`${btn} text-[11px] font-bold`}
+          onClick={actualSize}
+        >
+          1:1
+        </button>
+        <button
+          type="button"
+          aria-label="Reset"
+          className={btn}
           onClick={resetView}
         >
-          <Icons.Maximize size={18} />
+          <Icons.RefreshCw size={16} />
+        </button>
+        <button
+          type="button"
+          aria-label="Previous"
+          className={btn}
+          disabled={n < 2}
+          onClick={() => go(-1)}
+        >
+          <Icons.ChevronLeft size={18} />
+        </button>
+        <button
+          type="button"
+          aria-label={playing ? "Pause slideshow" : "Play slideshow"}
+          className={btn}
+          disabled={n < 2}
+          onClick={() => setPlaying((v) => !v)}
+        >
+          {playing ? <Icons.Pause size={16} /> : <Icons.Play size={16} />}
+        </button>
+        <button
+          type="button"
+          aria-label="Next"
+          className={btn}
+          disabled={n < 2}
+          onClick={() => go(1)}
+        >
+          <Icons.ChevronRight size={18} />
         </button>
         <button
           type="button"
           aria-label="Rotate left"
-          className={tool}
+          className={btn}
           onClick={() => setRot((r) => r - 90)}
         >
-          <Icons.RotateCcw size={18} />
+          <Icons.RotateCcw size={16} />
         </button>
         <button
           type="button"
           aria-label="Rotate right"
-          className={tool}
+          className={btn}
           onClick={() => setRot((r) => r + 90)}
         >
-          <Icons.RotateCw size={18} />
+          <Icons.RotateCw size={16} />
         </button>
-        {n > 1 && (
-          <span className="ml-1 pl-3 border-l border-white/20 text-white text-xs font-semibold">
-            {i + 1} / {n}
-          </span>
-        )}
+        <button
+          type="button"
+          aria-label="Flip horizontal"
+          className={btn}
+          onClick={() => setFlipX((v) => -v)}
+        >
+          <Icons.FlipHorizontal size={16} />
+        </button>
+        <button
+          type="button"
+          aria-label="Flip vertical"
+          className={btn}
+          onClick={() => setFlipY((v) => -v)}
+        >
+          <Icons.FlipVertical size={16} />
+        </button>
+      </div>
+
+      {/* Thumbnail strip */}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-2 overflow-x-auto bg-black/55 px-4 py-2"
+        style={{
+          paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 8px)",
+        }}
+      >
+        {images.map((im, k) => (
+          <button
+            key={k}
+            type="button"
+            aria-label={`Image ${k + 1}`}
+            onClick={() => {
+              setFailed(false);
+              resetView();
+              setI(k);
+            }}
+            className={`h-12 w-12 shrink-0 overflow-hidden rounded-md transition ${
+              k === i
+                ? "ring-2 ring-white opacity-100"
+                : "opacity-55 hover:opacity-90"
+            }`}
+          >
+            {im.url ? (
+              <img
+                src={im.url}
+                alt=""
+                className="h-full w-full object-cover"
+                draggable={false}
+              />
+            ) : null}
+          </button>
+        ))}
       </div>
     </div>,
     document.body,
