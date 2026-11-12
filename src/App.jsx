@@ -39270,7 +39270,7 @@ const CustomerApp = (() => {
     // tabs only. Customer tabs begin at Purchased to match the customer-facing
     // Shipment tracking vocabulary and avoid showing internal payment actions.
     ["Purchased", "Purchased", "បានទិញហើយ", ["Purchased"]],
-    ["Intransit", "Intransit", "កំពុងដឹកជញ្ជូន", ["Intransit"]],
+    ["Intransit", "In Transit", "កំពុងដឹកជញ្ជូន", ["Intransit"]],
     ["Inbound Origin", "Inbound Origin", "ចូលឃ្លាំងដើម", ["Inbound Origin"]],
     [
       "Outbound Origin",
@@ -49837,6 +49837,9 @@ const cnNormalizeStatus = (s) => CN_LEGACY_STATUS[s] || s;
 // "Shipping to Branch" and "Inbound Warehouse" keep their own operational
 // names (both share the Delivery colour). Database values are never changed.
 const CN_STAGE_LABEL = {
+  // Display-only: the DB value stays "Shipping to China WH" / "Intransit".
+  "Shipping to China WH": "In Transit",
+  Intransit: "In Transit",
   Inbound: "Inbound Origin",
   Outbound: "Outbound Origin",
   Arrived: "Arrive Destination",
