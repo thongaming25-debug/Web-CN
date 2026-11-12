@@ -57263,7 +57263,11 @@ function CnOrderDetailPage() {
     return saved;
   }
   const next = cnNextStatus(row.status);
-  const canAdvance = canPurchase && cnStatusCanAdvance(row.status);
+  // The Purchased button stays hidden until the customer has paid the order.
+  const awaitingOrderPayment =
+    next === "Purchased" && cnOrderTableStatus(row) === "Waiting Order Payment";
+  const canAdvance =
+    canPurchase && cnStatusCanAdvance(row.status) && !awaitingOrderPayment;
   // Completing the order requires the China → Cambodia shipping fee to be paid.
   const shipFeeBlockDue =
     next === "Complete Order" ? cnShipFeeSummary(parcels).due : 0;
@@ -57981,7 +57985,7 @@ function CnOrderDetailPage() {
                     <dt>Status</dt>
                     <dd>
                       <CnStatusBadge
-                        status={row.status}
+                        status={cnOrderTableStatus(row)}
                         partial={partial}
                         cancelled={cnIsCancelledUnpaid(row)}
                       />
@@ -65927,15 +65931,27 @@ const cdDate = (v) => {
         year: "numeric",
       });
 };
+// Time of day (local), e.g. "05:53 PM"
+const cdTime = (v) => {
+  if (!v) return "";
+  const d = new Date(v);
+  return Number.isNaN(d.getTime())
+    ? ""
+    : d.toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: true,
+      });
+};
+// Under the date: "05:53 PM · 13d ago"
 const cdAgo = (v) => {
   const t = v ? new Date(v).getTime() : NaN;
   if (Number.isNaN(t)) return "";
   const d = Math.floor((Date.now() - t) / 86400000);
-  return d <= 0
-    ? "today"
-    : d < 30
-      ? `${d}d ago`
-      : `${Math.floor(d / 30)}mo ago`;
+  const ago =
+    d <= 0 ? "today" : d < 30 ? `${d}d ago` : `${Math.floor(d / 30)}mo ago`;
+  const time = cdTime(v);
+  return time ? `${time} · ${ago}` : ago;
 };
 const cdAddr = (a) =>
   [a.address, a.commune, a.district, a.province].filter(Boolean).join(", ");
