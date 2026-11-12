@@ -75,6 +75,1671 @@ import {
   createSupabaseAuthProbe,
 } from "./lib/supabaseClient";
 
+// News & Promotions — shared Customer carousel and Admin banner management.
+// Run banners_setup.sql once before using this module. Images are public marketing assets.
+const JZ_BANNER_LANGS = [
+  ["km", "Khmer"],
+  ["en", "English"],
+  ["zh", "Chinese"],
+];
+const JZ_BANNER_EMPTY = {
+  status: "Active",
+  image_mode: "single",
+  action_url: "",
+  images: {},
+  content: {},
+};
+function jzBannerLang(lang) {
+  return /^(km|kh)/i.test(lang) ? "km" : /^zh/i.test(lang) ? "zh" : "en";
+}
+function jzBannerText(row, lang) {
+  const key = jzBannerLang(lang);
+  const get = (field) =>
+    [key, "en", "km", "zh"]
+      .map((k) => row.content?.[k]?.[field])
+      .find((v) => v?.trim()) || "";
+  return { title: get("title"), description: get("description") };
+}
+function jzBannerImage(row, lang, kind = "thumbnail") {
+  const keys =
+    row.image_mode === "single"
+      ? ["shared"]
+      : [jzBannerLang(lang), "en", "km", "zh"];
+  // Keep the full image and thumbnail in the same language whenever possible.
+  const pair = keys.map((k) => row.images?.[k]).find((v) => v?.thumbnail);
+  return pair?.[kind] || pair?.thumbnail || "";
+}
+function jzBannerUrl(value) {
+  if (!value?.trim()) return "";
+  try {
+    const url = new URL(value.trim());
+    return ["https:", "http:"].includes(url.protocol) ? url.href : "";
+  } catch {
+    return "";
+  }
+}
+function jzBannerError(err) {
+  if (["42P01", "PGRST205", "42883", "PGRST202"].includes(err?.code))
+    return "Banner setup is required. Run banners_setup.sql in Supabase, then refresh.";
+  return err?.message || "Could not save banners. Please try again.";
+}
+async function jzBannerFetch(admin = false) {
+  if (!supabase)
+    throw new Error("Connect Supabase to manage and publish banners.");
+  let query = supabase
+    .from("jz_banners")
+    .select("*")
+    .order("sort_order")
+    .order("id");
+  if (!admin) query = query.eq("status", "Active");
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+// Customer banners are cached in memory and localStorage so the Home card renders
+// instantly (like the summary cards) and refreshes silently in the background.
+const JZ_BANNER_CACHE_KEY = "jz_banners_active_v1";
+let jzBannerMemory = null; // null = never loaded; [] = loaded and empty
+const jzBannerWarm = new Set();
+function jzBannerCached() {
+  if (jzBannerMemory) return jzBannerMemory;
+  try {
+    const saved = JSON.parse(
+      window.localStorage.getItem(JZ_BANNER_CACHE_KEY) || "null",
+    );
+    if (Array.isArray(saved)) jzBannerMemory = saved;
+  } catch {
+    /* storage unavailable: fall back to network only */
+  }
+  return jzBannerMemory;
+}
+function jzBannerRemember(rows) {
+  jzBannerMemory = rows;
+  try {
+    window.localStorage.setItem(JZ_BANNER_CACHE_KEY, JSON.stringify(rows));
+  } catch {
+    /* ignore quota/private-mode errors */
+  }
+  // Warm the browser image cache so thumbnails never flash in after the card.
+  rows.forEach((row) =>
+    Object.values(row.images || {}).forEach((pair) => {
+      const url = pair?.thumbnail;
+      if (url && !jzBannerWarm.has(url)) {
+        jzBannerWarm.add(url);
+        const image = new Image();
+        image.decoding = "async";
+        image.src = url;
+      }
+    }),
+  );
+}
+function jzBannerSame(a, b) {
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
+  }
+}
+function useJzBanners(admin = false) {
+  const [state, setState] = useState(() => {
+    const cached = admin ? null : jzBannerCached();
+    return { rows: cached || [], loading: !cached, error: "" };
+  });
+  const epoch = useRef(0);
+  const alive = useRef(false);
+  async function refresh() {
+    const request = ++epoch.current;
+    try {
+      const rows = await jzBannerFetch(admin);
+      if (!admin) jzBannerRemember(rows);
+      if (alive.current && request === epoch.current)
+        // Same data: keep the existing state so nothing re-renders or flickers.
+        setState((s) =>
+          !s.loading && !s.error && jzBannerSame(s.rows, rows)
+            ? s
+            : { rows, loading: false, error: "" },
+        );
+    } catch (err) {
+      // A failed refresh must never blank banners that are already on screen.
+      if (alive.current && request === epoch.current)
+        setState((s) => ({
+          ...s,
+          loading: false,
+          error: jzBannerError(err),
+        }));
+    }
+  }
+  useEffect(() => {
+    alive.current = true;
+    refresh();
+    const visibleRefresh = () => {
+      if (!document.hidden) refresh();
+    };
+    const timer = setInterval(visibleRefresh, 60000);
+    window.addEventListener("focus", visibleRefresh);
+    document.addEventListener("visibilitychange", visibleRefresh);
+    window.addEventListener("jz-banners-updated", visibleRefresh);
+    return () => {
+      alive.current = false;
+      ++epoch.current;
+      clearInterval(timer);
+      window.removeEventListener("focus", visibleRefresh);
+      document.removeEventListener("visibilitychange", visibleRefresh);
+      window.removeEventListener("jz-banners-updated", visibleRefresh);
+    };
+  }, [admin]);
+  return { ...state, refresh };
+}
+function JzBannerStyle() {
+  return (
+    <style>{`
+    .jzb{--b-bg:var(--jz-c-card,#fff);--b-text:var(--jz-c-text,#17263e);--b-muted:var(--jz-c-muted,#66758b);--b-line:var(--jz-c-border,#e4e9f1);color:var(--b-text)}
+    .cb-admin-dark .jzb{--b-bg:#142137;--b-text:#e8eef8;--b-muted:#a1b1ca;--b-line:#2b3b52}
+    .jzb *{box-sizing:border-box}.jzb button,.jzb a,.jzb input,.jzb textarea,.jzb select{font:inherit}
+    .jzb button{cursor:pointer}.jzb button:disabled{opacity:.4;cursor:not-allowed}
+    .jzb button:focus-visible,.jzb a:focus-visible{outline:3px solid #fb923c;outline-offset:3px}
+    .jzb-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+    .jzb-heading h2,.jzb-heading h1{margin:0;font-weight:800}.jzb-heading h2{font-size:16px}
+    .jzb-muted{color:var(--b-muted);font-size:13px}.jzb-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .jzb-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:10px 14px;border:1px solid var(--b-line);border-radius:12px;background:var(--b-bg);color:var(--b-text);text-decoration:none;font-size:14px!important;font-weight:600!important}
+    .jzb-primary{background:#f47c20!important;border-color:#f47c20!important;color:white!important}.jzb-icon{padding:9px}.jzb-danger{color:#e5484d!important}
+    .jzb-card{border:1px solid var(--b-line);border-radius:20px;background:var(--b-bg);padding:20px}
+    .jzb-frame{position:relative;overflow:hidden;border-radius:20px;background:var(--b-bg);box-shadow:0 8px 25px -15px #14284b55;touch-action:pan-y;transition:aspect-ratio .35s ease}
+    .jzb-track{display:flex;height:100%;transition:transform .5s cubic-bezier(.2,.8,.2,1)}
+    .jzb-slide{position:relative;flex:0 0 100%;min-width:0;border:0;padding:0;background:var(--b-bg);color:var(--b-text);height:100%;overflow:hidden}
+    .jzb-slide img{display:block;width:100%;height:100%;object-fit:contain}
+    .jzb-skeleton{aspect-ratio:2.3;background:linear-gradient(90deg,#8b9bb214 25%,#8b9bb230 50%,#8b9bb214 75%);background-size:200% 100%;animation:jzb-shimmer 1.4s linear infinite}
+    @keyframes jzb-shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+    .jzb-dots{display:flex;justify-content:center;align-items:center;gap:2px;margin-top:8px;flex-wrap:wrap}
+    .jzb-dots button{width:24px;height:28px;display:grid;place-items:center;padding:0;border:0;background:transparent}
+    .jzb-dots span{width:6px;height:6px;border-radius:99px;background:#9aa5b6;transition:width .2s}
+    .jzb-dots button[aria-current=true] span{width:19px;background:#f47c20}
+    .jzb-dialog{position:fixed;inset:0;z-index:100000;background:#0009;backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;padding:20px}
+    .jzb-dialog-panel{width:min(100%,760px);max-height:90dvh;overflow:auto;background:var(--b-bg);border-radius:22px;padding:24px;color:var(--b-text)}
+    .jzb-full{padding:0;background:#080c13;color:#fff;display:block;height:100vh;height:100dvh;overflow:hidden;overscroll-behavior:none;backdrop-filter:none;-webkit-backdrop-filter:none;animation:jzb-detail-in 240ms ease-out both}
+    .jzb-full.is-closing{animation:jzb-detail-out 200ms ease-in both;pointer-events:none}
+    .jzb-full .jzb-pager{display:flex;height:100%;min-height:0;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none;animation:jzb-sheet-in 280ms cubic-bezier(.16,1,.3,1) both}
+    .jzb-full .jzb-pager::-webkit-scrollbar{display:none}
+    .jzb-page{flex:0 0 100%;width:100%;min-width:0;height:100%;scroll-snap-align:center;scroll-snap-stop:always;overflow-x:hidden;overflow-y:auto;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch;touch-action:pan-x pan-y pinch-zoom;scrollbar-width:thin;scrollbar-color:#64748b transparent;background:#080c13;outline:0}
+    .jzb-full.is-closing .jzb-pager{animation:jzb-sheet-out 200ms ease-in both}
+    .jzb-detail-content{animation:jzb-content-in 220ms ease-out both}
+    @keyframes jzb-detail-in{from{opacity:0}to{opacity:1}}
+    @keyframes jzb-detail-out{from{opacity:1}to{opacity:0}}
+    @keyframes jzb-sheet-in{from{transform:translate3d(0,24px,0)}to{transform:translate3d(0,0,0)}}
+    @keyframes jzb-sheet-out{from{transform:translate3d(0,0,0)}to{transform:translate3d(0,16px,0)}}
+    @keyframes jzb-content-in{from{opacity:.5}to{opacity:1}}
+    .jzb-page-inner{max-width:660px;min-height:100%;margin:auto;padding-bottom:max(84px,calc(env(safe-area-inset-bottom) + 72px));background:#080c13}
+    .jzb-page-ph{aspect-ratio:3/4;background:#0f1725}
+    .jzb-pdots{position:fixed;left:0;right:0;bottom:max(16px,env(safe-area-inset-bottom));z-index:2;display:flex;justify-content:center;pointer-events:none}
+    .jzb-pdots-in{display:flex;align-items:center;padding:0 8px;border-radius:99px;background:#101827b3;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);pointer-events:auto;max-width:calc(100vw - 32px);overflow:hidden}
+    .jzb-pdots-in button{flex:0 0 auto;width:22px;height:30px;display:grid;place-items:center;padding:0;border:0;background:transparent}
+    .jzb-pdots-in span{width:6px;height:6px;border-radius:99px;background:#ffffff66;transition:width .25s ease,background .25s ease}
+    .jzb-pdots-in button[aria-current=true] span{width:20px;background:#f47c20}
+    .jzb-nav{position:fixed;top:50%;z-index:2;display:none!important;width:44px;height:44px;margin-top:-22px;padding:0!important;border-radius:50%!important;background:#101827bb!important;color:#fff!important;border:1px solid #ffffff44!important;backdrop-filter:blur(8px)}
+    .jzb-nav-prev{left:max(18px,env(safe-area-inset-left))}.jzb-nav-next{right:max(18px,env(safe-area-inset-right))}
+    @media(hover:hover) and (pointer:fine){.jzb-nav{display:inline-flex!important}}
+    .jzb-full-image{width:100%;height:auto;display:block;object-fit:contain}
+    .jzb-close{position:fixed;right:max(18px,env(safe-area-inset-right));top:max(18px,env(safe-area-inset-top));z-index:2;background:#101827bb!important;color:#fff!important;border:1px solid #ffffff44!important;border-radius:50%;width:44px;height:44px;backdrop-filter:blur(8px)}
+    .jzb-full-copy{padding:24px;white-space:pre-wrap;overflow-wrap:anywhere}.jzb-full-copy h2{font-size:23px;font-weight:800;margin:0 0 14px}.jzb-full-copy p{font-size:16px;line-height:1.85;margin:0 0 20px;color:#d5deed}
+    .jzb-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.jzb-field{display:block;font-size:13px;font-weight:600;margin-bottom:16px}
+    .jzb-field input,.jzb-field select,.jzb-field textarea{display:block;width:100%;border:1px solid var(--b-line);border-radius:10px;background:var(--b-bg);color:var(--b-text);padding:11px;margin-top:7px;font-size:16px;outline-color:#f47c20}
+    .jzb-tabs{display:flex;gap:6px;margin:18px 0;border-bottom:1px solid var(--b-line);padding-bottom:10px}
+    .jzb-upload{border:1.5px dashed var(--b-line);border-radius:14px;padding:12px;min-height:148px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;position:relative;cursor:pointer}
+    .jzb-upload img{height:115px;width:100%;object-fit:contain;border-radius:8px}.jzb-upload input{max-width:100%;font-size:12px}
+    .jzb-row{display:flex;align-items:center;gap:16px;padding:14px;border:1px solid var(--b-line);border-radius:16px;margin-top:10px;background:var(--b-bg)}
+    .jzb-row-thumb{width:120px;aspect-ratio:2.3;object-fit:contain;border-radius:9px;background:#8b9bb21a}.jzb-row-copy{flex:1;min-width:0}.jzb-row-copy strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}.jzb-row-copy p{margin:5px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .jzb-list{position:relative}
+    .jzb-row{position:relative;cursor:default;transition:transform .22s cubic-bezier(.2,.8,.2,1),box-shadow .2s,opacity .2s,border-color .2s;will-change:transform}
+    .jzb-row.sortable{cursor:grab;-webkit-user-select:none;user-select:none}
+    .jzb-row.sortable:hover{border-color:#f47c2066}
+    .jzb-row img{-webkit-user-drag:none;user-drag:none;pointer-events:none}
+    .jzb-row.is-lifted{z-index:5;cursor:grabbing;border-color:#f47c20;box-shadow:0 22px 44px -16px #14284b80,0 8px 18px -8px #14284b44}
+    .jzb-list.is-sorting .jzb-row:not(.is-lifted){opacity:.72}
+    .jzb-grip{display:grid;place-items:center;width:36px;height:44px;border-radius:10px;color:var(--b-muted);cursor:grab;flex:0 0 auto;touch-action:none;-webkit-user-select:none;user-select:none;transition:background .15s,color .15s}
+    .jzb-grip:hover{background:#8b9bb21a;color:var(--b-text)}.jzb-row.is-lifted .jzb-grip{color:#f47c20;cursor:grabbing}
+    body.jzb-dragging,body.jzb-dragging *{cursor:grabbing!important;-webkit-user-select:none!important;user-select:none!important}
+    .jzb-num{display:grid;place-items:center;min-width:36px;height:36px;padding:0 8px;border-radius:10px;background:#3b82f61a;color:#2563eb;font-weight:800;font-size:13px;flex:0 0 auto}
+    .jzb-act{display:inline-grid;place-items:center;width:36px;height:36px;border:0;border-radius:10px;background:transparent;color:#2563eb;transition:background .15s}
+    .jzb-act:hover:not(:disabled){background:#3b82f61a}.jzb-act.del{color:#e5484d}.jzb-act.del:hover:not(:disabled){background:#e5484d1a}
+    .jzb-pill{display:inline-block;padding:3px 8px;border-radius:99px;font-size:11px;background:#8b9bb21a;color:var(--b-muted)}.jzb-pill.active{background:#10b98120;color:#059669}
+    .jzb-notice{padding:12px 14px;border-radius:12px;background:#f47c2012;font-size:13px;margin:12px 0;line-height:1.6}.jzb-error{background:#ef444412;color:#dc4747}
+    .jzb-empty{padding:48px 20px;text-align:center}.jzb-empty svg{margin:0 auto 14px;color:#f47c20}
+    @media(max-width:600px){.jzb-dialog{padding:10px}.jzb-full{padding:0}.jzb-dialog-panel{padding:18px;max-height:94dvh}.jzb-grid{grid-template-columns:1fr}.jzb-row{flex-wrap:wrap;gap:10px}.jzb-row-thumb{width:90px}.jzb-row>.jzb-actions{width:100%;justify-content:flex-end}.jzb-card{padding:14px}}
+    @media(prefers-reduced-motion:reduce){.jzb-row{transition:none!important}.jzb-skeleton{animation:none}.jzb-track,.jzb-dots span,.jzb-frame{transition:none}.jzb-full,.jzb-full.is-closing,.jzb-full .jzb-pager,.jzb-full.is-closing .jzb-pager{animation:none!important;scroll-behavior:auto!important}}
+  `}</style>
+  );
+}
+function JzBannerDialog({
+  children,
+  onClose,
+  full = false,
+  label = "Banner details",
+  dark = false,
+  closing = false,
+}) {
+  const root = useRef(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+  useEffect(() => {
+    const previous = document.activeElement;
+    const body = document.body;
+    const scrollX = window.scrollX,
+      scrollY = window.scrollY;
+    const saved = Object.fromEntries(
+      ["overflow", "position", "top", "left", "width", "paddingRight"].map(
+        (key) => [key, body.style[key]],
+      ),
+    );
+    const gap = Math.max(
+      0,
+      window.innerWidth - document.documentElement.clientWidth,
+    );
+    body.style.overflow = "hidden";
+    // Fixed body also locks the background on iOS; the detail article scrolls independently.
+    if (full) {
+      const padding =
+        parseFloat(window.getComputedStyle(body).paddingRight) || 0;
+      Object.assign(body.style, {
+        position: "fixed",
+        top: `-${scrollY}px`,
+        left: `-${scrollX}px`,
+        width: "100%",
+      });
+      if (gap) body.style.paddingRight = `${padding + gap}px`;
+    }
+    root.current?.querySelector("button")?.focus({ preventScroll: true });
+    const keys = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close.current();
+      }
+      if (e.key === "Tab") {
+        const items = [
+          ...root.current.querySelectorAll(
+            'button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]',
+          ),
+        ].filter((el) => el.getClientRects().length);
+        const first = items[0],
+          last = items[items.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last?.focus();
+        }
+        if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", keys);
+    return () => {
+      Object.assign(body.style, saved);
+      if (full && (window.scrollX !== scrollX || window.scrollY !== scrollY)) {
+        const html = document.documentElement;
+        const behavior = html.style.scrollBehavior;
+        html.style.scrollBehavior = "auto";
+        window.scrollTo(scrollX, scrollY);
+        html.style.scrollBehavior = behavior;
+      }
+      document.removeEventListener("keydown", keys);
+      if (previous?.isConnected) previous.focus?.({ preventScroll: true });
+    };
+  }, [full]);
+  return createPortal(
+    <div
+      className={`jzb jzb-dialog ${full ? "jzb-full" : ""} ${closing ? "is-closing" : ""}`}
+      style={
+        dark
+          ? {
+              "--b-bg": "#142137",
+              "--b-text": "#e8eef8",
+              "--b-muted": "#a1b1ca",
+              "--b-line": "#2b3b52",
+            }
+          : undefined
+      }
+      ref={root}
+      role="dialog"
+      aria-modal="true"
+      aria-label={label}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <JzBannerStyle />
+      {children}
+    </div>,
+    document.body,
+  );
+}
+function JzBannerPicture({ src, alt, className, onLoad }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [src]);
+  return src && !failed ? (
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      onLoad={onLoad}
+      ref={(el) => {
+        // cached images can finish before React attaches onLoad
+        if (el && onLoad && el.complete && el.naturalWidth)
+          onLoad({ currentTarget: el });
+      }}
+      onError={() => setFailed(true)}
+    />
+  ) : (
+    <div
+      className={className}
+      style={{ display: "grid", placeItems: "center", minHeight: 100 }}
+    >
+      <Icons.ImageOff aria-label="Image unavailable" size={30} />
+    </div>
+  );
+}
+function JzBannerViewer({
+  rows,
+  index,
+  onIndex,
+  onClose,
+  lang = "en",
+  detailLabel = "View details",
+}) {
+  const pager = useRef(null),
+    closeTimer = useRef(null),
+    lockTimer = useRef(null),
+    frame = useRef(0),
+    lock = useRef(false),
+    syncing = useRef(null);
+  const closingRef = useRef(false),
+    onCloseRef = useRef(onClose),
+    onIndexRef = useRef(onIndex),
+    indexRef = useRef(index);
+  const total = rows.length;
+  const current = Math.min(Math.max(index, 0), Math.max(total - 1, 0));
+  onCloseRef.current = onClose;
+  onIndexRef.current = onIndex;
+  indexRef.current = current;
+  const [closing, setClosing] = useState(false);
+  const row = rows[current] || rows[0];
+  const content = row ? jzBannerText(row, lang) : {};
+  const reduced = () =>
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const go = (target) => {
+    if (closingRef.current || total < 2) return;
+    const next = Math.min(Math.max(target, 0), total - 1);
+    if (next !== indexRef.current) onIndexRef.current(next);
+  };
+  const requestClose = () => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    if (reduced()) {
+      onCloseRef.current();
+      return;
+    }
+    setClosing(true);
+    closeTimer.current = window.setTimeout(() => onCloseRef.current(), 200);
+  };
+  // Move the pager to the active page (instant on open, smooth for dots/arrows/keys).
+  const align = (behavior) => {
+    const el = pager.current;
+    if (!el) return;
+    const left = indexRef.current * el.clientWidth;
+    if (Math.abs(el.scrollLeft - left) < 2) return;
+    window.clearTimeout(lockTimer.current);
+    if (behavior === "smooth") {
+      // Ignore scroll events caused by this animation so dots do not flicker.
+      lock.current = true;
+      lockTimer.current = window.setTimeout(() => {
+        lock.current = false;
+      }, 700);
+    }
+    el.scrollTo({ left, behavior });
+  };
+  const onScroll = () => {
+    if (frame.current) return;
+    frame.current = window.requestAnimationFrame(() => {
+      frame.current = 0;
+      const el = pager.current;
+      if (!el || !el.clientWidth || closingRef.current) return;
+      if (lock.current) {
+        if (Math.abs(el.scrollLeft - indexRef.current * el.clientWidth) < 2) {
+          lock.current = false;
+          window.clearTimeout(lockTimer.current);
+        }
+        return;
+      }
+      const page = Math.round(el.scrollLeft / el.clientWidth);
+      if (page >= 0 && page < total && page !== indexRef.current) {
+        syncing.current = page; // the user swiped: do not animate again
+        onIndexRef.current(page);
+      }
+    });
+  };
+  useEffect(
+    () => () => {
+      window.clearTimeout(closeTimer.current);
+      window.clearTimeout(lockTimer.current);
+      window.cancelAnimationFrame(frame.current);
+    },
+    [],
+  );
+  useLayoutEffect(() => {
+    lock.current = false;
+    align("auto"); // open directly on the tapped banner, no animation
+  }, [lang]);
+  useEffect(() => {
+    if (syncing.current === current) {
+      syncing.current = null;
+      return;
+    }
+    align(reduced() ? "auto" : "smooth");
+  }, [current]);
+  useEffect(() => {
+    const resize = () => {
+      const el = pager.current;
+      if (el) el.scrollLeft = indexRef.current * el.clientWidth;
+    };
+    window.addEventListener("resize", resize);
+    window.addEventListener("orientationchange", resize);
+    return () => {
+      window.removeEventListener("resize", resize);
+      window.removeEventListener("orientationchange", resize);
+    };
+  }, []);
+  useEffect(() => {
+    const key = (e) => {
+      if (
+        e.altKey ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.target?.closest?.("input,textarea,select,[contenteditable=true]")
+      )
+        return;
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        go(indexRef.current + 1);
+      }
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        go(indexRef.current - 1);
+      }
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [total]);
+  if (!row) return null;
+  return (
+    <JzBannerDialog
+      full
+      closing={closing}
+      onClose={requestClose}
+      label={content.title || detailLabel}
+    >
+      <button
+        className="jzb-btn jzb-close"
+        aria-label="Close banner"
+        onClick={requestClose}
+      >
+        <X size={23} />
+      </button>
+      <div
+        ref={pager}
+        className="jzb-pager"
+        data-no-pull-refresh
+        onScroll={onScroll}
+      >
+        {rows.map((r, i) => {
+          const text = jzBannerText(r, lang);
+          const active = i === current;
+          // Only the active page and its neighbours load their full image.
+          const near = Math.abs(i - current) <= 1;
+          return (
+            <article
+              key={`${r.id}-${lang}`}
+              className="jzb-page"
+              tabIndex={active ? 0 : -1}
+              aria-hidden={!active}
+              aria-label={text.title || detailLabel}
+            >
+              <div className="jzb-page-inner">
+                {near ? (
+                  <JzBannerPicture
+                    src={jzBannerImage(r, lang, "full")}
+                    alt={text.title || detailLabel}
+                    className="jzb-full-image"
+                  />
+                ) : (
+                  <div className="jzb-page-ph" />
+                )}
+                <div className="jzb-full-copy">
+                  {text.title && <h2>{text.title}</h2>}
+                  {text.description && <p>{text.description}</p>}
+                  {jzBannerUrl(r.action_url) && (
+                    <a
+                      className="jzb-btn jzb-primary"
+                      href={jzBannerUrl(r.action_url)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      tabIndex={active ? 0 : -1}
+                    >
+                      {detailLabel}
+                      <Icons.ExternalLink size={16} />
+                    </a>
+                  )}
+                </div>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+      {total > 1 && (
+        <>
+          <button
+            className="jzb-btn jzb-nav jzb-nav-prev"
+            aria-label="Previous banner"
+            disabled={current === 0}
+            onClick={() => go(current - 1)}
+          >
+            <Icons.ChevronLeft size={22} />
+          </button>
+          <button
+            className="jzb-btn jzb-nav jzb-nav-next"
+            aria-label="Next banner"
+            disabled={current === total - 1}
+            onClick={() => go(current + 1)}
+          >
+            <ChevronRight size={22} />
+          </button>
+          <div className="jzb-pdots">
+            <div className="jzb-pdots-in" aria-live="polite">
+              {rows.map((r, i) => (
+                <button
+                  key={r.id}
+                  aria-label={`Banner ${i + 1} / ${total}`}
+                  aria-current={i === current}
+                  onClick={() => go(i)}
+                >
+                  <span />
+                </button>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </JzBannerDialog>
+  );
+}
+// Remember each banner image's real shape between visits to Home, so the card
+// opens at its final height instead of starting at 2.3 and animating to it.
+const JZ_RATIO_KEY = "jz-banner-ratios";
+let jzRatioCache = null;
+function jzRatiosLoad() {
+  if (jzRatioCache) return jzRatioCache;
+  try {
+    const raw = window.localStorage.getItem(JZ_RATIO_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    jzRatioCache = parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    jzRatioCache = {};
+  }
+  return jzRatioCache;
+}
+function jzRatioSave(id, ratio) {
+  const cache = jzRatiosLoad();
+  if (Math.abs((cache[id] || 0) - ratio) < 0.001) return;
+  cache[id] = ratio;
+  try {
+    window.localStorage.setItem(JZ_RATIO_KEY, JSON.stringify(cache));
+  } catch {
+    /* storage unavailable: the in-memory cache still works for this session */
+  }
+}
+function JzCustomerBanners({
+  lang = "en",
+  title = "News & Promotions",
+  detailLabel = "View details",
+}) {
+  const { rows: fetched, loading } = useJzBanners();
+  const rows = fetched.filter((row) => jzBannerImage(row, lang));
+  const [index, setIndex] = useState(0);
+  const [viewer, setViewer] = useState(null);
+  const [paused, setPaused] = useState(false);
+  const [manualPause, setManualPause] = useState(false);
+  const [hidden, setHidden] = useState(document.hidden);
+  const [reduced, setReduced] = useState(
+    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+  const touch = useRef(null),
+    swiped = useRef(false);
+  const [ratios, setRatios] = useState(() => ({ ...jzRatiosLoad() }));
+  const noteRatio = (id, img) => {
+    if (!img?.naturalWidth || !img.naturalHeight) return;
+    const r = img.naturalWidth / img.naturalHeight;
+    jzRatioSave(id, r);
+    setRatios((p) =>
+      Math.abs((p[id] || 0) - r) < 0.001 ? p : { ...p, [id]: r },
+    );
+  };
+  const ids = rows.map((r) => r.id).join("|");
+  useEffect(() => {
+    setIndex(0);
+    setViewer(null);
+  }, [ids]);
+  useEffect(() => {
+    const visibility = () => setHidden(document.hidden);
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const motion = () => setReduced(media.matches);
+    document.addEventListener("visibilitychange", visibility);
+    media.addEventListener("change", motion);
+    return () => {
+      document.removeEventListener("visibilitychange", visibility);
+      media.removeEventListener("change", motion);
+    };
+  }, []);
+  useEffect(() => {
+    if (
+      rows.length < 2 ||
+      paused ||
+      manualPause ||
+      hidden ||
+      reduced ||
+      viewer !== null
+    )
+      return;
+    const timer = setInterval(
+      () => setIndex((i) => (i + 1) % rows.length),
+      5000,
+    );
+    return () => clearInterval(timer);
+  }, [rows.length, paused, manualPause, hidden, reduced, viewer, index]);
+  const fullImage = rows.length
+    ? jzBannerImage(rows[index % rows.length], lang, "full")
+    : "";
+  useEffect(() => {
+    if (!fullImage || window.navigator.connection?.saveData) return;
+    const image = new Image();
+    image.decoding = "async";
+    image.src = fullImage;
+    // The browser cache can serve this image when the customer opens the detail.
+    if (image.decode) image.decode().catch(() => {});
+  }, [fullImage]);
+  if (!rows.length) {
+    if (!loading) return null;
+    // First ever load: hold the card's space so the page does not jump.
+    return (
+      <section className="jzb" aria-label={title} aria-busy="true">
+        <JzBannerStyle />
+        <div className="jzb-heading">
+          <h2>{title}</h2>
+        </div>
+        <div
+          className="jzb-frame jzb-skeleton"
+          style={{
+            aspectRatio: Math.min(
+              3,
+              Math.max(1.3, Object.values(jzRatiosLoad())[0] || 2.3),
+            ),
+          }}
+        />
+        <div style={{ height: 36 }} />
+      </section>
+    );
+  }
+  const current = index % rows.length;
+  // Show the whole picture: the card takes the current image's own shape (kept within sane limits).
+  const frameRatio = Math.min(
+    3,
+    Math.max(1.3, ratios[rows[current].id] || 2.3),
+  );
+  return (
+    <section className="jzb" aria-label={title}>
+      <JzBannerStyle />
+      <div className="jzb-heading">
+        <h2>{title}</h2>
+        {rows.length > 1 && !reduced && (
+          <button
+            className="jzb-btn jzb-icon"
+            style={{ padding: 5, border: 0, background: "transparent" }}
+            aria-label={manualPause ? "Play slideshow" : "Pause slideshow"}
+            onClick={() => setManualPause((p) => !p)}
+          >
+            {manualPause ? <Icons.Play size={15} /> : <Icons.Pause size={15} />}
+          </button>
+        )}
+      </div>
+      <div
+        className="jzb-frame"
+        style={{ aspectRatio: frameRatio }}
+        onMouseEnter={() => setPaused(true)}
+        onMouseLeave={() => setPaused(false)}
+        onFocusCapture={() => setPaused(true)}
+        onBlurCapture={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget)) setPaused(false);
+        }}
+        onTouchStart={(e) => {
+          touch.current = [e.touches[0].clientX, e.touches[0].clientY];
+          swiped.current = false;
+          setPaused(true);
+        }}
+        onTouchCancel={() => {
+          touch.current = null;
+          setPaused(false);
+        }}
+        onTouchEnd={(e) => {
+          if (touch.current) {
+            const dx = e.changedTouches[0].clientX - touch.current[0],
+              dy = e.changedTouches[0].clientY - touch.current[1];
+            if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+              swiped.current = true;
+              setIndex(
+                (i) => (i + (dx < 0 ? 1 : -1) + rows.length) % rows.length,
+              );
+            }
+          }
+          touch.current = null;
+          setPaused(false);
+        }}
+      >
+        <div
+          className="jzb-track"
+          style={{ transform: `translateX(-${current * 100}%)` }}
+        >
+          {rows.map((row, i) => (
+            <button
+              type="button"
+              key={row.id}
+              className="jzb-slide"
+              tabIndex={i === current ? 0 : -1}
+              aria-hidden={i !== current}
+              aria-label={`${detailLabel}: ${jzBannerText(row, lang).title || i + 1}`}
+              onClick={() => {
+                if (swiped.current) {
+                  swiped.current = false;
+                  return;
+                }
+                setViewer(i);
+              }}
+            >
+              <JzBannerPicture
+                src={jzBannerImage(row, lang)}
+                alt={jzBannerText(row, lang).title || title}
+                onLoad={(e) => noteRatio(row.id, e.currentTarget)}
+              />
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="jzb-dots">
+        {rows.length > 1 &&
+          rows.map((row, i) => (
+            <button
+              key={row.id}
+              aria-label={`Show banner ${i + 1}`}
+              aria-current={i === current}
+              onClick={() => setIndex(i)}
+            >
+              <span />
+            </button>
+          ))}
+      </div>
+      {viewer !== null && (
+        <JzBannerViewer
+          rows={rows}
+          index={viewer}
+          onIndex={(i) => {
+            setViewer(i);
+            setIndex(i);
+          }}
+          onClose={() => setViewer(null)}
+          lang={lang}
+          detailLabel={detailLabel}
+        />
+      )}
+    </section>
+  );
+}
+function JzBannerEditor({ row, nextOrder, onClose, onSaved, dark }) {
+  const [draft, setDraft] = useState(() =>
+    JSON.parse(JSON.stringify(row || JZ_BANNER_EMPTY)),
+  );
+  const [lang, setLang] = useState("km");
+  const [files, setFiles] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const urls = useRef([]);
+  const saving = useRef(false);
+  useEffect(
+    () => () => urls.current.forEach((url) => URL.revokeObjectURL(url)),
+    [],
+  );
+  const imageKey = draft.image_mode === "single" ? "shared" : lang;
+  const updateContent = (key, value) =>
+    setDraft((d) => ({
+      ...d,
+      content: { ...d.content, [lang]: { ...d.content[lang], [key]: value } },
+    }));
+  function choose(file, kind) {
+    if (!file) return;
+    if (
+      !["image/jpeg", "image/png", "image/webp", "image/gif"].includes(
+        file.type,
+      ) ||
+      file.size > 5 * 1024 * 1024
+    ) {
+      setError("Choose a JPG, PNG, WEBP or GIF image up to 5 MB.");
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    urls.current.push(url);
+    setFiles((f) => ({ ...f, [`${imageKey}.${kind}`]: file }));
+    setDraft((d) => ({
+      ...d,
+      images: {
+        ...d.images,
+        [imageKey]: { ...d.images[imageKey], [kind]: url },
+      },
+    }));
+    setError("");
+  }
+  async function save(e) {
+    e.preventDefault();
+    if (saving.current) return;
+    setError("");
+    if (draft.action_url.trim() && !jzBannerUrl(draft.action_url)) {
+      setError("Action link must be a complete http:// or https:// URL.");
+      return;
+    }
+    const keys =
+      draft.image_mode === "single"
+        ? ["shared"]
+        : JZ_BANNER_LANGS.map(([key]) => key);
+    if (!keys.some((key) => draft.images[key]?.thumbnail)) {
+      setError("Upload at least one thumbnail image.");
+      return;
+    }
+    if (
+      keys.some(
+        (key) => draft.images[key]?.full && !draft.images[key]?.thumbnail,
+      )
+    ) {
+      setError("Add a thumbnail for each language that has a full image.");
+      return;
+    }
+    saving.current = true;
+    setBusy(true);
+    const uploaded = [];
+    try {
+      if (!supabase) throw new Error("Connect Supabase first.");
+      const images = {};
+      for (const key of keys) {
+        if (!draft.images[key]?.thumbnail) continue;
+        images[key] = {};
+        for (const kind of ["thumbnail", "full"]) {
+          const file = files[`${key}.${kind}`];
+          let url = draft.images[key]?.[kind] || "";
+          if (file) {
+            const ext = {
+              "image/jpeg": "jpg",
+              "image/png": "png",
+              "image/webp": "webp",
+              "image/gif": "gif",
+            }[file.type];
+            const path = `${crypto.randomUUID()}/${key}-${kind}.${ext}`;
+            const result = await supabase.storage
+              .from("jz-banner-assets")
+              .upload(path, file, { contentType: file.type, upsert: false });
+            if (result.error) throw result.error;
+            uploaded.push(path);
+            url = supabase.storage.from("jz-banner-assets").getPublicUrl(path)
+              .data.publicUrl;
+          }
+          if (url) images[key][kind] = url;
+        }
+      }
+      const payload = {
+        status: draft.status,
+        image_mode: draft.image_mode,
+        action_url: jzBannerUrl(draft.action_url),
+        images,
+        content: draft.content,
+      };
+      const query = row
+        ? supabase
+            .from("jz_banners")
+            .update(payload)
+            .eq("id", row.id)
+            .eq("revision", row.revision)
+        : supabase
+            .from("jz_banners")
+            .insert({ ...payload, sort_order: nextOrder });
+      const result = await query.select("id");
+      if (result.error) throw result.error;
+      if (!result.data?.length)
+        throw new Error(
+          "This banner was changed by another admin. Close, refresh and try again.",
+        );
+      emitCBToast(
+        "ok",
+        row ? "Banner updated" : "Banner created",
+        row
+          ? "Your changes were saved successfully."
+          : "The new banner was created successfully.",
+      );
+      onSaved();
+    } catch (err) {
+      // A network error may occur after the DB committed. Keep uploads to avoid
+      // deleting images referenced by a successful but unacknowledged write.
+      const msg = jzBannerError(err);
+      setError(msg);
+      emitCBToast("err", row ? "Update failed" : "Create failed", msg);
+    } finally {
+      saving.current = false;
+      setBusy(false);
+    }
+  }
+  return (
+    <AppModal
+      title={row ? "Update Banner" : "Create Banner"}
+      subtitle="News, services and promotions for your customers."
+      maxW="max-w-3xl"
+      onClose={() => {
+        if (!saving.current) onClose();
+      }}
+      onSubmit={save}
+      error={error}
+      busy={busy}
+      submitLabel={row ? "Update Banner" : "Create Banner"}
+      busyLabel="Saving…"
+    >
+      <div
+        className="jzb"
+        style={{
+          "--b-bg": "var(--cbx-card)",
+          "--b-text": "var(--cbx-text)",
+          "--b-muted": "var(--cbx-muted)",
+          "--b-line": "var(--cbx-border)",
+        }}
+      >
+        <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0 }}>
+          <div className="jzb-grid">
+            <label className="jzb-field">
+              Type
+              <input value="Main Banner" readOnly />
+            </label>
+            <label className="jzb-field">
+              Status
+              <select
+                value={draft.status}
+                onChange={(e) => setDraft({ ...draft, status: e.target.value })}
+              >
+                <option>Active</option>
+                <option>Inactive</option>
+              </select>
+            </label>
+          </div>
+          <label className="jzb-field">
+            Action link <span className="jzb-muted">· Optional</span>
+            <input
+              type="url"
+              placeholder="https://…"
+              value={draft.action_url}
+              onChange={(e) =>
+                setDraft({ ...draft, action_url: e.target.value })
+              }
+            />
+          </label>
+          <div className="jzb-heading">
+            <strong>Banner images</strong>
+            <div className="jzb-actions">
+              {[
+                ["single", "Single image"],
+                ["language", "Per language"],
+              ].map(([value, label]) => (
+                <button
+                  type="button"
+                  key={value}
+                  className={`jzb-btn ${draft.image_mode === value ? "jzb-primary" : ""}`}
+                  onClick={() => setDraft({ ...draft, image_mode: value })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="jzb-notice">
+            {draft.image_mode === "single"
+              ? "One image set is used for Khmer, English and Chinese."
+              : "Choose a language below to upload its images. Missing languages use the available English, Khmer or Chinese image set."}
+          </div>
+          <div className="jzb-tabs" aria-label="Content language">
+            {JZ_BANNER_LANGS.map(([key, label]) => (
+              <button
+                type="button"
+                key={key}
+                className={`jzb-btn ${lang === key ? "jzb-primary" : ""}`}
+                aria-pressed={lang === key}
+                onClick={() => setLang(key)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="jzb-grid">
+            {[
+              ["thumbnail", "Thumbnail image"],
+              ["full", "Full image (optional)"],
+            ].map(([kind, label]) => (
+              <div key={`${imageKey}-${kind}`}>
+                <label className="jzb-field">
+                  {label}
+                  <span className="jzb-upload">
+                    {draft.images[imageKey]?.[kind] ? (
+                      <img src={draft.images[imageKey][kind]} alt={label} />
+                    ) : (
+                      <Icons.UploadCloud size={30} />
+                    )}
+                    <input
+                      type="file"
+                      aria-label={label}
+                      accept="image/jpeg,image/png,image/webp,image/gif"
+                      onChange={(e) => choose(e.target.files?.[0], kind)}
+                    />
+                    <span className="jzb-muted">
+                      JPG, PNG, WEBP, GIF · Max 5 MB
+                    </span>
+                  </span>
+                </label>
+                {draft.images[imageKey]?.[kind] && (
+                  <button
+                    type="button"
+                    className="jzb-btn jzb-danger"
+                    onClick={() => {
+                      setFiles((f) => {
+                        const next = { ...f };
+                        delete next[`${imageKey}.${kind}`];
+                        return next;
+                      });
+                      setDraft((d) => ({
+                        ...d,
+                        images: {
+                          ...d.images,
+                          [imageKey]: { ...d.images[imageKey], [kind]: "" },
+                        },
+                      }));
+                    }}
+                  >
+                    Remove image
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          <p className="jzb-muted" style={{ margin: "12px 0 20px" }}>
+            Thumbnail: recommended 1200 × 520 px. Full image: portrait or
+            original size; shown without cropping.
+          </p>
+          <label className="jzb-field">
+            Title · {JZ_BANNER_LANGS.find(([key]) => key === lang)[1]}
+            <input
+              maxLength={180}
+              value={draft.content[lang]?.title || ""}
+              onChange={(e) => updateContent("title", e.target.value)}
+              placeholder="Enter banner title"
+            />
+          </label>
+          <label className="jzb-field">
+            Description
+            <textarea
+              rows={5}
+              maxLength={12000}
+              value={draft.content[lang]?.description || ""}
+              onChange={(e) => updateContent("description", e.target.value)}
+              placeholder="Enter banner description"
+            />
+          </label>
+        </fieldset>
+      </div>
+    </AppModal>
+  );
+}
+// Nearest scrollable ancestor (falls back to the window) — used for drag auto-scroll.
+function jzScrollParent(node) {
+  for (
+    let p = node.parentElement;
+    p && p !== document.body;
+    p = p.parentElement
+  ) {
+    const oy = getComputedStyle(p).overflowY;
+    if (
+      (oy === "auto" || oy === "scroll" || oy === "overlay") &&
+      p.scrollHeight > p.clientHeight + 1
+    )
+      return p;
+  }
+  return window;
+}
+// Loading placeholder for the Banner Management list: mirrors .jzb-row so the
+// page does not jump when the real banners arrive.
+function JzBannerListSkeleton({ rows = 3, canManage = true }) {
+  return (
+    <SkeletonRegion label="Loading banners...">
+      {Array.from({ length: rows }).map((_, i) => (
+        <div className="jzb-row" key={i} style={{ pointerEvents: "none" }}>
+          {canManage && (
+            <Skeleton
+              className="w-5 h-5 rounded-sm shrink-0 mx-2"
+              delay={i * 90}
+            />
+          )}
+          <Skeleton
+            className="h-9 w-9 rounded-[10px] shrink-0"
+            delay={i * 90 + 20}
+          />
+          <Skeleton
+            className="rounded-[9px] shrink-0"
+            style={{ width: 120, aspectRatio: "2.3" }}
+            delay={i * 90 + 40}
+          />
+          <div className="jzb-row-copy" style={{ display: "grid", gap: 8 }}>
+            <Skeleton
+              className="h-4"
+              style={{ width: skWidth(i, 0) }}
+              delay={i * 90 + 60}
+            />
+            <Skeleton
+              className="h-3.5"
+              style={{ width: skWidth(i, 1) }}
+              delay={i * 90 + 100}
+            />
+            <div style={{ display: "flex", gap: 6 }}>
+              <Skeleton
+                className="h-5 w-14 rounded-full"
+                delay={i * 90 + 140}
+              />
+              <Skeleton
+                className="h-5 w-20 rounded-full"
+                delay={i * 90 + 160}
+              />
+              <Skeleton
+                className="h-5 w-20 rounded-full"
+                delay={i * 90 + 180}
+              />
+            </div>
+          </div>
+          {canManage && (
+            <div className="jzb-actions" style={{ gap: 4 }}>
+              <Skeleton
+                className="w-9 h-9 rounded-[10px]"
+                delay={i * 90 + 120}
+              />
+              <Skeleton
+                className="w-9 h-9 rounded-[10px]"
+                delay={i * 90 + 150}
+              />
+            </div>
+          )}
+        </div>
+      ))}
+    </SkeletonRegion>
+  );
+}
+function BannerManagementPage() {
+  const { user } = useAuth();
+  const { dark } = useAdminPrefs();
+  const canManage = hasPermission(user, "banner.manage");
+  const { rows, loading, error, refresh } = useJzBanners(true);
+  const [editor, setEditor] = useState(null),
+    [preview, setPreview] = useState(null),
+    [remove, setRemove] = useState(null);
+  const [busy, setBusy] = useState(false),
+    [message, setMessage] = useState("");
+  const mutating = useRef(false);
+  const [order, setOrder] = useState([]);
+  const [activeId, setActiveId] = useState(null);
+  const orderRef = useRef([]);
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const listRef = useRef(null);
+  const nodes = useRef(new Map());
+  const tops = useRef(new Map());
+  const drag = useRef(null);
+  useEffect(() => {
+    if (!drag.current) {
+      setOrder(rows);
+      orderRef.current = rows;
+    }
+  }, [rows]);
+  useEffect(
+    () => () => {
+      drag.current?.teardown?.();
+      drag.current = null;
+    },
+    [],
+  );
+  // FLIP: every row glides into its new slot instead of jumping.
+  useLayoutEffect(() => {
+    const d = drag.current;
+    nodes.current.forEach((el, id) => {
+      const top = el.offsetTop;
+      const prev = tops.current.get(id);
+      tops.current.set(id, top);
+      if (d && d.id === id) return; // the held row follows the pointer instead
+      if (prev == null || prev === top) return;
+      const cur = new DOMMatrix(getComputedStyle(el).transform).m42 || 0;
+      el.style.transition = "none";
+      el.style.transform = `translateY(${prev + cur - top}px)`;
+      el.getBoundingClientRect();
+      el.style.transition = "";
+      el.style.transform = "";
+    });
+    if (d) {
+      d.pending = false;
+      if (d.active) placeDragged(d);
+    }
+  }, [order]);
+  // Keeps the held row glued to the pointer (also while the page auto-scrolls).
+  function placeDragged(d) {
+    const el = nodes.current.get(d.id);
+    const list = listRef.current;
+    if (!el || !list) return null;
+    const max = Math.max(0, list.offsetHeight - el.offsetHeight);
+    const desired = Math.min(
+      max,
+      Math.max(0, d.pointerY - list.getBoundingClientRect().top - d.grabY),
+    );
+    el.style.transform = `translateY(${desired - el.offsetTop}px) scale(1.015)`;
+    return desired;
+  }
+  // Swap places once the held row's centre passes another row's midpoint.
+  function reorder(d, desired) {
+    const el = nodes.current.get(d.id);
+    if (!el) return;
+    const center = desired + el.offsetHeight / 2;
+    const cur = orderRef.current;
+    const me = cur.find((r) => r.id === d.id);
+    const others = cur.filter((r) => r.id !== d.id);
+    let idx = others.length;
+    for (let i = 0; i < others.length; i++) {
+      const n = nodes.current.get(others[i].id);
+      if (n && center < n.offsetTop + n.offsetHeight / 2) {
+        idx = i;
+        break;
+      }
+    }
+    const next = [...others];
+    next.splice(idx, 0, me);
+    if (next.every((r, i) => r.id === cur[i].id)) return;
+    d.pending = true; // wait for React to commit before measuring again
+    orderRef.current = next;
+    setOrder(next);
+  }
+  function beginDrag(e, row) {
+    if (!canManage || busy || mutating.current || drag.current) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (e.target.closest(".jzb-act")) return;
+    // Touch: only the handle drags, so the page can still scroll normally.
+    if (e.pointerType !== "mouse" && !e.target.closest(".jzb-grip")) return;
+    const el = nodes.current.get(row.id);
+    const list = listRef.current;
+    if (!el || !list) return;
+    if (e.pointerType === "mouse") e.preventDefault();
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+    const d = {
+      id: row.id,
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      pointerY: e.clientY,
+      grabY: e.clientY - el.getBoundingClientRect().top,
+      active: false,
+      pending: false,
+      raf: 0,
+      scroller: jzScrollParent(list),
+    };
+    drag.current = d;
+    const tick = () => {
+      d.raf = 0;
+      if (drag.current !== d || !d.active) return;
+      const sc = d.scroller;
+      let top = 0;
+      let bottom = window.innerHeight;
+      if (sc !== window) {
+        const r = sc.getBoundingClientRect();
+        top = Math.max(0, r.top);
+        bottom = Math.min(window.innerHeight, r.bottom);
+      }
+      const edge = 80;
+      let dy = 0;
+      if (d.pointerY < top + edge)
+        dy = -Math.min(1, (top + edge - d.pointerY) / edge) * 16;
+      else if (d.pointerY > bottom - edge)
+        dy = Math.min(1, (d.pointerY - (bottom - edge)) / edge) * 16;
+      if (dy) {
+        dy = Math.sign(dy) * Math.max(1, Math.round(Math.abs(dy)));
+        if (sc === window) window.scrollBy(0, dy);
+        else sc.scrollTop += dy;
+      }
+      const desired = placeDragged(d);
+      if (desired != null && !d.pending) reorder(d, desired);
+      if (dy) d.raf = requestAnimationFrame(tick);
+    };
+    const schedule = () => {
+      if (!d.raf) d.raf = requestAnimationFrame(tick);
+    };
+    const move = (ev) => {
+      if (ev.pointerId !== d.pointerId) return;
+      d.pointerY = ev.clientY;
+      if (!d.active) {
+        if (Math.hypot(ev.clientX - d.startX, ev.clientY - d.startY) < 5)
+          return;
+        d.active = true; // ignore tiny movements so a plain click never "lifts" a row
+        setActiveId(row.id);
+        document.body.classList.add("jzb-dragging");
+        el.style.transition = "box-shadow .2s ease, border-color .2s ease";
+      }
+      schedule();
+    };
+    const teardown = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      cancelAnimationFrame(d.raf);
+      document.body.classList.remove("jzb-dragging");
+    };
+    d.teardown = teardown;
+    const end = (cancelled) => {
+      teardown();
+      if (drag.current === d) drag.current = null;
+      const node = nodes.current.get(d.id);
+      if (node) {
+        node.style.transition = ""; // back to the CSS transition…
+        node.style.transform = ""; // …so the row settles smoothly into its slot
+      }
+      if (!d.active) return;
+      setActiveId(null);
+      const base = rowsRef.current;
+      const next = orderRef.current;
+      const same =
+        next.length === base.length &&
+        next.every((r, i) => r.id === base[i].id);
+      if (cancelled || same) {
+        orderRef.current = base;
+        setOrder([...base]);
+        return;
+      }
+      mutation(async () => {
+        const { error } = await supabase.rpc("jz_reorder_banners", {
+          items: next.map((r) => ({ id: r.id, revision: r.revision })),
+        });
+        if (error) {
+          setOrder(base);
+          orderRef.current = base;
+          throw error;
+        }
+      }, ["Banner order updated"]);
+    };
+    const up = (ev) => {
+      if (ev.pointerId === d.pointerId) end(false);
+    };
+    const cancel = (ev) => {
+      if (ev.pointerId === d.pointerId) end(true);
+    };
+    window.addEventListener("pointermove", move, { passive: true });
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+  }
+  const changed = () => {
+    window.dispatchEvent(new Event("jz-banners-updated"));
+    refresh();
+  };
+  async function mutation(fn, success) {
+    if (!canManage || mutating.current) return;
+    mutating.current = true;
+    setBusy(true);
+    setMessage("");
+    try {
+      await fn();
+      changed();
+      if (success) emitCBToast("ok", success[0], success[1] || "");
+    } catch (err) {
+      const msg = jzBannerError(err);
+      setMessage(msg);
+      emitCBToast("err", "Banner action failed", msg);
+    } finally {
+      mutating.current = false;
+      setBusy(false);
+    }
+  }
+  const update = async (row, payload) => {
+    const { data, error } = await supabase
+      .from("jz_banners")
+      .update(payload)
+      .eq("id", row.id)
+      .eq("revision", row.revision)
+      .select("id");
+    if (error) throw error;
+    if (!data?.length)
+      throw new Error(
+        "Banner changed by another admin. Refresh and try again.",
+      );
+  };
+  return (
+    <div
+      className="jzb"
+      style={{ maxWidth: 1150, margin: "0 auto", padding: "24px 12px" }}
+    >
+      <JzBannerStyle />
+      <div className="jzb-heading">
+        <div>
+          <h1 style={{ fontSize: 26 }}>Banner Management</h1>
+          <p className="jzb-muted">
+            Manage what customers see in News & Promotions.
+          </p>
+        </div>
+        <span className="jzb-pill">
+          {rows.filter((r) => r.status === "Active").length} active /{" "}
+          {rows.length} banners
+        </span>
+      </div>
+      <div className="jzb-card">
+        <div className="jzb-heading">
+          <span className="jzb-muted">Drag and drop to reorder banners.</span>
+          <div className="jzb-actions">
+            <button className="jzb-btn" disabled={busy} onClick={refresh}>
+              <Icons.RefreshCw size={16} />
+              Refresh
+            </button>
+            {canManage && (
+              <button
+                className="jzb-btn jzb-primary"
+                disabled={busy || loading || !!error}
+                onClick={() => setEditor({})}
+              >
+                <Plus size={17} />
+                Create
+              </button>
+            )}
+          </div>
+        </div>
+        {error && (
+          <div role="alert" className="jzb-notice jzb-error">
+            {error}
+          </div>
+        )}
+        {loading ? (
+          <JzBannerListSkeleton canManage={canManage} />
+        ) : !rows.length && !error ? (
+          <div className="jzb-empty">
+            <Icons.Images size={40} />
+            <h2>No banners yet</h2>
+            <p className="jzb-muted">
+              Create your first service announcement or promotion.
+            </p>
+          </div>
+        ) : (
+          <div
+            className={`jzb-list ${activeId ? "is-sorting" : ""}`}
+            ref={listRef}
+          >
+            {order.map((row, index) => (
+              <div
+                className={`jzb-row ${canManage ? "sortable" : ""} ${activeId === row.id ? "is-lifted" : ""}`}
+                key={row.id}
+                ref={(el) => {
+                  if (el) nodes.current.set(row.id, el);
+                  else {
+                    nodes.current.delete(row.id);
+                    tops.current.delete(row.id);
+                  }
+                }}
+                onPointerDown={(e) => beginDrag(e, row)}
+                onDragStart={(e) => e.preventDefault()}
+              >
+                {canManage && (
+                  <span
+                    className="jzb-grip"
+                    aria-hidden="true"
+                    title="Drag to reorder"
+                  >
+                    <Icons.Menu size={20} />
+                  </span>
+                )}
+                <span className="jzb-num">#{index + 1}</span>
+                <JzBannerPicture
+                  src={jzBannerImage(row, "km")}
+                  alt={jzBannerText(row, "km").title || "Banner"}
+                  className="jzb-row-thumb"
+                />
+                <div className="jzb-row-copy">
+                  <strong>
+                    {jzBannerText(row, "km").title || "Untitled banner"}
+                  </strong>
+                  <p className="jzb-muted">
+                    {jzBannerText(row, "km").description || "No description"}
+                  </p>
+                  <span
+                    className={`jzb-pill ${row.status === "Active" ? "active" : ""}`}
+                  >
+                    {row.status}
+                  </span>{" "}
+                  <span className="jzb-pill">Main Banner</span>{" "}
+                  <span className="jzb-pill">
+                    {row.image_mode === "single"
+                      ? "Single image"
+                      : "Per language"}
+                  </span>
+                </div>
+                {canManage && (
+                  <div className="jzb-actions" style={{ gap: 4 }}>
+                    <button
+                      className="jzb-act"
+                      disabled={busy}
+                      aria-label={`Edit banner ${index + 1}`}
+                      title="Edit"
+                      onClick={() => setEditor(row)}
+                    >
+                      <Icons.SquarePen size={18} />
+                    </button>
+                    <button
+                      className="jzb-act del"
+                      disabled={busy}
+                      aria-label={`Delete banner ${index + 1}`}
+                      title="Delete"
+                      onClick={() => {
+                        setMessage("");
+                        setRemove(row);
+                      }}
+                    >
+                      <Icons.Trash2 size={18} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {editor && (
+        <JzBannerEditor
+          row={editor.id ? editor : null}
+          nextOrder={
+            rows.length ? Math.max(...rows.map((r) => r.sort_order)) + 1 : 0
+          }
+          dark={dark}
+          onClose={() => setEditor(null)}
+          onSaved={() => {
+            setEditor(null);
+            changed();
+          }}
+        />
+      )}
+      {preview && (
+        <JzBannerViewer
+          rows={[preview]}
+          index={0}
+          onIndex={() => {}}
+          onClose={() => setPreview(null)}
+          lang="km"
+        />
+      )}
+      {remove && (
+        <AppModal
+          title="Delete this banner?"
+          subtitle="It will no longer appear on the customer Home page."
+          danger
+          maxW="max-w-md"
+          onClose={() => {
+            if (!mutating.current) setRemove(null);
+          }}
+          error={message}
+          busy={busy}
+          footer={
+            <>
+              <button
+                type="button"
+                className="cbx-btn"
+                disabled={busy}
+                onClick={() => setRemove(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="cbx-btn cbx-btn-danger"
+                disabled={busy}
+                onClick={() =>
+                  mutation(async () => {
+                    const { data, error } = await supabase
+                      .from("jz_banners")
+                      .delete()
+                      .eq("id", remove.id)
+                      .eq("revision", remove.revision)
+                      .select("id");
+                    if (error) throw error;
+                    if (!data?.length)
+                      throw new Error("Banner changed. Refresh and try again.");
+                    setRemove(null);
+                  }, ["Banner deleted", "The banner was removed successfully."])
+                }
+              >
+                {busy && <Icons.Loader2 size={15} className="animate-spin" />}
+                {busy ? "Deleting…" : "Delete Banner"}
+              </button>
+            </>
+          }
+        >
+          <p className="text-sm">This action cannot be undone.</p>
+        </AppModal>
+      )}
+    </div>
+  );
+}
+
 // This build is intentionally China-only. AIR/Indonesia and Container are not
 // exposed as application modules in this deployment.
 const APP_MODE = SUPABASE_CONFIG.appMode;
@@ -1442,6 +3107,7 @@ const NAV_SECTIONS = [
         icon: "ToggleRight",
         path: "/customer-features",
       },
+      { label: "Banner", icon: "Images", path: "/banners" },
     ],
   },
   {
@@ -1733,6 +3399,8 @@ const PERMISSION_GROUPS = [
       ["user.delete", "Delete User"],
       ["user.assign_role", "Assign Role / Department / Warehouse"],
       ["role.view", "View Role Management"],
+      ["banner.view", "View Banner Management"],
+      ["banner.manage", "Create, Edit, Reorder & Delete Banners"],
       ...crudPerms("status_master", "Status Master"),
     ],
   },
@@ -1785,6 +3453,7 @@ const PATH_VIEW = {
   "/users": "user.view",
   "/roles": "role.view",
   "/customer-features": "role.view",
+  "/banners": "banner.view",
   "/permissions": "role.view",
   "/status-master": "status_master.view",
   "/audit-logs": "audit.view",
@@ -36591,7 +38260,8 @@ const CustomerApp = (() => {
 
   // ---------- Home ----------
   function HomePage() {
-    const { me, ships, airShips, cnOrders, wallet, unread, tr } = useApp();
+    const { me, ships, airShips, cnOrders, wallet, unread, tr, lang } =
+      useApp();
     // Company name + logo come from Admin → Settings → Company Profile.
     const brand = useSystemSettings()?.company;
     const brandName = brand?.name || "Cargo Bridge";
@@ -36886,6 +38556,19 @@ const CustomerApp = (() => {
                   <ChevronRight size={18} className="text-slate-300" />
                 </Card>
               )}
+              <JzCustomerBanners
+                lang={lang}
+                title={
+                  lang === "zh"
+                    ? "新闻与优惠"
+                    : tr("News & Promotions", "ព័ត៌មាន និងប្រូម៉ូសិន")
+                }
+                detailLabel={
+                  lang === "zh"
+                    ? "查看详情"
+                    : tr("View details", "មើលព័ត៌មានលម្អិត")
+                }
+              />
               {feat("home_recent") && (
                 <section>
                   <div className="flex justify-between items-center mb-2.5">
@@ -81316,6 +82999,7 @@ function AdminApp() {
                 path="/customer-features"
                 element={<CustomerFeaturesPage />}
               />
+              <Route path="/banners" element={<BannerManagementPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/reports" element={<ReportsHubPage />} />
               <Route path="/support" element={<SupportHubPage />} />
@@ -81371,6 +83055,7 @@ function AdminApp() {
                     "/kh-warehouse",
                     "/roles",
                     "/customer-features",
+                    "/banners",
                     "/deleted-accounts", // custom page above
                     "/customer-recovery", // custom page above
                     "/settings",
