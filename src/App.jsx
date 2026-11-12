@@ -2342,7 +2342,11 @@ const customerCellCol = () =>
       return name ? (
         <div className="leading-tight">
           <div className="font-semibold text-ink-900">{name}</div>
-          <div className="text-xs text-ink-600/60 mt-1">{code}</div>
+          <div className="text-xs text-ink-600/60 mt-1">
+            <HoverCopy value={code} label="Copy customer ID">
+              <span>{code}</span>
+            </HoverCopy>
+          </div>
         </div>
       ) : (
         <span>{row.customer || "—"}</span>
@@ -2818,9 +2822,13 @@ const MODULES = {
         render: (row) => (
           <div className="leading-tight">
             <div className="text-sm font-semibold text-ink-800">
-              {row.container_no && row.container_no !== "—"
-                ? `Container ${row.container_no}`
-                : "Container —"}
+              {row.container_no && row.container_no !== "—" ? (
+                <HoverCopy value={row.container_no} label="Copy container no">
+                  <span>{`Container ${row.container_no}`}</span>
+                </HoverCopy>
+              ) : (
+                "Container —"
+              )}
             </div>
             <div className="text-xs text-ink-600/60 mt-1">
               {weightCbmText(row)}
@@ -4652,7 +4660,9 @@ function CnCustomerCell({ value }) {
         >
           {name}
         </Link>
-        <span className="text-xs text-ink-600/55">{code}</span>
+        <HoverCopy value={code} label="Copy customer ID">
+          <span className="text-xs text-ink-600/55">{code}</span>
+        </HoverCopy>
       </div>
     </div>
   );
@@ -46600,106 +46610,166 @@ function GlobalConfirmHost() {
   );
 }
 
+// One toast card. Owns its own timer, so several can be on screen at once.
+// It is absolutely positioned and moved with transform only (GPU, no layout),
+// so enter / leave / re-flow stay smooth even when many toasts are stacked.
+function GlobalToastItem({ t, y, onLeave, onDone, reg }) {
+  const ms = t.type === "err" ? 6500 : t.type === "warn" ? 5600 : 4200;
+
+  useEffect(() => {
+    if (t.leaving) return undefined;
+    const timer = window.setTimeout(() => onLeave(t.id), ms);
+    return () => window.clearTimeout(timer);
+  }, [t.leaving, t.id, ms, onLeave]);
+
+  useEffect(() => {
+    if (!t.leaving) return undefined;
+    const timer = window.setTimeout(() => onDone(t.id), 360);
+    return () => window.clearTimeout(timer);
+  }, [t.leaving, t.id, onDone]);
+
+  const palette =
+    t.type === "err"
+      ? {
+          icon: "text-rose-500",
+          text: "text-rose-600",
+          iconNode: <Icons.XCircle size={20} />,
+        }
+      : t.type === "warn"
+        ? {
+            icon: "text-amber-500",
+            text: "text-amber-600",
+            iconNode: <Icons.AlertTriangle size={20} />,
+          }
+        : {
+            icon: "text-emerald-500",
+            text: "text-emerald-600",
+            iconNode: <Icons.CheckCircle2 size={20} />,
+          };
+
+  return (
+    <div
+      ref={(el) => reg(t.id, el)}
+      role={t.type === "err" ? "alert" : "status"}
+      className={`cb-toast-card flex items-start gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3${t.leaving ? " is-leaving" : ""}`}
+      style={{ "--y": `${y}px` }}
+    >
+      <div className={`mt-0.5 shrink-0 ${palette.icon}`}>
+        {palette.iconNode}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px] font-semibold leading-5 text-slate-800">
+          {t.title}
+        </div>
+        {t.text && (
+          <p className={`break-words text-[13px] leading-5 ${palette.text}`}>
+            {t.text}
+          </p>
+        )}
+      </div>
+      <button
+        type="button"
+        aria-label="Dismiss notification"
+        onClick={() => onLeave(t.id)}
+        className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+      >
+        <Icons.X size={14} />
+      </button>
+    </div>
+  );
+}
+
+// DRSB-style stack: top-center, newest toast appended below the older ones.
+// When one leaves, the toasts under it glide up into its place.
+// High safety cap only (keeps the DOM bounded); toasts keep listing downward.
+const CB_TOAST_MAX = 50;
+const CB_TOAST_GAP = 10;
+let cbToastSeq = 0;
 function GlobalToastHost() {
-  const [toast, setToast] = useState(null);
+  const [items, setItems] = useState([]);
+  const [heights, setHeights] = useState({});
+  const nodes = useRef(new Map());
+
+  const reg = React.useCallback((id, el) => {
+    if (el) nodes.current.set(id, el);
+    else nodes.current.delete(id);
+  }, []);
+  const leave = React.useCallback((id) => {
+    setItems((list) =>
+      list.map((x) =>
+        x.id === id && !x.leaving ? { ...x, leaving: true } : x,
+      ),
+    );
+  }, []);
+  const done = React.useCallback((id) => {
+    setItems((list) => list.filter((x) => x.id !== id));
+  }, []);
 
   useEffect(() => {
     const onToast = (event) => {
       const detail = event?.detail || {};
-      setToast({
+      cbToastSeq += 1;
+      const item = {
+        id: cbToastSeq,
         type: detail.type || "ok",
         title: detail.title || "Action completed",
         text: detail.text || "",
-        id: Date.now(),
+        leaving: false,
+      };
+      setItems((list) => {
+        const next = [...list, item];
+        let excess = next.filter((x) => !x.leaving).length - CB_TOAST_MAX;
+        if (excess <= 0) return next;
+        return next.map((x) =>
+          !x.leaving && excess-- > 0 ? { ...x, leaving: true } : x,
+        );
       });
     };
     window.addEventListener("cb-global-toast", onToast);
     return () => window.removeEventListener("cb-global-toast", onToast);
   }, []);
 
-  useEffect(() => {
-    if (!toast) return undefined;
-    const ms =
-      toast.type === "err" ? 6500 : toast.type === "warn" ? 5600 : 4200;
-    const timer = window.setTimeout(() => setToast(null), ms);
-    return () => window.clearTimeout(timer);
-  }, [toast]);
+  // Measure before paint so every toast is placed correctly on its first frame.
+  useLayoutEffect(() => {
+    let changed = false;
+    const next = {};
+    items.forEach((x) => {
+      const el = nodes.current.get(x.id);
+      const h = el ? el.offsetHeight : heights[x.id] || 0;
+      next[x.id] = h;
+      if (heights[x.id] !== h) changed = true;
+    });
+    if (changed) setHeights(next);
+  }, [items]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!toast) return null;
+  if (!items.length) return null;
 
-  const palette =
-    toast.type === "err"
-      ? {
-          border: "border-rose-200",
-          icon: "bg-rose-50 text-rose-600",
-          title: "text-rose-800",
-          bar: "bg-rose-500",
-          iconNode: <Icons.XCircle size={21} />,
-        }
-      : toast.type === "warn"
-        ? {
-            border: "border-amber-200",
-            icon: "bg-amber-50 text-amber-600",
-            title: "text-amber-800",
-            bar: "bg-amber-500",
-            iconNode: <Icons.AlertTriangle size={21} />,
-          }
-        : {
-            border: "border-emerald-200",
-            icon: "bg-emerald-50 text-emerald-600",
-            title: "text-emerald-800",
-            bar: "bg-emerald-500",
-            iconNode: <Icons.CheckCircle2 size={21} />,
-          };
+  let acc = 0;
+  const ys = items.map((x) => {
+    const y = acc;
+    if (!x.leaving) acc += (heights[x.id] || 0) + CB_TOAST_GAP;
+    return y;
+  });
+  const hasErr = items.some((x) => x.type === "err" && !x.leaving);
 
   return (
     <div
-      className="fixed top-5 right-5 z-[999] w-[min(430px,calc(100vw-2rem))]"
-      aria-live={toast.type === "err" ? "assertive" : "polite"}
-      aria-atomic="true"
+      className="pointer-events-none fixed left-1/2 z-[999] w-[min(360px,calc(100vw-1.5rem))] -translate-x-1/2"
+      style={{ top: "calc(env(safe-area-inset-top, 0px) + 12px)" }}
+      aria-live={hasErr ? "assertive" : "polite"}
+      aria-atomic="false"
     >
-      <div
-        role={toast.type === "err" ? "alert" : "status"}
-        className={`relative overflow-hidden rounded-2xl border bg-white shadow-[0_18px_55px_rgba(15,23,42,0.18)] ${palette.border}`}
-        style={{
-          animation: "cb-global-toast-in 260ms cubic-bezier(.2,.8,.2,1) both",
-        }}
-      >
-        <div className="flex items-start gap-3 p-4">
-          <div
-            className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${palette.icon}`}
-          >
-            {palette.iconNode}
-          </div>
-          <div className="min-w-0 flex-1 pt-0.5">
-            <div className={`text-sm font-bold ${palette.title}`}>
-              {toast.title}
-            </div>
-            {toast.text && (
-              <p className="mt-1 break-words text-sm leading-5 text-slate-600">
-                {toast.text}
-              </p>
-            )}
-          </div>
-          <button
-            type="button"
-            aria-label="Dismiss notification"
-            onClick={() => setToast(null)}
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-          >
-            <Icons.X size={16} />
-          </button>
-        </div>
-        <div className="h-1 w-full bg-slate-100">
-          <div
-            className={`h-full ${palette.bar}`}
-            style={{
-              animation: `cb-global-toast-progress ${toast.type === "err" ? "6.5s" : toast.type === "warn" ? "5.6s" : "4.2s"} linear both`,
-            }}
-          />
-        </div>
-      </div>
-      <style>{`@keyframes cb-global-toast-in { from { opacity: 0; transform: translate3d(18px,-8px,0) scale(.98); } to { opacity: 1; transform: translate3d(0,0,0) scale(1); } } @keyframes cb-global-toast-progress { from { width: 100%; } to { width: 0%; } } @media (prefers-reduced-motion: reduce) { [role="status"], [role="alert"] { animation: none !important; } }`}</style>
+      {items.map((t, i) => (
+        <GlobalToastItem
+          key={t.id}
+          t={t}
+          y={ys[i]}
+          reg={reg}
+          onLeave={leave}
+          onDone={done}
+        />
+      ))}
+      <style>{`.cb-toast-card{position:absolute;top:0;left:0;right:0;pointer-events:auto;box-shadow:0 8px 24px rgba(15,23,42,.10);opacity:1;transform:translate3d(0,var(--y,0px),0);transition:transform 420ms cubic-bezier(.22,1,.36,1),opacity 300ms ease;animation:cb-toast-in 420ms cubic-bezier(.22,1,.36,1) backwards;will-change:transform,opacity;backface-visibility:hidden}.cb-toast-card.is-leaving{opacity:0;pointer-events:none;transform:translate3d(0,calc(var(--y,0px) - 10px),0) scale(.97);transition:transform 320ms cubic-bezier(.4,0,.2,1),opacity 260ms ease}@keyframes cb-toast-in{from{opacity:0;transform:translate3d(0,calc(var(--y,0px) - 16px),0) scale(.96)}to{opacity:1;transform:translate3d(0,var(--y,0px),0) scale(1)}}@media (prefers-reduced-motion:reduce){.cb-toast-card{transition:none;animation:none}}`}</style>
     </div>
   );
 }
@@ -80425,6 +80495,9 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .jz-customer.cb-cust-dark{--jz-c-chip-bg:linear-gradient(180deg,rgba(255,255,255,.12),rgba(255,255,255,.05));}
 .jz-customer .jz-chip-row>button{background:var(--jz-c-chip-bg)!important;color:var(--jz-c-dock-ink)!important;border:1px solid var(--jz-c-dock-edge)!important;backdrop-filter:blur(18px) saturate(190%);-webkit-backdrop-filter:blur(18px) saturate(190%);box-shadow:0 8px 18px -12px rgba(5,20,45,.35),inset 0 1px 0 var(--jz-c-dock-edge)!important;transition:background .2s ease,color .2s ease,box-shadow .2s ease;}
 .jz-customer .jz-chip-row>button[aria-pressed="true"],.jz-customer .jz-chip-row>button[aria-selected="true"]{background:var(--jz-c-pill-bg)!important;color:var(--jz-c-brand)!important;box-shadow:0 6px 14px -10px rgba(5,20,45,.4),inset 0 1px 0 var(--jz-c-pill-edge),inset 0 -1px 0 rgba(255,255,255,.12)!important;}
+/* Simple customer toast: top-center white card (matches the global toast). */
+.jz-customer .jz-toast{top:calc(14px + env(safe-area-inset-top))!important;bottom:auto!important;background:#fff!important;color:#1e293b!important;border:1px solid #e2e8f0!important;border-radius:12px!important;padding:10px 16px!important;font-size:13px;font-weight:600;box-shadow:0 10px 30px rgba(15,23,42,.12)!important;}
+.jz-customer.cb-cust-dark .jz-toast{background:#1b2a44!important;color:#e8eef8!important;border-color:rgba(255,255,255,.16)!important;}
 /* Liquid-glass dock v2: big fully-rounded capsule, brand-orange active tab. */
 .jz-customer{--jz-c-brand:#f47c20;--jz-c-brand-rgb:244,124,32;--jz-c-dock-bg:linear-gradient(180deg,rgba(255,255,255,.72),rgba(255,255,255,.42));--jz-c-dock-edge:rgba(255,255,255,.85);--jz-c-dock-ink:#1b2740;}
 .jz-customer.cb-cust-dark{--jz-c-brand:#ff8f3a;--jz-c-brand-rgb:255,143,58;--jz-c-dock-bg:linear-gradient(180deg,rgba(30,44,68,.72),rgba(19,31,51,.5));--jz-c-dock-edge:rgba(255,255,255,.16);--jz-c-dock-ink:#e8eef8;}
