@@ -3008,22 +3008,17 @@ const MODULES = {
       col("name", "Customer", {
         render: (row) => (
           <span className="flex items-center gap-3">
-            <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-600 text-sm font-bold text-white overflow-hidden">
+            <span className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[13px] font-semibold leading-none tracking-normal whitespace-nowrap text-slate-600 overflow-hidden">
               <UserAvatar
                 url={row.avatar_url}
-                initials={String(row.name || "?")
-                  .slice(0, 1)
-                  .toUpperCase()}
+                initials={nameInitials(row.name)}
               />
             </span>
             <span className="leading-tight min-w-0">
-              <Link
-                to={`/customers/${encodeURIComponent(row.id)}`}
-                className="block font-semibold text-signal-blue hover:underline truncate"
-              >
+              <span className="block font-semibold text-slate-900 truncate">
                 {row.name || "—"}
-              </Link>
-              <span className="block text-xs text-ink-600/60 mt-1">
+              </span>
+              <span className="block text-[13px] text-slate-500 mt-1">
                 {row.id}
               </span>
             </span>
@@ -4643,29 +4638,93 @@ function CnTrackingCell({ tks }) {
   );
 }
 
+// Customer phone numbers for the order tables. One small batched query per
+// render burst (not one per row), cached for the session.
+const CUSTOMER_PHONE_CACHE = new Map(); // customer_code -> phone ("" = none)
+const CUSTOMER_PHONE_PENDING = new Set();
+const CUSTOMER_PHONE_INFLIGHT = new Set();
+const CUSTOMER_PHONE_LISTENERS = new Set();
+let customerPhoneTimer = null;
+function flushCustomerPhones() {
+  customerPhoneTimer = null;
+  const codes = Array.from(CUSTOMER_PHONE_PENDING);
+  CUSTOMER_PHONE_PENDING.clear();
+  if (!codes.length || !supabase) return;
+  codes.forEach((c) => CUSTOMER_PHONE_INFLIGHT.add(c));
+  Promise.resolve(
+    supabase
+      .from("customers")
+      .select("customer_code,phone")
+      .in("customer_code", codes),
+  )
+    .then(({ data }) => {
+      (data || []).forEach((r) =>
+        CUSTOMER_PHONE_CACHE.set(r.customer_code, r.phone || ""),
+      );
+    })
+    .catch(() => {})
+    .finally(() => {
+      codes.forEach((c) => {
+        if (!CUSTOMER_PHONE_CACHE.has(c)) CUSTOMER_PHONE_CACHE.set(c, "");
+        CUSTOMER_PHONE_INFLIGHT.delete(c);
+      });
+      CUSTOMER_PHONE_LISTENERS.forEach((fn) => fn());
+    });
+}
+function useCustomerPhone(code) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    if (!code) return undefined;
+    const fn = () => force((n) => n + 1);
+    CUSTOMER_PHONE_LISTENERS.add(fn);
+    if (
+      !CUSTOMER_PHONE_CACHE.has(code) &&
+      !CUSTOMER_PHONE_PENDING.has(code) &&
+      !CUSTOMER_PHONE_INFLIGHT.has(code)
+    ) {
+      CUSTOMER_PHONE_PENDING.add(code);
+      if (!customerPhoneTimer)
+        customerPhoneTimer = setTimeout(flushCustomerPhones, 40);
+    }
+    return () => {
+      CUSTOMER_PHONE_LISTENERS.delete(fn);
+    };
+  }, [code]);
+  return code ? CUSTOMER_PHONE_CACHE.get(code) || "" : "";
+}
+
+// Customer cell for order tables (like DRSB): no avatar — name + ID on the
+// first line, phone number under it. ID and phone copy on hover.
 function CnCustomerCell({ value }) {
   const raw = String(value || "").trim();
-  if (!raw) return <span className="text-ink-600/40">—</span>;
   const m = raw.match(/^([A-Za-z]{1,8}-\d+)\s*·\s*(.+)$/);
+  const code = m ? m[1] : "";
+  const name = m ? m[2].trim() : "";
+  const phone = useCustomerPhone(code);
+  if (!raw) return <span className="text-ink-600/40">—</span>;
   if (!m) return <span className="text-ink-800">{raw}</span>;
-  const code = m[1];
-  const name = m[2].trim();
   return (
-    <div className="flex items-center gap-2.5 min-w-0">
-      <span className="w-8 h-8 shrink-0 rounded-full bg-signal-blue text-white text-xs font-bold grid place-items-center">
-        {name.charAt(0).toUpperCase()}
-      </span>
-      <div className="min-w-0 leading-tight">
+    <div className="min-w-0 leading-tight">
+      <div className="flex min-w-0 items-baseline gap-2">
         <Link
           to={`/customers/${encodeURIComponent(code)}`}
-          className="block font-medium text-ink-900 hover:text-signal-blue truncate max-w-[180px]"
+          className="block max-w-[180px] truncate font-medium text-ink-900 hover:text-signal-blue"
         >
           {name}
         </Link>
         <HoverCopy value={code} label="Copy customer ID">
-          <span className="text-xs text-ink-600/55">{code}</span>
+          <span className="whitespace-nowrap text-xs text-ink-600/55">
+            {code}
+          </span>
         </HoverCopy>
       </div>
+      {phone && (
+        <div className="mt-1">
+          <HoverCopy value={phone} label="Copy phone number">
+            <span className="text-[13px] text-ink-600/70">{phone}</span>
+          </HoverCopy>
+        </div>
+      )}
     </div>
   );
 }
@@ -16101,6 +16160,27 @@ function Sidebar({ open, onClose, collapsed = false, onToggleCollapse }) {
 // ------------------------------------------------------------
 // components/Topbar.jsx
 // ------------------------------------------------------------
+// Two-letter initials for list avatars: "Sreytouch Sou" -> SS, "Naa" -> NA,
+// Khmer names use the first letter cluster of each word (គ្រិល សុខឆាយ -> គស).
+function nameInitials(name) {
+  const text = String(name || "").trim();
+  if (!text) return "?";
+  const glyphs = (w) =>
+    typeof Intl !== "undefined" && Intl.Segmenter
+      ? Array.from(
+          new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(w),
+          (x) => x.segment,
+        )
+      : Array.from(w);
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length > 1)
+    return (glyphs(words[0])[0] + glyphs(words[1])[0]).toUpperCase();
+  const g = glyphs(words[0]);
+  return (
+    /^[A-Za-z]/.test(words[0]) ? g.slice(0, 2).join("") : g[0]
+  ).toUpperCase();
+}
+
 function UserAvatar({ url, initials }) {
   const [broken, setBroken] = useState(false);
   useEffect(() => setBroken(false), [url]);
@@ -19538,6 +19618,7 @@ function ListPage({
   const { t } = useAdminPrefs();
   const { user } = useAuth();
   const navigateTo = useNavigate();
+  const [quickCustomer, setQuickCustomer] = useState(null);
   const {
     rows: tableRows,
     ready: tableReady,
@@ -20313,6 +20394,12 @@ function ListPage({
             hideDates={!!dateCol}
           />
         )}
+        {path === "/customers" && quickCustomer && (
+          <CustomerQuickView
+            row={quickCustomer}
+            onClose={() => setQuickCustomer(null)}
+          />
+        )}
         <DataTable
           columns={tableColumns || columns}
           rows={pagedRows}
@@ -20344,8 +20431,7 @@ function ListPage({
                       );
                     }
                   : path === "/customers"
-                    ? (row) =>
-                        navigateTo(`/customers/${encodeURIComponent(row.id)}`)
+                    ? (row) => setQuickCustomer(row)
                     : undefined
           }
           error={
@@ -67170,6 +67256,276 @@ function StaffDetailPage() {
         />
       )}
     </div>
+  );
+}
+
+// Customers list -> right-hand quick view (like DRSB): click a row to see the
+// balance, contact, address and recent orders without leaving the list.
+// "Open full details" goes to the full customer page.
+function CustomerQuickView({ row, onClose }) {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const canViewCn = hasPermission(user, "cn_order.view");
+  const [data, setData] = useState({
+    loading: true,
+    cust: null,
+    addr: null,
+    orders: [],
+  });
+  useEffect(() => {
+    let alive = true;
+    setData({ loading: true, cust: null, addr: null, orders: [] });
+    if (!supabase || !row?.id) {
+      setData({ loading: false, cust: null, addr: null, orders: [] });
+      return undefined;
+    }
+    (async () => {
+      const { data: cust } = await supabase
+        .from("customers")
+        .select("id,customer_code,name,phone,status,balance,created_at")
+        .eq("customer_code", row.id)
+        .maybeSingle();
+      if (!alive) return;
+      if (!cust) {
+        setData({ loading: false, cust: null, addr: null, orders: [] });
+        return;
+      }
+      const [a, cn] = await Promise.all([
+        supabase
+          .from("customer_addresses")
+          .select("*")
+          .eq("customer_id", cust.id)
+          .order("is_default", { ascending: false })
+          .limit(1),
+        canViewCn
+          ? supabase
+              .from("cn_orders")
+              .select(
+                "id,order_id,order_type,total_due_usd,amount_paid_usd,payment_status,status,created_at",
+              )
+              .eq("customer_id", cust.id)
+              .order("created_at", { ascending: false })
+              .limit(200)
+          : Promise.resolve({ data: [] }),
+      ]);
+      if (!alive) return;
+      setData({
+        loading: false,
+        cust,
+        addr: (a?.data || [])[0] || null,
+        orders: cn?.data || [],
+      });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [row?.id, canViewCn]);
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const { loading, cust, addr, orders } = data;
+  const name = cust?.name || row?.name || "—";
+  const status = cust?.status || row?.status;
+  const isActive = !status || String(status).toLowerCase() === "active";
+  const created = cust?.created_at || row?.created_at;
+  const balance = Number(cust?.balance);
+  const outstanding = orders.reduce((sum, o) => {
+    if (o.payment_status === "Paid" || o.payment_status === "Refunded")
+      return sum;
+    if (cnNormalizeStatus(o.status) === "Refund Order") return sum;
+    return (
+      sum +
+      Math.max(
+        0,
+        (Number(o.total_due_usd) || 0) - (Number(o.amount_paid_usd) || 0),
+      )
+    );
+  }, 0);
+  const fullHref = `/customers/${encodeURIComponent(row.id)}`;
+  const dash = loading ? "…" : "—";
+
+  return createPortal(
+    <div className="fixed inset-0 z-[90]" role="dialog" aria-modal="true">
+      <style>{`@keyframes cbQvIn{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}@keyframes cbQvFade{from{opacity:0}to{opacity:1}}`}</style>
+      <div
+        className="absolute inset-0 bg-slate-900/30"
+        style={{ animation: "cbQvFade .18s ease-out both" }}
+        onClick={onClose}
+      />
+      <aside
+        className="absolute right-0 top-0 flex h-full w-full max-w-[440px] flex-col bg-white shadow-2xl"
+        style={{ animation: "cbQvIn .22s cubic-bezier(.2,.8,.2,1) both" }}
+      >
+        <header className="flex items-start gap-3 border-b border-slate-200 px-5 py-4">
+          <span className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-100 text-[13px] font-semibold leading-none text-slate-600 whitespace-nowrap">
+            <UserAvatar url={row.avatar_url} initials={nameInitials(name)} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="truncate text-[15px] font-bold text-slate-900">
+                {name}
+              </h2>
+              <span
+                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${isActive ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-slate-200 bg-slate-100 text-slate-500"}`}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${isActive ? "bg-emerald-500" : "bg-slate-400"}`}
+                />
+                {isActive ? "Active" : status}
+              </span>
+            </div>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {row.id} · Joined {cdDate(created)}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+          >
+            <Icons.X size={18} />
+          </button>
+        </header>
+
+        <div className="flex-1 space-y-5 overflow-y-auto bg-slate-50 px-5 py-5">
+          <section className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              Current Balance
+            </div>
+            <div
+              className={`mt-1 text-3xl font-extrabold leading-tight ${balance < 0 ? "text-red-600" : "text-slate-900"}`}
+            >
+              {Number.isFinite(balance) ? moneyS(balance) : dash}
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-4 border-t border-slate-100 pt-3">
+              <div>
+                <div className="text-[11px] text-slate-500">
+                  Available Credit
+                </div>
+                <div className="mt-0.5 text-sm font-bold text-slate-900">
+                  {Number.isFinite(balance)
+                    ? moneyS(Math.max(0, balance))
+                    : dash}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] text-slate-500">
+                  Outstanding Balance
+                </div>
+                <div className="mt-0.5 text-sm font-bold text-slate-900">
+                  {loading ? dash : moneyS(outstanding)}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              Contact
+            </h3>
+            <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white text-sm text-slate-800">
+              <div className="flex items-center gap-3 px-4 py-3">
+                <Icons.Phone size={15} className="shrink-0 text-slate-400" />
+                <span>{cust?.phone || row.phone || "—"}</span>
+              </div>
+              <div className="flex items-center gap-3 px-4 py-3">
+                <Icons.User size={15} className="shrink-0 text-slate-400" />
+                <span>
+                  {row.id} · {isActive ? "Active" : "Inactive"} Customer
+                </span>
+              </div>
+              <div className="flex items-start gap-3 px-4 py-3">
+                <Icons.MapPin
+                  size={15}
+                  className="mt-0.5 shrink-0 text-slate-400"
+                />
+                <span className="min-w-0 break-words">
+                  {addr ? cdAddr(addr) || addr.label || "—" : dash}
+                </span>
+              </div>
+            </div>
+          </section>
+
+          {canViewCn && (
+            <section>
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                  Recent Orders · {loading ? "…" : orders.length}
+                </h3>
+                <Link
+                  to={fullHref}
+                  className="text-xs font-semibold text-blue-600 hover:underline"
+                >
+                  View All
+                </Link>
+              </div>
+              <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white">
+                {!loading && orders.length === 0 && (
+                  <p className="px-4 py-5 text-center text-sm text-slate-400">
+                    No orders yet.
+                  </p>
+                )}
+                {orders.slice(0, 5).map((o) => (
+                  <div key={o.id} className="px-4 py-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <Link
+                        to={`/cn-orders/${encodeURIComponent(o.order_id)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="truncate text-[13px] font-bold text-slate-900 hover:underline"
+                      >
+                        {o.order_id}
+                      </Link>
+                      <CnStatusBadge status={cnOrderTableStatus(o)} />
+                    </div>
+                    <div className="mt-1 flex items-center justify-between text-xs text-slate-500">
+                      <span>{cdDate(o.created_at)}</span>
+                      <span className="font-semibold text-slate-800">
+                        {moneyS(o.total_due_usd)}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+
+        <footer className="flex items-center justify-between gap-3 border-t border-slate-200 bg-white px-5 py-3">
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                navigator.clipboard?.writeText(String(row.id));
+                emitCBToast("ok", "Customer ID copied", String(row.id));
+              } catch (_e) {
+                /* clipboard blocked */
+              }
+            }}
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            <Icons.Copy size={14} /> Copy ID
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onClose();
+              navigate(fullHref);
+            }}
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-600 px-4 text-sm font-bold text-white hover:bg-blue-700"
+          >
+            Open full details <Icons.ArrowUpRight size={15} />
+          </button>
+        </footer>
+      </aside>
+    </div>,
+    document.body,
   );
 }
 
