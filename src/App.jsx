@@ -2405,6 +2405,8 @@ function tkTypeCol() {
         <div className="flex items-center gap-1 cb-hc-row">
           <Link
             to={pkgRowHref(row)}
+            target="_blank"
+            rel="noopener noreferrer"
             className="font-semibold text-signal-blue hover:underline"
           >
             {row.tk}
@@ -16849,7 +16851,7 @@ function Layout() {
 // components/ProtectedRoute.jsx
 // ------------------------------------------------------------
 function ProtectedRoute({ children }) {
-  const { user, loading } = useAuth();
+  const { user, loading, verifying } = useAuth();
   const location = useLocation();
 
   if (loading) return <AppShellSkeleton />;
@@ -16872,6 +16874,9 @@ function ProtectedRoute({ children }) {
     );
 
   if (!allowed) {
+    // Showing from the cached profile: the role matrix may still be the old
+    // copy, so wait for the server check instead of redirecting too early.
+    if (verifying) return <AppShellSkeleton />;
     // Send the user to the first page their role can open (no redirect loop
     // when even the Dashboard is not allowed).
     const fallback = firstAllowedPath(user);
@@ -20314,7 +20319,24 @@ function ListPage({
               : path === "/packages"
                 ? (row) => navigateTo(pkgRowHref(row))
                 : path === "/inbound-origin" || path === "/outbound-origin"
-                  ? (row) => navigateTo(pkgRowHref(row))
+                  ? (row, e) => {
+                      // Same as CN Purchase Orders: the detail opens in its
+                      // own browser tab so this list, its filters and scroll
+                      // position stay exactly where they were.
+                      if (
+                        e?.target?.closest?.(
+                          "a,button,input,select,textarea,label",
+                        )
+                      )
+                        return;
+                      if (window.getSelection && String(window.getSelection()))
+                        return;
+                      window.open(
+                        pkgRowHref(row),
+                        "_blank",
+                        "noopener,noreferrer",
+                      );
+                    }
                   : path === "/customers"
                     ? (row) =>
                         navigateTo(`/customers/${encodeURIComponent(row.id)}`)
@@ -20572,6 +20594,15 @@ const DISABLED_MSG = "គណនីនេះត្រូវបានបិទ (Di
 async function hydrateProfile(authUser) {
   if (!authUser) return null;
 
+  // Start downloading the shared role matrix NOW, in parallel with the staff
+  // lookup below (it used to wait for it → one extra round-trip before the
+  // first screen). Skipped on customer pages, which never need it.
+  const rolesReady =
+    typeof window !== "undefined" &&
+    !String(window.location.pathname).startsWith("/customer")
+      ? syncRolesFromServer()
+      : null;
+
   // Staff first: match by auth_user_id if already linked, else by email
   // on their very first login — then stamp auth_user_id onto that row.
   // department / warehouse_code are new columns — fall back to the old
@@ -20622,9 +20653,9 @@ async function hydrateProfile(authUser) {
         .update({ auth_user_id: authUser.id })
         .eq("id", staffRow.id);
     }
-    // Load the shared role matrix BEFORE the first render so the user never
-    // flashes a wrong "no access" page.
-    await syncRolesFromServer();
+    // The role matrix must be loaded BEFORE the first render so the user
+    // never flashes a wrong "no access" page (already in flight, see above).
+    await (rolesReady || syncRolesFromServer());
     return {
       id: authUser.id,
       email: authUser.email,
@@ -20659,9 +20690,84 @@ async function hydrateProfile(authUser) {
   };
 }
 
+// Last verified STAFF profile, kept so a fresh tab / reload can paint the app
+// immediately instead of waiting for the server (the role matrix is already
+// persisted separately, see commitRoles). It is only ever trusted for the same
+// auth user as the live session and is re-verified in the background; the
+// server (RLS) stays the real gatekeeper for data.
+const STAFF_CACHE_KEY = "cb.auth.staff.v1";
+function readStaffCache(authId) {
+  try {
+    const c = JSON.parse(localStorage.getItem(STAFF_CACHE_KEY) || "null");
+    if (c?.u && c.u.id === authId && c.u.isStaff === true && c.u.role)
+      return c.u;
+  } catch (_e) {
+    /* ignore */
+  }
+  return null;
+}
+function writeStaffCache(u) {
+  try {
+    localStorage.setItem(
+      STAFF_CACHE_KEY,
+      JSON.stringify({ u, ts: Date.now() }),
+    );
+  } catch (_e) {
+    /* ignore */
+  }
+}
+// Synchronous "who is signed in?" for the very first paint: the Supabase
+// session lives in localStorage (sb-<project>-auth-token). Reading it directly
+// lets the first render already use the cached staff profile, with no async
+// wait at all (getSession() can be slow: it queues behind other tabs and may
+// refresh an expired token over the network).
+function readBootStaff() {
+  try {
+    // Normal case: the standard Supabase session key tells us who is signed in.
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      // exactly "...-auth-token" (NOT "...-auth-token-code-verifier", whose
+      // value is plain text and used to make JSON.parse throw and abort).
+      if (!k || !/auth-token$/.test(k)) continue;
+      try {
+        const v = JSON.parse(localStorage.getItem(k) || "null");
+        const id = v?.user?.id || v?.currentSession?.user?.id;
+        if (id) return readStaffCache(id);
+      } catch (_e) {
+        /* not a session entry, keep looking */
+      }
+    }
+    // Custom storage key / unreadable session: fall back to the last verified
+    // staff profile (max 30 days old). It is re-checked right after first paint
+    // and the user is sent to login if there is no valid session.
+    const c = JSON.parse(localStorage.getItem(STAFF_CACHE_KEY) || "null");
+    if (
+      c?.u?.isStaff === true &&
+      c.u.role &&
+      Date.now() - (c.ts || 0) < 30 * 24 * 3600 * 1000
+    )
+      return c.u;
+  } catch (_e) {
+    /* ignore */
+  }
+  return null;
+}
+function clearStaffCache() {
+  try {
+    localStorage.removeItem(STAFF_CACHE_KEY);
+  } catch (_e) {
+    /* ignore */
+  }
+}
+
 export function AuthProvider({ children }) {
-  const [baseUser, setUser] = useState(null);
-  const [loading, setLoading] = useState(true);
+  // First paint straight from the cached staff profile (if this browser has
+  // a signed-in session for the same user); verified in the background below.
+  const [boot] = useState(() => (supabase ? readBootStaff() : null));
+  const [baseUser, setUser] = useState(boot);
+  const [loading, setLoading] = useState(!boot);
+  // true while a cached profile is on screen and the server is re-checking it
+  const [verifying, setVerifying] = useState(!!boot);
   // Permissions are resolved LIVE from the role store: editing a role in
   // Role Management updates every signed-in user of that role at once.
   const rolesSnapshot = useRoles();
@@ -20682,23 +20788,49 @@ export function AuthProvider({ children }) {
 
     // Always leave the loading state — even if restoring the session or the
     // profile fails — so a refresh can never get stuck on the skeleton.
+    let shownFromCache = !!boot;
     supabase.auth
       .getSession()
       .then(async ({ data }) => {
-        const prof = await hydrateProfile(data.session?.user);
+        const authUser = data.session?.user;
+        // Same user as last time -> show the app at once, verify afterwards.
+        const cached = authUser ? readStaffCache(authUser.id) : null;
+        if (cached) {
+          shownFromCache = true;
+          setVerifying(true);
+          setUser(cached);
+          setLoading(false);
+        }
+        const prof = await hydrateProfile(authUser);
+        if (prof?.isStaff === true && !prof.__disabled) writeStaffCache(prof);
         setUser(prof?.__disabled ? null : prof);
       })
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        // Offline / server error: keep the cached profile if one is showing.
+        if (!shownFromCache) setUser(null);
+      })
+      .finally(() => {
+        setVerifying(false);
+        setLoading(false);
+      });
 
     const { data: listener } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
+      async (event, session) => {
+        // The first session is already handled by getSession() above.
+        if (event === "INITIAL_SESSION") return;
         const prof = await hydrateProfile(session?.user);
         setUser(prof?.__disabled ? null : prof);
       },
     );
     return () => listener.subscription.unsubscribe();
   }, []);
+
+  // Keep the cached staff profile in step with the verified user.
+  useEffect(() => {
+    if (!supabase || loading || verifying) return;
+    if (baseUser?.isStaff === true) writeStaffCache(baseUser);
+    else clearStaffCache();
+  }, [baseUser, loading, verifying]);
 
   // Live kill-switch: when a Super Admin disables THIS staff account, sign
   // them out right away (Realtime push + a 15s / focus check as fallback).
@@ -20774,6 +20906,7 @@ export function AuthProvider({ children }) {
       setUser(null);
       return { error: { message: DISABLED_MSG } };
     }
+    if (prof?.isStaff === true) writeStaffCache(prof);
     setUser(prof);
     return { error: null };
   }
@@ -20828,6 +20961,7 @@ export function AuthProvider({ children }) {
   async function logout() {
     if (supabase) await supabase.auth.signOut();
     localStorage.removeItem(MOCK_KEY);
+    clearStaffCache();
     setUser(null);
   }
 
@@ -20841,6 +20975,7 @@ export function AuthProvider({ children }) {
       value={{
         user,
         loading,
+        verifying,
         login,
         signUp,
         logout,
@@ -54481,9 +54616,16 @@ function CnOrdersPage() {
   const navigate = useNavigate();
   // Whole row opens the order, but clicks on links/buttons keep their own
   // behaviour and selecting text inside a row does not navigate away.
-  const openRow = (e, to) => {
+  const openRow = (e, to, newTab = false, row = null) => {
     if (e.target.closest("a,button,input,select,textarea,label")) return;
     if (window.getSelection && String(window.getSelection())) return;
+    // CN order detail opens in its own browser tab (like DRSB) so the list,
+    // its filters and its scroll position stay exactly where they were.
+    if (newTab) {
+      if (row) cnPrefillSave(row);
+      window.open(to, "_blank", "noopener,noreferrer");
+      return;
+    }
     navigate(to);
   };
   const load = React.useCallback(async () => {
@@ -55393,6 +55535,9 @@ function CnOrdersPage() {
         <>
           <Link
             to={`/cn-orders/${encodeURIComponent(r.order_id)}`}
+            onClick={() => cnPrefillSave(r)}
+            target="_blank"
+            rel="noopener noreferrer"
             className="font-bold text-signal-blue hover:underline"
           >
             {r.order_id}
@@ -55551,6 +55696,9 @@ function CnOrdersPage() {
           <HoverCopy value={r.order_id} label="Copy order ID">
             <Link
               to={`/cn-orders/${encodeURIComponent(r.order_id)}`}
+              onClick={() => cnPrefillSave(r)}
+              target="_blank"
+              rel="noopener noreferrer"
               className="block font-bold text-ink-900 hover:text-signal-blue"
             >
               {r.order_id}
@@ -55936,7 +56084,12 @@ function CnOrdersPage() {
             loading={serverMode ? pageLoading : loading}
             skeletonRows={Math.min(pageSize, 8)}
             onRowClick={(r, e) =>
-              openRow(e, `/cn-orders/${encodeURIComponent(r.order_id)}`)
+              openRow(
+                e,
+                `/cn-orders/${encodeURIComponent(r.order_id)}`,
+                true,
+                r,
+              )
             }
             error={
               serverMode
@@ -56022,7 +56175,12 @@ function CnOrdersPage() {
               skeletonRows={6}
               minWidth={1510}
               onRowClick={(r, e) =>
-                openRow(e, `/cn-orders/${encodeURIComponent(r.order_id)}`)
+                openRow(
+                  e,
+                  `/cn-orders/${encodeURIComponent(r.order_id)}`,
+                  true,
+                  r,
+                )
               }
               emptyTitle="No finance records found."
             />
@@ -56171,6 +56329,8 @@ function CnCardHead({ icon: Ic, title, pill, right }) {
 const CN_DETAIL_LAYOUT_CSS = `
 .cn-detail-page{--cn-surface:#fff;--cn-soft:#f8fafc;--cn-border:#e2e8f0;--cn-text:#0f172a;--cn-muted:#64748b;--cn-blue:#2563eb;--cn-tint:#eff6ff;color:var(--cn-text);font-family:Inter,"Noto Sans Khmer","Kantumruy Pro",system-ui,sans-serif;min-width:0}
 html.cb-admin-dark .cn-detail-page{--cn-surface:#151c2c;--cn-soft:#101827;--cn-border:#263043;--cn-text:#f1f5f9;--cn-muted:#94a3b8;--cn-blue:#93c5fd;--cn-tint:#182b4a}
+.cn-detail-page{transition:opacity .2s ease}
+.cn-detail-page.is-busy{pointer-events:none}
 .cn-detail-page .cn-detail-shell{background:var(--cn-surface);border:1px solid var(--cn-border);border-radius:16px;padding:24px;box-shadow:0 2px 6px #0f172a03}
 .cn-detail-page .cb-surface{background:var(--cn-surface);border:1px solid var(--cn-border);border-radius:12px;box-shadow:none;min-width:0}
 .cn-detail-header{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;flex-wrap:wrap}
@@ -56221,6 +56381,51 @@ html.cb-admin-dark .cn-detail-page{--cn-surface:#151c2c;--cn-soft:#101827;--cn-b
 // Loading placeholder that mirrors the real CN order detail layout
 // (header, tabs, Order details card, tracking panel, sidebar cards) so the
 // page doesn't jump when the data arrives.
+// List -> new-tab hand-off. The list already holds the full cn_orders row, so
+// it leaves a short-lived copy in localStorage (shared by every tab of this
+// site). The detail tab picks it up and paints the page at once while the
+// parcels / history are still loading, instead of showing a skeleton.
+const CN_PREFILL_PREFIX = "cb.cnprefill.";
+function cnPrefillSave(row) {
+  try {
+    if (!row?.order_id) return;
+    // drop copies from earlier clicks that were never picked up
+    for (let k = localStorage.length - 1; k >= 0; k--) {
+      const name = localStorage.key(k);
+      if (!name || !name.startsWith(CN_PREFILL_PREFIX)) continue;
+      try {
+        if (Date.now() - JSON.parse(localStorage.getItem(name)).ts > 30000)
+          localStorage.removeItem(name);
+      } catch (_e) {
+        localStorage.removeItem(name);
+      }
+    }
+    localStorage.setItem(
+      CN_PREFILL_PREFIX + row.order_id,
+      JSON.stringify({ ts: Date.now(), row }),
+    );
+  } catch (_e) {
+    /* storage full / blocked: the detail page just loads normally */
+  }
+}
+function cnPrefillTake(orderId) {
+  try {
+    const key = CN_PREFILL_PREFIX + orderId;
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const { ts, row } = JSON.parse(raw);
+    // Only a copy made seconds ago for THIS order is trusted. (Not deleted on
+    // read so React StrictMode's double initialiser still sees it; it expires.)
+    if (!row || row.order_id !== orderId || Date.now() - ts > 30000) {
+      localStorage.removeItem(key);
+      return null;
+    }
+    return row;
+  } catch (_e) {
+    return null;
+  }
+}
+
 function CnOrderDetailSkeleton() {
   const infoRows = [
     ["w-24", "w-40"],
@@ -56343,8 +56548,16 @@ function CnOrderDetailPage() {
   const { id } = useParams();
   const { user } = useAuth();
   const navigate = useNavigate();
+  // Browser-tab title = the order number, so many order tabs are easy to tell apart.
+  useEffect(() => {
+    const prev = document.title;
+    if (id) document.title = `${id} · ${prev}`;
+    return () => {
+      document.title = prev;
+    };
+  }, [id]);
   const { refetch: refetchPackages, forgetDeletedTks } = usePackageTracking();
-  const [row, setRow] = useState(null);
+  const [rowRaw, setRow] = useState(() => cnPrefillTake(id));
   const [detailTab, setDetailTab] = useState("details");
   const tabRefs = useRef([]);
   useEffect(() => {
@@ -56354,6 +56567,13 @@ function CnOrderDetailPage() {
   const [partial, setPartial] = useState(false);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
+  // No skeleton: while the order loads, draw the real layout with "—" values
+  // (like DRSB). Actions stay disabled until the real row arrives.
+  const isPlaceholder = loading && !rowRaw;
+  const row = useMemo(
+    () => rowRaw || (loading ? { order_id: id, cn_order_items: [] } : null),
+    [rowRaw, loading, id],
+  );
   const [payOpen, setPayOpen] = useState(false);
   const [cnInvoiceOpen, setCnInvoiceOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
@@ -56475,11 +56695,11 @@ function CnOrderDetailPage() {
   const [cnMenuOpen, setCnMenuOpen] = useState(false);
   const [labelTk, setLabelTk] = useState(null); // TK whose label is being printed
   const [labelMenuOpen, setLabelMenuOpen] = useState(false);
-  const canPay = hasPermission(user, "cn_order.payment"),
-    canPurchase = hasPermission(user, "cn_order.purchase"),
-    canRefund = hasPermission(user, "cn_order.refund"),
-    canEdit = hasPermission(user, "cn_order.edit"),
-    canDelete = hasPermission(user, "cn_order.delete");
+  const canPay = hasPermission(user, "cn_order.payment") && !isPlaceholder,
+    canPurchase = hasPermission(user, "cn_order.purchase") && !isPlaceholder,
+    canRefund = hasPermission(user, "cn_order.refund") && !isPlaceholder,
+    canEdit = hasPermission(user, "cn_order.edit") && !isPlaceholder,
+    canDelete = hasPermission(user, "cn_order.delete") && !isPlaceholder;
 
   const load = React.useCallback(async () => {
     if (!supabase) return setLoading(false);
@@ -56490,39 +56710,44 @@ function CnOrderDetailPage() {
       .maybeSingle();
     setRow(data || null);
     if (data?.id) {
-      const [{ data: p }, { data: h }, { data: pk }] = await Promise.all([
-        supabase
-          .from("cn_order_parcels")
-          .select("*")
-          .eq("cn_order_id", data.id)
-          .order("created_at", { ascending: true }),
-        supabase
-          .from("cn_order_history")
-          .select("*")
-          .eq("cn_order_id", data.id)
-          .order("created_at", { ascending: true }),
-        // Physical TKs linked to this order (packages.cn_order_id)
-        supabase
-          .from("packages")
-          .select("tk,status,freight_fee,paid_amount")
-          .eq("cn_order_id", data.id),
-      ]);
+      // All four lookups run at the same time (was: three, then a fourth one
+      // after them) so the detail page opens after ONE round-trip, not two.
+      const [{ data: p }, { data: h }, { data: pk }, rqRes] = await Promise.all(
+        [
+          supabase
+            .from("cn_order_parcels")
+            .select("*")
+            .eq("cn_order_id", data.id)
+            .order("created_at", { ascending: true }),
+          supabase
+            .from("cn_order_history")
+            .select("*")
+            .eq("cn_order_id", data.id)
+            .order("created_at", { ascending: true }),
+          // Physical TKs linked to this order (packages.cn_order_id)
+          supabase
+            .from("packages")
+            .select("tk,status,freight_fee,paid_amount")
+            .eq("cn_order_id", data.id),
+          // "Request Shipping Payment" flag (needs cn-ship-pay-request.sql;
+          // ignored while the column does not exist yet).
+          Promise.resolve(
+            supabase
+              .from("packages")
+              .select("tk,ship_pay_requested_at")
+              .eq("cn_order_id", data.id),
+          ).catch(() => ({ data: null, error: true })),
+        ],
+      );
       const tkByKey = new Map((pk || []).map((x) => [cnLinkKey(x.tk), x]));
-      // "Request Shipping Payment" flag (needs cn-ship-pay-request.sql;
-      // ignored while the column does not exist yet).
       let reqByKey = new Map();
-      try {
-        const { data: rq, error: rqErr } = await supabase
-          .from("packages")
-          .select("tk,ship_pay_requested_at")
-          .eq("cn_order_id", data.id);
-        if (!rqErr)
-          reqByKey = new Map(
-            (rq || []).map((x) => [cnLinkKey(x.tk), x.ship_pay_requested_at]),
-          );
-      } catch (_e) {
-        /* optional */
-      }
+      if (rqRes && !rqRes.error)
+        reqByKey = new Map(
+          (rqRes.data || []).map((x) => [
+            cnLinkKey(x.tk),
+            x.ship_pay_requested_at,
+          ]),
+        );
       const merged = (p || []).map((x) => {
         const m = tkByKey.get(cnLinkKey(x.domestic_tracking));
         return m
@@ -56808,7 +57033,6 @@ function CnOrderDetailPage() {
     navigate("/cn-orders");
   }
 
-  if (loading) return <CnOrderDetailSkeleton />;
   if (!row)
     return (
       <div className="py-12 text-center text-slate-400">
@@ -56964,7 +57188,11 @@ function CnOrderDetailPage() {
         pill={`${parcels.length} parcel${parcels.length === 1 ? "" : "s"}`}
       />
       <div className="border-t border-slate-100 px-5 py-3">
-        {!parcels.length ? (
+        {loading ? (
+          <p className="text-sm text-slate-300" aria-hidden="true">
+            —
+          </p>
+        ) : !parcels.length ? (
           <p className="text-sm text-slate-400">
             No tracking numbers yet. Required before moving to Shipping to China
             WH.
@@ -57113,7 +57341,10 @@ function CnOrderDetailPage() {
     </section>
   );
   return (
-    <div className="cn-detail-page space-y-4">
+    <div
+      className={`cn-detail-page space-y-4${loading ? " is-busy" : ""}`}
+      aria-busy={loading}
+    >
       <style>{CN_DETAIL_LAYOUT_CSS}</style>
       <nav
         className="flex flex-wrap items-center gap-2 text-sm text-slate-500"
