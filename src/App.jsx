@@ -22094,6 +22094,28 @@ function FinancialStat({ label, value, detail, tone = "blue", icon }) {
   );
 }
 
+// A titled block that keeps one kind of figure together (paid / not yet paid /
+// billing) so the dashboard never mixes money received with money still owed.
+function FinancialSection({ tone = "blue", title, subtitle, children }) {
+  const bar = {
+    green: "bg-emerald-500",
+    amber: "bg-amber-500",
+    blue: "bg-blue-500",
+  };
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center gap-3">
+        <span className={`h-9 w-1.5 rounded-full ${bar[tone] || bar.blue}`} />
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-ink-900">{title}</h2>
+          {subtitle && <p className="text-xs text-ink-600/55">{subtitle}</p>}
+        </div>
+      </div>
+      {children}
+    </section>
+  );
+}
+
 function FinancialRevenueChart({ points, currency = "USD", onSelectPoint }) {
   const [hovered, setHovered] = useState(null);
   const max = Math.max(1, ...points.map((p) => p.value));
@@ -22180,6 +22202,486 @@ function FinancialRevenueChart({ points, currency = "USD", onSelectPoint }) {
         </p>
       )}
     </div>
+  );
+}
+
+// ---- Monthly overview chart -------------------------------------------------
+// Grouped bars per calendar month: Order Sales, Orders, Top Up, Order Complete
+// and Order Refund. It reads ALL loaded rows (not the period picker) so a
+// whole year can be compared at a glance. Every metric has an Amount (USD) and
+// a Count view, because dollars and counts cannot share one axis.
+const FIN_MONTHLY_SERIES = [
+  { key: "sales", label: "Order Sales", color: "#3b82f6" },
+  { key: "orders", label: "Orders", color: "#8b5cf6" },
+  { key: "topup", label: "Top Up", color: "#10b981" },
+  { key: "complete", label: "Order Complete", color: "#f59e0b" },
+  { key: "refund", label: "Order Refund", color: "#f43f5e" },
+];
+
+function finMonthKey(raw) {
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function finNiceStep(v) {
+  if (!(v > 0)) return 1;
+  const pow = Math.pow(10, Math.floor(Math.log10(v)));
+  const n = v / pow;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * pow;
+}
+
+function FinancialMonthlyChart({ cn, wallet, loading }) {
+  const [mode, setMode] = useState("amount"); // "amount" | "count"
+  // Same date picker as every list page (presets + two-month calendar). Empty
+  // = the default view: the last 6 calendar months.
+  const [range, setRange] = useState(EMPTY_DATE_RANGE);
+  const [hidden, setHidden] = useState([]);
+  const [hovered, setHovered] = useState(null);
+  // Real plot width, so the value labels can adapt to the room each bar has.
+  const plotRef = React.useRef(null);
+  const [plotW, setPlotW] = useState(0);
+  // Show the skeleton only for the very first load (the dashboard reloads
+  // every minute; the chart must not flash), then grow the bars in smoothly.
+  const [ready, setReady] = useState(false);
+  const [grown, setGrown] = useState(false);
+  useEffect(() => {
+    if (!loading) setReady(true);
+  }, [loading]);
+  useEffect(() => {
+    if (!ready) return undefined;
+    let id2;
+    const id1 = requestAnimationFrame(() => {
+      id2 = requestAnimationFrame(() => setGrown(true));
+    });
+    return () => {
+      cancelAnimationFrame(id1);
+      if (id2) cancelAnimationFrame(id2);
+    };
+  }, [ready]);
+  useEffect(() => {
+    const el = plotRef.current;
+    if (!ready || !el) return undefined;
+    setPlotW(el.getBoundingClientRect().width);
+    if (typeof ResizeObserver === "undefined") return undefined;
+    const ro = new ResizeObserver(() =>
+      setPlotW(el.getBoundingClientRect().width),
+    );
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ready]);
+
+  const { from: rangeFrom, to: rangeTo } = resolveDateRange(range);
+  const months = useMemo(() => {
+    const now = new Date();
+    const parse = (k) => new Date(`${k}T12:00:00`);
+    const endD = rangeTo ? parse(rangeTo) : now;
+    const startD = rangeFrom
+      ? parse(rangeFrom)
+      : new Date(endD.getFullYear(), endD.getMonth() - (rangeTo ? 11 : 5), 1);
+    const n = Math.min(
+      36,
+      Math.max(
+        1,
+        (endD.getFullYear() - startD.getFullYear()) * 12 +
+          (endD.getMonth() - startD.getMonth()) +
+          1,
+      ),
+    );
+    // With a picked range only rows inside those days are counted; with no
+    // range the last 6 months are shown whole.
+    const inDays = (raw) => {
+      if (!rangeFrom && !rangeTo) return true;
+      const k = localDayKey(raw);
+      return (
+        !!k && (!rangeFrom || k >= rangeFrom) && (!rangeTo || k <= rangeTo)
+      );
+    };
+    const list = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const d = new Date(endD.getFullYear(), endD.getMonth() - i, 1);
+      const item = {
+        key: finMonthKey(d),
+        label: d.toLocaleString("en-US", { month: "short" }),
+        year: d.getFullYear(),
+        full: d.toLocaleString("en-US", { month: "long", year: "numeric" }),
+      };
+      FIN_MONTHLY_SERIES.forEach(
+        (s) => (item[s.key] = { amount: 0, count: 0 }),
+      );
+      list.push(item);
+    }
+    const byKey = new Map(list.map((m) => [m.key, m]));
+    const add = (m, k, amount) => {
+      m[k].amount += amount;
+      m[k].count += 1;
+    };
+    (cn || []).forEach((r) => {
+      const m = byKey.get(finMonthKey(r.created_at));
+      if (!m || !inDays(r.created_at)) return;
+      const refunded = finIsRefunded(r);
+      add(m, "orders", finCharge(r));
+      if (refunded) {
+        add(
+          m,
+          "refund",
+          finNum(
+            r.refund_amount_usd,
+            r.refunded_amount_usd,
+            r.amount_refunded_usd,
+            r.amount_paid_usd,
+          ) ?? 0,
+        );
+      } else {
+        // Order Sales = the customer has paid: every stage from Approve
+        // Purchase onward (anything except Waiting Order Payment).
+        if (cnOrderTableStatus(r) !== "Waiting Order Payment") {
+          const paid = finPaid(r);
+          add(
+            m,
+            "sales",
+            paid > 0 || r.order_type !== "direct" ? paid : finCharge(r),
+          );
+        }
+        if (
+          cnNormalizeStatus(String(r.status || "").trim()) === "Complete Order"
+        )
+          add(m, "complete", finPaid(r));
+      }
+    });
+    (wallet || []).forEach((r) => {
+      const m = byKey.get(finMonthKey(r.created_at));
+      if (!m || !inDays(r.created_at)) return;
+      const type = String(r.type || "").toLowerCase();
+      const amt = Math.abs(finNum(r.amount, r.amount_usd, r.value) ?? 0);
+      if (type === "top_up") add(m, "topup", amt);
+      else if (type === "top_up_reversal") {
+        m.topup.amount -= amt; // net of reversals; count stays top-ups made
+      }
+    });
+    return list;
+  }, [cn, wallet, rangeFrom, rangeTo]);
+
+  const quickRanges = (() => {
+    const t = new Date();
+    const y = t.getFullYear();
+    const mo = t.getMonth();
+    const day = (a, b, c) => localDayKey(new Date(a, b, c));
+    const to = day(y, mo, t.getDate());
+    return [
+      { key: "m6", label: "6 months", from: day(y, mo - 5, 1), to },
+      { key: "m12", label: "12 months", from: day(y, mo - 11, 1), to },
+      { key: "year", label: "This year", from: day(y, 0, 1), to },
+    ];
+  })();
+  const noRange = !range.preset && !range.from && !range.to;
+
+  const visible = FIN_MONTHLY_SERIES.filter((s) => !hidden.includes(s.key));
+  const maxVal = Math.max(
+    0,
+    ...months.flatMap((m) => visible.map((s) => m[s.key][mode])),
+  );
+  const step = Math.max(mode === "count" ? 1 : 0.01, finNiceStep(maxVal / 4));
+  const top = step * 4;
+  const fmt = (v) =>
+    mode === "amount" ? finMoney(v) : Math.round(v).toLocaleString("en-US");
+  const fmtBar = (v) =>
+    mode === "amount"
+      ? v >= 1000
+        ? `$${+(v / 1000).toFixed(1)}k`
+        : `$${Math.round(v)}`
+      : Math.round(v).toLocaleString("en-US");
+  // Value labels adapt to the room each bar really has (measured, so it also
+  // holds on narrow screens): shown flat above the bars when there is room,
+  // hidden when crowded (12 months / a year) rather than overlapping or
+  // turned sideways. The hover tooltip always carries every number.
+  const slotW =
+    plotW > 0 && visible.length > 0
+      ? (plotW / months.length - 16 - (visible.length - 1) * 4) / visible.length
+      : 0;
+  const labelMode = slotW >= 42 ? "h" : "none";
+  const fmtTick = (v) =>
+    mode === "amount"
+      ? v >= 1000
+        ? `$${+(v / 1000).toFixed(1)}k`
+        : `$${+v.toFixed(2)}`
+      : String(Math.round(v));
+  const empty = months.every((m) =>
+    FIN_MONTHLY_SERIES.every((s) => m[s.key].count === 0),
+  );
+  // The tooltip stays mounted and glides between months (no pop in/out), so it
+  // remembers the last hovered month while it fades away.
+  const lastIdx = React.useRef(0);
+  if (hovered !== null) lastIdx.current = hovered;
+  const tipIdx = Math.min(lastIdx.current, months.length - 1);
+  const hm = months[tipIdx];
+  const tipRef = React.useRef(null);
+  const [tipLeft, setTipLeft] = useState(0);
+
+  return (
+    <section className="cb-surface rounded-2xl border border-mist-100">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-mist-100 px-4 py-4 sm:px-5">
+        <div>
+          <h2 className="font-semibold text-ink-900">Monthly Overview</h2>
+          <p className="mt-0.5 text-xs text-ink-600/55">
+            Order sales, orders, top-ups, completed and refunded orders by month
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-lg border border-mist-200 p-1">
+            {quickRanges.map((q) => {
+              const on =
+                (!range.preset && range.from === q.from && range.to === q.to) ||
+                (q.key === "m6" && noRange);
+              return (
+                <button
+                  key={q.key}
+                  type="button"
+                  onClick={() =>
+                    setRange(
+                      q.key === "m6"
+                        ? EMPTY_DATE_RANGE
+                        : { preset: "", from: q.from, to: q.to },
+                    )
+                  }
+                  className={`rounded-md px-3 py-1.5 text-xs font-semibold ${on ? "bg-blue-600 text-white" : "text-ink-600"}`}
+                >
+                  {q.label}
+                </button>
+              );
+            })}
+          </div>
+          <DateRangeFilter label="Date" value={range} onChange={setRange} />
+          <div className="inline-flex rounded-lg border border-mist-200 p-1">
+            {[
+              ["amount", "Amount (USD)"],
+              ["count", "Count"],
+            ].map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setMode(k)}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold ${mode === k ? "bg-blue-600 text-white" : "text-ink-600"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Always the full layout, even before the first load: the empty chart
+          already has its final height, so nothing below it jumps down when
+          the data arrives. */}
+      {
+        <div
+          className={`px-4 pb-5 pt-4 sm:px-6 ${ready ? "" : "pointer-events-none animate-pulse"}`}
+        >
+          <div className="mb-3 flex flex-wrap gap-2">
+            {FIN_MONTHLY_SERIES.map((s) => {
+              const off = hidden.includes(s.key);
+              return (
+                <button
+                  key={s.key}
+                  type="button"
+                  aria-pressed={!off}
+                  onClick={() =>
+                    setHidden((h) =>
+                      off ? h.filter((k) => k !== s.key) : [...h, s.key],
+                    )
+                  }
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition ${off ? "border-mist-200 text-ink-600/40" : "border-mist-200 text-ink-800"}`}
+                >
+                  <span
+                    className="h-2.5 w-2.5 rounded-sm"
+                    style={{ background: off ? "#cbd5e1" : s.color }}
+                  />
+                  {s.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="overflow-x-auto pt-6">
+            <div
+              className="relative flex"
+              style={{ minWidth: Math.max(600, months.length * 96) }}
+            >
+              <div
+                className={`relative mr-2 h-80 w-14 shrink-0 text-right text-[11px] text-ink-600/60 transition-opacity duration-500 sm:h-[26rem] ${ready ? "opacity-100" : "opacity-0"}`}
+              >
+                {[4, 3, 2, 1, 0].map((i) => (
+                  <span
+                    key={i}
+                    className="absolute right-0 -translate-y-1/2 tabular-nums"
+                    style={{ top: `${((4 - i) / 4) * 100}%` }}
+                  >
+                    {fmtTick(step * i)}
+                  </span>
+                ))}
+              </div>
+              <div className="relative flex-1">
+                <div
+                  ref={plotRef}
+                  className="relative flex h-80 items-end border-b border-l border-mist-200 sm:h-[26rem]"
+                  onMouseMove={(e) => {
+                    // One tracker for the whole plot: moving between months
+                    // never passes through a "nothing hovered" state.
+                    const r = e.currentTarget.getBoundingClientRect();
+                    const n = months.length;
+                    const i = Math.min(
+                      n - 1,
+                      Math.max(
+                        0,
+                        Math.floor(((e.clientX - r.left) / r.width) * n),
+                      ),
+                    );
+                    // Put the tooltip beside the month, on whichever side it
+                    // fits INSIDE the plot. With one or two months (a short
+                    // date range) neither side fits, so it is centred over
+                    // the month instead of being pushed off-screen.
+                    const colL = (i / n) * r.width;
+                    const colR = ((i + 1) / n) * r.width;
+                    const w = tipRef.current?.offsetWidth || 240;
+                    let left;
+                    if (colR + 8 + w <= r.width) left = colR + 8;
+                    else if (colL - 8 - w >= 0) left = colL - 8 - w;
+                    else
+                      left = Math.max(
+                        0,
+                        Math.min(r.width - w, (colL + colR) / 2 - w / 2),
+                      );
+                    setHovered(i);
+                    setTipLeft(left);
+                  }}
+                  onMouseLeave={() => setHovered(null)}
+                >
+                  {[1, 2, 3, 4].map((i) => (
+                    <div
+                      key={i}
+                      className="pointer-events-none absolute inset-x-0 border-t border-mist-100"
+                      style={{ top: `${(i / 4) * 100}%`, bottom: "auto" }}
+                    />
+                  ))}
+                  {months.map((m, idx) => (
+                    <div
+                      key={m.key}
+                      className={`relative flex h-full min-w-0 flex-1 items-end justify-center gap-1 px-2 transition-[background-color,opacity] duration-200 ease-out ${hovered === idx ? "bg-blue-500/5" : ""}`}
+                      style={{
+                        opacity: hovered === null || hovered === idx ? 1 : 0.55,
+                      }}
+                      onFocus={() => setHovered(idx)}
+                      onBlur={() => setHovered(null)}
+                      tabIndex={0}
+                      aria-label={`${m.full}: ${FIN_MONTHLY_SERIES.map((s) => `${s.label} ${fmt(m[s.key][mode])}`).join(", ")}`}
+                    >
+                      {visible.map((s, si) => {
+                        const v = Math.max(0, m[s.key][mode]);
+                        const pct = grown ? (v / top) * 100 : 0;
+                        const delay = `${Math.min(idx * 70 + si * 35, 900)}ms`;
+                        return (
+                          <div
+                            key={s.key}
+                            className="relative h-full w-full max-w-10"
+                          >
+                            <div
+                              className="absolute bottom-0 w-full rounded-t-md transition-[height] duration-[900ms] motion-reduce:transition-none"
+                              style={{
+                                background: s.color,
+                                height: `${pct}%`,
+                                minHeight: grown && v > 0 ? 4 : 0,
+                                transitionDelay: delay,
+                                transitionTimingFunction:
+                                  "cubic-bezier(0.22, 1, 0.36, 1)",
+                              }}
+                            />
+                            {labelMode !== "none" && v > 0 && (
+                              <span
+                                className="pointer-events-none absolute left-1/2 whitespace-nowrap text-[11px] font-semibold tabular-nums text-ink-700 transition-[bottom,opacity] duration-[900ms] motion-reduce:transition-none"
+                                style={{
+                                  transform: "translateX(-50%)",
+                                  bottom: `calc(${pct}% + 6px)`,
+                                  opacity: grown ? 1 : 0,
+                                  transitionDelay: delay,
+                                  transitionTimingFunction:
+                                    "cubic-bezier(0.22, 1, 0.36, 1)",
+                                }}
+                              >
+                                {fmtBar(v)}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                  {hm && (
+                    <div
+                      ref={tipRef}
+                      className="pointer-events-none absolute top-2 z-20 w-60 rounded-xl border border-mist-200 bg-white px-3 py-2.5 text-xs shadow-xl transition-[left,opacity] duration-200 ease-out motion-reduce:transition-none"
+                      style={{
+                        left: tipLeft,
+                        opacity: hovered === null ? 0 : 1,
+                      }}
+                      aria-hidden="true"
+                    >
+                      <p className="font-semibold text-ink-900">{hm.full}</p>
+                      {FIN_MONTHLY_SERIES.map((s) => (
+                        <div
+                          key={s.key}
+                          className="mt-1.5 flex items-center justify-between gap-5"
+                        >
+                          <span className="flex items-center gap-1.5 text-ink-600">
+                            <span
+                              className="h-2 w-2 rounded-sm"
+                              style={{ background: s.color }}
+                            />
+                            {s.label}
+                          </span>
+                          <span className="text-right tabular-nums text-ink-900">
+                            <strong>{finMoney(hm[s.key].amount)}</strong>
+                            <span className="ml-1.5 text-[10px] text-ink-600/55">
+                              ({hm[s.key].count.toLocaleString("en-US")})
+                            </span>
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="mt-2 flex text-[10px] text-ink-600/60">
+                  {months.map((m, idx) => (
+                    <span
+                      key={m.key}
+                      className="min-w-0 flex-1 text-center leading-tight"
+                    >
+                      {m.label}
+                      {m.label === "Jan" || idx === 0 ? (
+                        <span className="block text-ink-600/40">{m.year}</span>
+                      ) : null}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {ready && empty && (
+            <p className="mt-3 text-center text-sm text-ink-600/55">
+              No orders or top-ups recorded in this range.
+            </p>
+          )}
+          <p className="mt-3 text-[11px] leading-4 text-ink-600/50">
+            Order Sales counts orders the customer has paid, from Approve
+            Purchase onward (amount = paid; unpaid and refunded orders are
+            excluded). Order Complete counts orders with status Complete Order
+            (amount = paid). Top Up is net of reversals. Hover a month for all
+            figures; the number in brackets is the count.
+          </p>
+        </div>
+      }
+    </section>
   );
 }
 
@@ -22455,12 +22957,44 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
   const completedPurchase = activeCn
     .filter(cnDone)
     .reduce((s, r) => s + finPaid(r), 0);
-  // Order: packages that carry a shipping fee, paid vs still unpaid.
-  const feePackages = packages.filter((r) => (finNum(r.freight_fee) ?? 0) > 0);
-  const pendingShippingN = feePackages.filter(
-    (r) => (finNum(r.paid_amount) ?? 0) + 0.005 < Number(r.freight_fee),
+
+  // Not Yet Paid = customers who placed a CN purchase order but have not paid
+  // it (status "Waiting Order Payment", same rule as the CN Orders table) and
+  // customers who have not paid a Shipment shipping fee. It is a standing
+  // balance over ALL dates, not limited by the reporting period: an order
+  // from last week that is still unpaid must show up. Once paid it leaves
+  // here and is counted under Customer Paid.
+  const unpaidCnRows = rows.cn.filter(
+    (r) =>
+      !finIsRefunded(r) && cnOrderTableStatus(r) === "Waiting Order Payment",
+  );
+  const unpaidCnCount = unpaidCnRows.length;
+  const unpaidCnAmount = unpaidCnRows.reduce(
+    (s, r) => s + Math.max(0, finCharge(r) - finPaid(r)),
+    0,
+  );
+  // Shipping fee on a package that is not already part of a CN order total.
+  const unpaidShipRows = rows.packages.filter(
+    (r) =>
+      !r.cn_order_id &&
+      (Number(r.freight_fee) || 0) > 0 &&
+      (Number(r.freight_fee) || 0) - (Number(r.paid_amount) || 0) > 0.005,
+  );
+  const unpaidShipAmount = unpaidShipRows.reduce(
+    (s, r) =>
+      s +
+      Math.max(0, (Number(r.freight_fee) || 0) - (Number(r.paid_amount) || 0)),
+    0,
+  );
+  const shippingPaidAmount = shippingRows.reduce(
+    (s, r) => s + Math.max(0, finNum(r.paid_amount) ?? 0),
+    0,
+  );
+  const paidShippingRowsN = shippingRows.filter(
+    (r) =>
+      (Number(r.freight_fee) || 0) > 0 &&
+      (Number(r.paid_amount) || 0) + 0.005 >= Number(r.freight_fee),
   ).length;
-  const paidShippingN = feePackages.length - pendingShippingN;
 
   const chartPoints = useMemo(() => {
     const all = [
@@ -22523,27 +23057,61 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
     start && end
       ? `${start.toLocaleDateString("en-GB")} – ${new Date(end.getTime() - 86400000).toLocaleDateString("en-GB")}`
       : "All dates";
-  const statCards = [
-    {
-      label: "Total Revenue",
-      value: finMoney(totalRevenue),
-      detail: "CN orders + Shipment shipping fees",
-      tone: "blue",
-      icon: "TrendingUp",
-    },
+  // Cards are grouped so money the customer HAS paid and money they still
+  // OWE never share a row: Customer Paid / Not Yet Paid / Billing, Cost & Refunds.
+  const paidCards = [
     {
       label: "Total Collected",
       value: finMoney(totalCollected),
-      detail: "Recorded payments only",
+      detail: "Recorded customer payments",
       tone: "green",
       icon: "Wallet",
     },
     {
+      label: "Paid CN Orders",
+      value: finMoney(inProgressPurchase + completedPurchase),
+      detail: "Amount paid on CN purchase orders",
+      tone: "green",
+      icon: "ShoppingCart",
+    },
+    {
+      label: "Shipping Fees Paid",
+      value: finMoney(shippingPaidAmount),
+      detail: `${paidShippingRowsN.toLocaleString("en-US")} packages with the fee paid`,
+      tone: "green",
+      icon: "Package",
+    },
+  ];
+  const unpaidCards = [
+    {
       label: "Outstanding Balance",
-      value: finMoney(outstanding),
-      detail: "Unpaid customer charges",
+      value: finMoney(unpaidCnAmount + unpaidShipAmount),
+      detail: "Unpaid orders + unpaid shipping fees",
       tone: "amber",
       icon: "Clock3",
+    },
+    {
+      label: "Unpaid CN Orders",
+      value: finMoney(unpaidCnAmount),
+      detail: `${unpaidCnCount.toLocaleString("en-US")} orders placed, not paid yet`,
+      tone: "amber",
+      icon: "ShoppingCart",
+    },
+    {
+      label: "Unpaid Shipping Fees",
+      value: finMoney(unpaidShipAmount),
+      detail: `${unpaidShipRows.length.toLocaleString("en-US")} packages with an unpaid shipping fee`,
+      tone: "amber",
+      icon: "Package",
+    },
+  ];
+  const billingCards = [
+    {
+      label: "Total Billed",
+      value: finMoney(totalRevenue),
+      detail: "CN orders + shipping fees, incl. unpaid",
+      tone: "blue",
+      icon: "TrendingUp",
     },
     {
       label: "Purchase Amount",
@@ -22553,13 +23121,6 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
         : `${costCount} of ${purchaseCosts.length} CN orders have cost`,
       tone: "violet",
       icon: "ShoppingCart",
-    },
-    {
-      label: "Refunds",
-      value: finMoney(refunds),
-      detail: "Refunded CN orders",
-      tone: "red",
-      icon: "RotateCcw",
     },
     {
       label: "Purchase Profit (CN Orders)",
@@ -22580,6 +23141,13 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
             ? "green"
             : "red",
       icon: "Scale",
+    },
+    {
+      label: "Refunds",
+      value: finMoney(refunds),
+      detail: "Refunded CN orders",
+      tone: "red",
+      icon: "RotateCcw",
     },
   ];
 
@@ -22622,6 +23190,12 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
           </button>
         </div>
       </div>
+
+      <FinancialMonthlyChart
+        cn={rows.cn}
+        wallet={rows.wallet}
+        loading={loading}
+      />
 
       <div className="cb-surface rounded-2xl border border-mist-100 p-3 sm:p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -22679,92 +23253,105 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {statCards.map((card) => (
-            <FinancialStat key={card.label} {...card} />
-          ))}
-        </div>
-      )}
+        <div className="space-y-8">
+          <FinancialSection
+            tone="green"
+            title="Customer Paid"
+            subtitle="Money already received from customers"
+          >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {paidCards.map((card) => (
+                <FinancialStat key={card.label} {...card} />
+              ))}
+            </div>
+            <FinancialGroup
+              icon="ShoppingCart"
+              title="Paid CN Purchase"
+              items={[
+                {
+                  label: "Total In-Progress Purchase",
+                  value: finMoney(inProgressPurchase),
+                  hint: "Paid CN orders not yet completed",
+                },
+                {
+                  label: "Total Completed Purchase",
+                  value: finMoney(completedPurchase),
+                  hint: "Paid CN orders with status Complete Order",
+                },
+              ]}
+            />
+            <FinancialGroup
+              icon="Wallet"
+              title="Top Up"
+              items={[
+                {
+                  label: "Total Admin Top Up (Cash)",
+                  value: finMoney(adminTopUp),
+                },
+                {
+                  label: "Top Up Reversed",
+                  value: finMoney(topUpReversed),
+                },
+                {
+                  label: "Grand Total",
+                  value: finMoney(topUpGrand),
+                  hint: "Top up minus reversals",
+                  grand: true,
+                },
+              ]}
+            />
+            <FinancialGroup
+              icon="CreditCard"
+              title="Payment By Wallet"
+              items={[
+                {
+                  label: "Product Order",
+                  value: finMoney(productOrderWallet),
+                  hint: "Shop orders, net of refunds",
+                },
+                {
+                  label: "CN Order",
+                  value: finMoney(cnOrderWallet),
+                  hint: "CN purchase orders, net of refunds",
+                },
+                { label: "Shipping Fee", value: finMoney(shippingFeeWallet) },
+                {
+                  label: "Grand Total",
+                  value: finMoney(walletPayGrand),
+                  grand: true,
+                  tone: "red",
+                },
+              ]}
+            />
+          </FinancialSection>
 
-      {!loading && (
-        <div className="space-y-4">
-          <FinancialGroup
-            icon="Wallet"
-            title="Top Up"
-            items={[
-              {
-                label: "Total Admin Top Up (Cash)",
-                value: finMoney(adminTopUp),
-              },
-              {
-                label: "Top Up Reversed",
-                value: finMoney(topUpReversed),
-              },
-              {
-                label: "Grand Total",
-                value: finMoney(topUpGrand),
-                hint: "Top up minus reversals",
-                grand: true,
-              },
-            ]}
-          />
-          <FinancialGroup
-            icon="CreditCard"
-            title="Payment By Wallet"
-            items={[
-              {
-                label: "Product Order",
-                value: finMoney(productOrderWallet),
-                hint: "Shop orders, net of refunds",
-              },
-              {
-                label: "CN Order",
-                value: finMoney(cnOrderWallet),
-                hint: "CN purchase orders, net of refunds",
-              },
-              { label: "Shipping Fee", value: finMoney(shippingFeeWallet) },
-              {
-                label: "Grand Total",
-                value: finMoney(walletPayGrand),
-                grand: true,
-                tone: "red",
-              },
-            ]}
-          />
-          <FinancialGroup
-            icon="ShoppingCart"
-            title="Purchase And Refunded"
-            items={[
-              {
-                label: "Total In-Progress Purchase",
-                value: finMoney(inProgressPurchase),
-                hint: "Paid CN orders not yet completed",
-              },
-              {
-                label: "Total Completed Purchase",
-                value: finMoney(completedPurchase),
-                hint: "Paid CN orders with status Complete Order",
-              },
-              { label: "Total Refunded", value: finMoney(refunds) },
-            ]}
-          />
-          <FinancialGroup
-            icon="Package"
-            title="Order"
-            items={[
-              {
-                label: "Pending Shipping Payment",
-                value: pendingShippingN.toLocaleString("en-US"),
-                hint: "Packages with an unpaid shipping fee",
-              },
-              {
-                label: "Shipping Paid",
-                value: paidShippingN.toLocaleString("en-US"),
-                hint: "Packages with the shipping fee paid",
-              },
-            ]}
-            note="Counts use the packages created in the selected reporting period."
-          />
+          <FinancialSection
+            tone="amber"
+            title="Not Yet Paid"
+            subtitle="Customers who ordered but have not paid, or have not paid the shipping fee. Once paid, they move to Customer Paid."
+          >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {unpaidCards.map((card) => (
+                <FinancialStat key={card.label} {...card} />
+              ))}
+            </div>
+            <p className="px-1 text-[11px] leading-4 text-ink-600/55">
+              Shows every unpaid order and package of all dates (not limited by
+              the reporting period) until it is paid.
+            </p>
+          </FinancialSection>
+
+          <FinancialSection
+            tone="blue"
+            title="Billing, Cost & Refunds"
+            subtitle="Billed amounts, purchase cost and refunds in the selected reporting period"
+          >
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {billingCards.map((card) => (
+                <FinancialStat key={card.label} {...card} />
+              ))}
+            </div>
+          </FinancialSection>
         </div>
       )}
 
