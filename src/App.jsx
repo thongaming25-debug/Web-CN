@@ -13446,7 +13446,7 @@ function statusToneClass(label) {
   // Same colours the CN module already gives these payment states
   // ("Pending Shipping Payment" is deliberately red there - see cnStatusTone).
   if (raw === PAY_STATUS.PENDING) return cnStatusTone("Waiting Payment");
-  if (raw === PAY_STATUS.PAID) return cnStatusTone("Complete Order");
+  if (raw === PAY_STATUS.PAID) return cnStatusTone("Shipping Paid");
   if (CN_PAYMENT_STATUSES.includes(raw)) return cnPaymentTone(raw);
   if (raw !== "Pending" && DELIVERY_TONE[raw]) return DELIVERY_TONE[raw];
   if (AIR_UNAMBIGUOUS_STATUSES.has(raw)) return airStatusTone(raw);
@@ -13468,6 +13468,12 @@ const STATUS_FAMILY_HEX = {
   blue: { bg: "#DBEAFE", fg: "#1D4ED8", solid: "#2563EB" },
   green: { bg: "#DCFCE7", fg: "#15803D", solid: "#22C55E" },
   orange: { bg: "#FFEDD5", fg: "#EA580C", solid: "#F97316" },
+  red: { bg: "#FEE2E2", fg: "#DC2626", solid: "#EF4444" },
+  indigo: { bg: "#E0E7FF", fg: "#4338CA", solid: "#6366F1" },
+  pink: { bg: "#FCE7F3", fg: "#DB2777", solid: "#EC4899" },
+  purple: { bg: "#F3E8FF", fg: "#7E22CE", solid: "#A855F7" },
+  rose: { bg: "#FFE4E6", fg: "#BE123C", solid: "#F43F5E" },
+  sky: { bg: "#E0F2FE", fg: "#0369A1", solid: "#0EA5E9" },
 };
 function statusToneHex(label) {
   const cls = statusToneClass(label);
@@ -32514,6 +32520,29 @@ const CustomerApp = (() => {
 .cb-cust-dark .bg-orange-50{background-color:rgba(249,115,22,.14)}
 .cb-cust-dark .text-orange-500,.cb-cust-dark .text-orange-600{color:#fb923c}
 .cb-cust-dark .text-violet-600{color:#a78bfa}
+.cb-cust-dark .bg-purple-50{background-color:rgba(168,85,247,.16)}
+.cb-cust-dark .text-purple-700{color:#d8b4fe}
+.cb-cust-dark .border-purple-200{border-color:rgba(192,132,252,.35)}
+.cb-cust-dark .bg-rose-50{background-color:rgba(244,63,94,.14)}
+.cb-cust-dark .text-rose-700{color:#fda4af}
+.cb-cust-dark .border-rose-200{border-color:rgba(251,113,133,.35)}
+.cb-cust-dark .bg-sky-50{background-color:rgba(14,165,233,.14)}
+.cb-cust-dark .text-sky-700{color:#7dd3fc}
+.cb-cust-dark .border-sky-200{border-color:rgba(56,189,248,.35)}
+.cb-cust-dark .bg-pink-50{background-color:rgba(236,72,153,.14)}
+.cb-cust-dark .text-pink-600{color:#f9a8d4}
+.cb-cust-dark .border-pink-200{border-color:rgba(244,114,182,.35)}
+.cb-cust-dark .bg-indigo-50{background-color:rgba(99,102,241,.16)}
+.cb-cust-dark .text-indigo-700{color:#a5b4fc}
+.cb-cust-dark .border-indigo-200{border-color:rgba(129,140,248,.35)}
+.cb-cust-dark .bg-cyan-50{background-color:rgba(6,182,212,.14)}
+.cb-cust-dark .text-cyan-700{color:#67e8f9}
+.cb-cust-dark .border-cyan-200{border-color:rgba(34,211,238,.35)}
+.cb-cust-dark .bg-teal-50{background-color:rgba(20,184,166,.14)}
+.cb-cust-dark .text-teal-700{color:#5eead4}
+.cb-cust-dark .border-teal-200{border-color:rgba(45,212,191,.35)}
+.cb-cust-dark .border-green-200{border-color:rgba(74,222,128,.35)}
+.cb-cust-dark .border-orange-200{border-color:rgba(251,146,60,.35)}
 .cb-cust-dark .cb-sk{background-color:#1e2638;background-image:linear-gradient(100deg,rgba(255,255,255,0) 30%,rgba(255,255,255,.07) 50%,rgba(255,255,255,0) 70%)}
 .cb-cust-dark .cb-field-input:-webkit-autofill,.cb-cust-dark .cb-field-input:-webkit-autofill:focus{-webkit-box-shadow:0 0 0 1000px #0b1120 inset!important;-webkit-text-fill-color:#f1f5f9}
 /* Page headers: a deep navy gradient instead of the bright blue block, so they blend with the dark surface */
@@ -49753,12 +49782,18 @@ function AirShipmentDetailPage() {
 // Customer portal: ONE status style (name + colour) shared by CN Orders and
 // Shipments, so the same stage never looks different in the Home feed / lists.
 // Display only — Staff/Admin screens keep their own names and colours.
+// One DISTINCT colour family per status (soft fill + thin border) so staff
+// and customers can tell stages apart at a glance:
+//   Pending payment = red · Approve Purchase = indigo · Purchased = pink ·
+//   In Transit = blue · Inbound Origin = orange · Outbound Origin = purple ·
+//   Arrive Destination = rose · Delivery / Shipping to Branch = sky ·
+//   Inbound Warehouse = cyan · Shipping Paid = teal · Completed = green.
 const CUSTOMER_STAGE_TONE = {
-  "Inbound Origin": "bg-blue-50 text-blue-700",
-  "Outbound Origin": "bg-blue-50 text-blue-700",
-  "Arrive Destination": "bg-green-50 text-green-700",
-  Delivery: "bg-orange-50 text-orange-600",
-  Completed: "bg-slate-100 text-slate-600",
+  "Inbound Origin": "bg-orange-50 text-orange-600 border border-orange-200",
+  "Outbound Origin": "bg-purple-50 text-purple-700 border border-purple-200",
+  "Arrive Destination": "bg-rose-50 text-rose-700 border border-rose-200",
+  Delivery: "bg-sky-50 text-sky-700 border border-sky-200",
+  Completed: "bg-green-50 text-green-700 border border-green-200",
 };
 
 // Customer-facing CN Purchase Order table statuses. Kept separate from the
@@ -49939,18 +49974,20 @@ function cnStatusIndex(status) {
 function cnStatusTone(status) {
   switch (cnNormalizeStatus(status)) {
     case "Order Processing":
-      return "bg-slate-100 text-slate-700";
+      return "bg-slate-100 text-slate-700 border border-slate-200";
     case "Waiting Payment":
     case "Waiting Order Payment":
       // Match the customer-facing Pending Shipping Payment badge.
-      return "bg-red-50 text-red-600";
+      return "bg-red-50 text-red-600 border border-red-200";
     case "Approve Purchase":
-      return "bg-indigo-100 text-indigo-700";
+      return "bg-indigo-50 text-indigo-700 border border-indigo-200";
     case "Purchased":
-      return "bg-pink-100 text-pink-700";
+      return "bg-pink-50 text-pink-600 border border-pink-200";
     case "Intransit":
     case "Shipping to China WH":
-      return "bg-blue-100 text-blue-700";
+      return "bg-blue-50 text-blue-700 border border-blue-200";
+    case "Shipping Paid":
+      return "bg-teal-50 text-teal-700 border border-teal-200";
     // Staff, TK and customer screens share ONE style (see CUSTOMER_STAGE_TONE).
     case "Inbound Origin":
     case "Inbound":
@@ -49963,8 +50000,9 @@ function cnStatusTone(status) {
       return CUSTOMER_STAGE_TONE["Arrive Destination"];
     case "Delivery":
     case "Shipping to Branch":
-    case "Inbound Warehouse":
       return CUSTOMER_STAGE_TONE.Delivery;
+    case "Inbound Warehouse":
+      return "bg-cyan-50 text-cyan-700 border border-cyan-200";
     case "Completed":
     case "Complete Order":
       return CUSTOMER_STAGE_TONE.Completed;
