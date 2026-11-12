@@ -17873,13 +17873,26 @@ function UserAvatar({ url, initials, iconFallback = false }) {
   const [broken, setBroken] = useState(false);
   useEffect(() => setBroken(false), [url]);
   if (url && !broken) {
+    // Show the WHOLE photo (object-contain) so faces are never cropped; a
+    // blurred copy of the same photo fills the leftover space in the circle.
     return (
-      <img
-        src={url}
-        alt=""
-        onError={() => setBroken(true)}
-        className="absolute inset-0 w-full h-full rounded-full object-cover"
-      />
+      <span className="absolute inset-0 overflow-hidden rounded-full">
+        <span
+          aria-hidden="true"
+          className="absolute inset-0 scale-125 blur-md opacity-70"
+          style={{
+            backgroundImage: `url(${JSON.stringify(url)})`,
+            backgroundSize: "cover",
+            backgroundPosition: "center",
+          }}
+        />
+        <img
+          src={url}
+          alt=""
+          onError={() => setBroken(true)}
+          className="absolute inset-0 h-full w-full object-contain"
+        />
+      </span>
     );
   }
   // No photo: show a neutral person icon instead of initials (top bar).
