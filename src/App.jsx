@@ -1660,7 +1660,11 @@ const PERMISSION_GROUPS = [
       ["cn_order.create", "Create CN Purchase Order"],
       ["cn_order.edit", "Edit CN Purchase Order / Tracking"],
       ["cn_order.delete", "Delete CN Purchase Order"],
-      ["cn_order.payment", "Record Customer Payment"],
+      ["cn_order.pay_wallet", "Record Payment — Pay from Customer Wallet"],
+      [
+        "cn_order.pay_manual",
+        "Record Payment — Mark as Paid (Cash / Transfer)",
+      ],
       ["cn_order.purchase", "Mark Purchased / Advance Status"],
       ["cn_order.refund", "Refund CN Order"],
     ],
@@ -1861,7 +1865,20 @@ function withDashboardScopes(perms) {
   ];
 }
 
+// Old roles used one "cn_order.payment" key. It is now split into
+// Pay from Wallet + Mark as Paid. Roles that had the old key keep both.
+const CN_PAY_SPLIT = ["cn_order.pay_wallet", "cn_order.pay_manual"];
+function migrateCnPayment(perms) {
+  if (!Array.isArray(perms) || !perms.includes("cn_order.payment"))
+    return perms;
+  return [
+    ...perms.filter((k) => k !== "cn_order.payment"),
+    ...CN_PAY_SPLIT.filter((k) => !perms.includes(k)),
+  ];
+}
+
 function normalizeRole(r) {
+  r = { ...r, permissions: migrateCnPayment(r.permissions) };
   return {
     name: r.name,
     level: r.level === undefined || r.level === "" ? null : r.level,
@@ -1932,7 +1949,8 @@ function seedRoles() {
         "air_order.refund",
         "cn_order.create",
         "cn_order.edit",
-        "cn_order.payment",
+        "cn_order.pay_wallet",
+        "cn_order.pay_manual",
         "cn_order.purchase",
         "cn_order.refund",
       ],
@@ -2062,7 +2080,8 @@ function seedRoles() {
         "air_order.refund",
         "cn_order.view",
         "cn_order.create",
-        "cn_order.payment",
+        "cn_order.pay_wallet",
+        "cn_order.pay_manual",
       ],
       { legacy: true, description: "Existing role (kept as-is)." },
     ),
@@ -51305,6 +51324,9 @@ function CnImagesModal({ open, row, onClose }) {
 
 function CnOrderCreateModal({ open, onClose, onSaved }) {
   const { user } = useAuth();
+  // "Customer already paid the full amount" = Mark as Paid (no wallet), so it
+  // follows the same permission.
+  const canMarkPaid = hasPermission(user, "cn_order.pay_manual");
   const [query, setQuery] = useState("");
   const [customer, setCustomer] = useState(null);
   const [orderType, setOrderType] = useState("assisted");
@@ -51435,7 +51457,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
 
   async function submit(e) {
     e.preventDefault();
-    const paidEff = paidNow && !isDirect;
+    const paidEff = paidNow && !isDirect && canMarkPaid;
     const rn = Number(rate),
       dn = pricingMode === "cny" ? (domShip === "" ? 0 : Number(domShip)) : 0,
       du =
@@ -52199,15 +52221,17 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
           </section>
           <CnTotalsBox totals={totals} rate={rate} pricingMode={pricingMode} />
 
-          <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-            <input
-              type="checkbox"
-              checked={paidNow}
-              onChange={(e) => setPaidNow(e.target.checked)}
-            />
-            Customer already paid the full amount
-          </label>
-          {paidNow && (
+          {canMarkPaid && (
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+              <input
+                type="checkbox"
+                checked={paidNow}
+                onChange={(e) => setPaidNow(e.target.checked)}
+              />
+              Customer already paid the full amount
+            </label>
+          )}
+          {canMarkPaid && paidNow && (
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className={LABEL_CLS}>Method</label>
@@ -52273,7 +52297,10 @@ function CnPaymentModal({ open, row, onClose, onSaved }) {
   const [amount, setAmount] = useState("");
   // "wallet" = deduct from the customer's app wallet
   // "manual" = Mark as Paid (money received outside the app, wallet untouched)
-  const [payWith, setPayWith] = useState("wallet");
+  const canWallet = hasPermission(user, "cn_order.pay_wallet");
+  const canManual = hasPermission(user, "cn_order.pay_manual");
+  const defaultPayWith = canWallet ? "wallet" : "manual";
+  const [payWith, setPayWith] = useState(defaultPayWith);
   const [method, setMethod] = useState(CN_PAYMENT_METHODS[0]);
   const [ref, setRef] = useState("");
   const [cust, setCust] = useState(null); // { id, name, customer_code, balance }
@@ -52290,7 +52317,7 @@ function CnPaymentModal({ open, row, onClose, onSaved }) {
   useEffect(() => {
     if (open && row) {
       setAmount(remaining ? remaining.toFixed(2) : "");
-      setPayWith("wallet");
+      setPayWith(defaultPayWith);
       setMethod(CN_PAYMENT_METHODS[0]);
       setRef("");
       setBusy(false);
@@ -52330,6 +52357,10 @@ function CnPaymentModal({ open, row, onClose, onSaved }) {
   async function submit(e) {
     e.preventDefault();
     const amt = amtNum;
+    if (useWallet && !canWallet)
+      return setError("You do not have permission to pay from the wallet.");
+    if (!useWallet && !canManual)
+      return setError("You do not have permission to mark orders as paid.");
     if (!Number.isFinite(amt) || amt <= 0)
       return setError("Amount must be above 0.");
     if (amt > remaining + 0.005)
@@ -52423,26 +52454,30 @@ function CnPaymentModal({ open, row, onClose, onSaved }) {
         <div>
           <label className={LABEL_CLS}>Pay with</label>
           <div className="flex gap-2">
-            <button
-              type="button"
-              className={choiceCls(useWallet)}
-              onClick={() => setPayWith("wallet")}
-            >
-              <b className="block">Customer Wallet</b>
-              <span className="text-xs text-slate-500">
-                Deduct from the app wallet
-              </span>
-            </button>
-            <button
-              type="button"
-              className={choiceCls(!useWallet)}
-              onClick={() => setPayWith("manual")}
-            >
-              <b className="block">Mark as Paid</b>
-              <span className="text-xs text-slate-500">
-                Cash / transfer, no deduction
-              </span>
-            </button>
+            {canWallet && (
+              <button
+                type="button"
+                className={choiceCls(useWallet)}
+                onClick={() => setPayWith("wallet")}
+              >
+                <b className="block">Customer Wallet</b>
+                <span className="text-xs text-slate-500">
+                  Deduct from the app wallet
+                </span>
+              </button>
+            )}
+            {canManual && (
+              <button
+                type="button"
+                className={choiceCls(!useWallet)}
+                onClick={() => setPayWith("manual")}
+              >
+                <b className="block">Mark as Paid</b>
+                <span className="text-xs text-slate-500">
+                  Cash / transfer, no deduction
+                </span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -56822,7 +56857,10 @@ function CnOrderDetailPage() {
   const [cnMenuOpen, setCnMenuOpen] = useState(false);
   const [labelTk, setLabelTk] = useState(null); // TK whose label is being printed
   const [labelMenuOpen, setLabelMenuOpen] = useState(false);
-  const canPay = hasPermission(user, "cn_order.payment") && !isPlaceholder,
+  const canPay =
+      (hasPermission(user, "cn_order.pay_wallet") ||
+        hasPermission(user, "cn_order.pay_manual")) &&
+      !isPlaceholder,
     canPurchase = hasPermission(user, "cn_order.purchase") && !isPlaceholder,
     canRefund = hasPermission(user, "cn_order.refund") && !isPlaceholder,
     canEdit = hasPermission(user, "cn_order.edit") && !isPlaceholder,
