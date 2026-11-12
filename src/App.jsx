@@ -16200,7 +16200,7 @@ function nameInitials(name) {
   ).toUpperCase();
 }
 
-function UserAvatar({ url, initials }) {
+function UserAvatar({ url, initials, iconFallback = false }) {
   const [broken, setBroken] = useState(false);
   useEffect(() => setBroken(false), [url]);
   if (url && !broken) {
@@ -16213,6 +16213,13 @@ function UserAvatar({ url, initials }) {
       />
     );
   }
+  // No photo: show a neutral person icon instead of initials (top bar).
+  if (iconFallback)
+    return (
+      <span className="absolute inset-0 flex items-center justify-center rounded-full border border-slate-200 bg-slate-50 text-blue-600">
+        <Icons.User size={18} />
+      </span>
+    );
   return <>{initials}</>;
 }
 
@@ -16589,15 +16596,15 @@ function Topbar({ title, onMenuClick }) {
             aria-label={`${displayName}, ${user?.role || "Admin"}`}
           >
             <div className="cbx-avatar">
-              <UserAvatar url={user?.avatarUrl} initials={initials} />
+              <UserAvatar
+                url={user?.avatarUrl}
+                initials={initials}
+                iconFallback
+              />
             </div>
             <div className="hidden sm:block text-left leading-tight min-w-0">
               <div className="cbx-user-name capitalize truncate max-w-[150px]">
                 {displayName}
-              </div>
-              <div className="cbx-user-role mt-0.5 flex items-center gap-1">
-                <Icons.ShieldCheck size={13} />
-                {t(user?.role || "Admin")}
               </div>
             </div>
             <ChevronDown
@@ -16614,6 +16621,9 @@ function Topbar({ title, onMenuClick }) {
               <div className="cbx-menu-head">
                 <div className="cbx-menu-name truncate">{displayName}</div>
                 <div className="cbx-menu-mail truncate">{user?.email}</div>
+                <div className="cbx-menu-mail truncate">
+                  {t(user?.role || "Admin")}
+                </div>
               </div>
               <button
                 onClick={() => {
