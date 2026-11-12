@@ -36287,12 +36287,6 @@ const CustomerApp = (() => {
         tr("AIR", "ផ្លូវអាកាស"),
         feat("tab_air"),
       ],
-      [
-        P("/addresses"),
-        MapPin,
-        tr("Address", "អាសយដ្ឋាន"),
-        feat("tab_address"),
-      ],
       [P("/profile"), User, tr("Profile", "គណនី"), true],
     ].filter((t) => t[3]);
     return (
@@ -38704,6 +38698,7 @@ const CustomerApp = (() => {
       <>
         <Top
           title={tr("My Addresses", "អាសយដ្ឋានរបស់ខ្ញុំ")}
+          back
           right={
             <button
               onClick={() => setEd({ ...EMPTY })}
@@ -39617,6 +39612,16 @@ const CustomerApp = (() => {
               "rose",
               tr("My China Warehouse", "ឃ្លាំងចិនរបស់ខ្ញុំ"),
               () => nav(P("/warehouse")),
+            ],
+          ]
+        : []),
+      ...(feat("tab_address")
+        ? [
+            [
+              MapPin,
+              "green",
+              tr("My Addresses", "អាសយដ្ឋានរបស់ខ្ញុំ"),
+              () => nav(P("/addresses")),
             ],
           ]
         : []),
