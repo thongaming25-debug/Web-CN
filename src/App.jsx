@@ -2149,6 +2149,15 @@ html.cb-admin-dark .cbx-act.is-on{ background:rgba(74,222,128,.14); border-color
   display:flex; align-items:center; justify-content:flex-end; gap:8px; flex-shrink:0;
   padding:14px 20px; border-top:1px solid var(--cbx-border); background:var(--cbx-page);
 }
+/* Wide modal (DRSB style): big title, inset divider, flat footer */
+.cbx-modal.cbx-modal-wide{ max-width:640px; border-radius:20px; }
+.cbx-modal-wide .cbx-modal-head{ margin:0 28px; padding:28px 0 14px; align-items:center; }
+.cbx-modal-wide .cbx-modal-title{ font-size:26px; font-weight:600; line-height:1.3; }
+.cbx-modal-wide .cbx-modal-x{ width:36px; height:36px; }
+.cbx-modal-wide .cbx-modal-body{ padding:20px 28px 8px; gap:16px; }
+.cbx-modal-wide .cbx-modal-foot{ background:transparent; border-top:0; padding:12px 28px 28px; gap:10px; }
+.cbx-modal-wide .cbx-modal-foot .cbx-btn{ height:44px; padding:0 18px; font-size:15px; font-weight:600; border-radius:10px; }
+.cbx-modal-wide .cbx-modal-foot .cbx-btn:not(.cbx-btn-primary){ box-shadow:0 1px 4px rgba(15,23,42,.15); }
 @media (max-width:640px){
   .cbx-modal-backdrop{ padding:12px; }
   .cbx-modal-head,.cbx-modal-body,.cbx-modal-foot{ padding-left:16px; padding-right:16px; }
@@ -15504,6 +15513,7 @@ function AppModal({
   busyLabel = "Saving...",
   submitTone = "primary",
   submitDisabled = false,
+  className = "",
 }) {
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
@@ -15531,7 +15541,7 @@ function AppModal({
         aria-modal="true"
         aria-labelledby={titleId.current}
         onClick={(e) => e.stopPropagation()}
-        className={`cbx-modal ${maxW}`}
+        className={`cbx-modal ${maxW} ${className}`}
       >
         <div className="cbx-modal-head">
           <div className="min-w-0">
@@ -52727,6 +52737,11 @@ const cnStageLabel = (s) => {
   const n = cnNormalizeStatus(s);
   return CN_STAGE_LABEL[n] || n;
 };
+// Label of the "advance" button / modal title for the next CN stage.
+const cnAdvanceLabel = (next) =>
+  next === "Purchased"
+    ? "Mark as Purchased"
+    : `Update (${next ? cnStageLabel(next) : "—"})`;
 
 // Order types: they only differ in how the order is created. After
 // "Shipping to China WH" both follow the exact same TK-driven flow.
@@ -53026,6 +53041,8 @@ function CnModalShell({
   busyLabel,
   submitCls = "bg-blue-600",
   submitDisabled = false,
+  footer,
+  className = "",
   children,
 }) {
   // Same props as before; the look now comes from the shared AppModal.
@@ -53048,6 +53065,8 @@ function CnModalShell({
       busyLabel={busyLabel}
       submitTone={tone}
       submitDisabled={submitDisabled}
+      footer={footer}
+      className={className}
     >
       {children}
     </AppModal>
@@ -55327,7 +55346,7 @@ function CnStatusUpdateModal({ open, row, parcels = [], onClose, onSaved }) {
   const newTracks = [
     ...new Set(
       tracks
-        .split(/[\n,;]+/)
+        .split(/[\s,;]+/)
         .map((t) => t.trim())
         .filter(Boolean),
     ),
@@ -55336,6 +55355,15 @@ function CnStatusUpdateModal({ open, row, parcels = [], onClose, onSaved }) {
     ...parcels,
     ...newTracks,
   ]);
+
+  // Empty tracking field on the In Transit step: no banner while typing; the
+  // message only shows (as an error) when Update is pressed / Enter is hit.
+  // Purchased + In Transit use the wide, minimal form (no subtitle / note).
+  const isTransitStep = next === "Shipping to China WH" || next === "Purchased";
+  const trackingOnlyBlocker =
+    !!blocker &&
+    ((next === "Shipping to China WH" && /tracking number/i.test(blocker)) ||
+      (next === "Purchased" && /supplier order no/i.test(blocker)));
 
   async function submit(e) {
     e.preventDefault();
@@ -55596,17 +55624,47 @@ function CnStatusUpdateModal({ open, row, parcels = [], onClose, onSaved }) {
 
   return (
     <CnModalShell
-      title={`Move to ${next || "—"}`}
-      subtitle={`${row.order_id} · ${row.status} → ${next || "—"}`}
+      title={cnAdvanceLabel(next)}
+      subtitle={
+        isTransitStep
+          ? undefined
+          : `${row.order_id} · ${cnStageLabel(row.status)} → ${next ? cnStageLabel(next) : "—"}`
+      }
+      maxW={isTransitStep ? "" : "max-w-md"}
+      className={isTransitStep ? "cbx-modal-wide" : ""}
       onClose={onClose}
       onSubmit={submit}
       error={error}
       busy={busy}
-      submitLabel="Confirm"
+      submitLabel="Update"
       busyLabel="Saving…"
-      submitDisabled={!next || !!blocker}
+      submitDisabled={!next || (!!blocker && !trackingOnlyBlocker)}
+      footer={
+        <>
+          <button
+            type="submit"
+            disabled={busy || !next || (!!blocker && !trackingOnlyBlocker)}
+            className="cbx-btn cbx-btn-primary"
+          >
+            {busy ? (
+              <Icons.Loader2 size={15} className="animate-spin" />
+            ) : (
+              <Icons.Save size={15} />
+            )}
+            {busy ? "Saving…" : "Update"}
+          </button>
+          <button
+            type="button"
+            className="cbx-btn"
+            onClick={onClose}
+            disabled={busy}
+          >
+            <Icons.X size={15} /> Cancel
+          </button>
+        </>
+      }
     >
-      {blocker && !error && (
+      {blocker && !error && !trackingOnlyBlocker && (
         <div className="rounded-xl bg-amber-50 text-amber-800 px-3 py-2 text-sm">
           {blocker}
         </div>
@@ -55614,24 +55672,25 @@ function CnStatusUpdateModal({ open, row, parcels = [], onClose, onSaved }) {
       {next === "Purchased" && (
         <>
           <div>
-            <label className={LABEL_CLS}>Supplier Order No. *</label>
+            <label className="block text-base text-slate-900 mb-2">
+              Supplier Order No.<span className="text-red-500">*</span>
+            </label>
             <input
               autoFocus
-              className={INPUT_CLS}
+              className="w-full h-12 bg-white border border-slate-300 rounded-lg px-3.5 text-base outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
               value={supplierNo}
               onChange={(e) => setSupplierNo(e.target.value)}
-              placeholder="Order no. on Taobao / 1688 …"
             />
           </div>
           <div>
-            <label className={LABEL_CLS}>
+            <label className="block text-base text-slate-900 mb-2">
               Actual cost paid to supplier (CNY, incl. China shipping)
             </label>
             <input
               type="number"
               min="0"
               step="0.01"
-              className={INPUT_CLS}
+              className="w-full h-12 bg-white border border-slate-300 rounded-lg px-3.5 text-base outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
               value={actualCost}
               onChange={(e) => setActualCost(e.target.value)}
             />
@@ -55639,43 +55698,29 @@ function CnStatusUpdateModal({ open, row, parcels = [], onClose, onSaved }) {
         </>
       )}
       {next === "Shipping to China WH" && (
-        <>
-          <div>
-            <label className={LABEL_CLS}>
-              China tracking number(s) * — one per line
-            </label>
-            <textarea
-              autoFocus
-              className={`${INPUT_CLS} min-h-24 py-2 font-mono`}
-              value={tracks}
-              onChange={(e) => setTracks(e.target.value)}
-              placeholder={"SF1234567890\nYT9876543210"}
-            />
-            <p className="text-[11px] text-slate-400 mt-1">
-              {parcels.length} existing · {newTracks.length} new. The TK scanned
-              at Inbound must match this number.
-            </p>
-          </div>
-          <div>
-            <label className={LABEL_CLS}>Courier</label>
-            <input
-              className={INPUT_CLS}
-              value={courier}
-              onChange={(e) => setCourier(e.target.value)}
-              placeholder="SF / ZTO / YTO / JD …"
-            />
-          </div>
-        </>
+        <div>
+          <label className="block text-base text-slate-900 mb-2">
+            Tracking Numbers<span className="text-red-500">*</span>
+          </label>
+          <input
+            autoFocus
+            className="w-full h-12 bg-white border border-slate-300 rounded-lg px-3.5 text-base outline-none transition-colors focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            value={tracks}
+            onChange={(e) => setTracks(e.target.value)}
+          />
+        </div>
       )}
-      <div>
-        <label className={LABEL_CLS}>Note</label>
-        <textarea
-          className={`${INPUT_CLS} min-h-16 py-2`}
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder="Optional note"
-        />
-      </div>
+      {!isTransitStep && (
+        <div>
+          <label className={LABEL_CLS}>Note</label>
+          <textarea
+            className={`${INPUT_CLS} min-h-16 py-2`}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Optional note"
+          />
+        </div>
+      )}
     </CnModalShell>
   );
 }
@@ -60340,13 +60385,6 @@ function CnOrderDetailPage() {
             >
               <Icons.Printer size={15} /> Invoice
             </button>
-            <button
-              type="button"
-              onClick={() => setHistoryOpen(true)}
-              className="cn-detail-button"
-            >
-              <Icons.History size={16} /> History
-            </button>
             {labelTks.length > 0 && (
               <div className="relative">
                 <button
@@ -60397,9 +60435,14 @@ function CnOrderDetailPage() {
                     ? "Shipping fee must be paid before completing the order"
                     : undefined
                 }
-                className="h-10 px-3 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
+                className="h-10 px-3.5 rounded-xl bg-blue-600 text-white text-sm font-bold inline-flex items-center justify-center gap-1.5 transition-all duration-200 hover:bg-blue-500 hover:shadow-[0_4px_10px_-2px_rgba(15,23,42,.22)] active:bg-blue-600 active:shadow-none active:scale-[.98] disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none disabled:scale-100"
               >
-                {next}
+                {next === "Purchased" ? (
+                  <Icons.ShoppingCart size={16} />
+                ) : (
+                  <Icons.Package size={16} />
+                )}
+                {cnAdvanceLabel(next)}
               </button>
             )}
             {(() => {
@@ -68652,7 +68695,8 @@ function RequestShipPayModal({
   return (
     <AppModal
       title={cancel ? "Cancel Payment Request" : "Request Payment"}
-      maxW="max-w-lg"
+      maxW=""
+      className="cbx-modal-wide"
       onClose={onClose}
       onSubmit={(e) => {
         e.preventDefault();
@@ -68660,9 +68704,30 @@ function RequestShipPayModal({
       }}
       busy={busy}
       error={error}
-      submitLabel={cancel ? "Confirm" : "Submit"}
-      busyLabel="Saving..."
-      submitTone={cancel ? "danger" : "primary"}
+      footer={
+        <>
+          <button
+            type="submit"
+            disabled={busy}
+            className={`cbx-btn cbx-btn-${cancel ? "danger" : "primary"}`}
+          >
+            {busy ? (
+              <Icons.Loader2 size={15} className="animate-spin" />
+            ) : (
+              <Icons.Check size={15} />
+            )}
+            {busy ? "Saving..." : cancel ? "Confirm" : "Submit"}
+          </button>
+          <button
+            type="button"
+            className="cbx-btn"
+            onClick={onClose}
+            disabled={busy}
+          >
+            <Icons.X size={15} /> Cancel
+          </button>
+        </>
+      }
     >
       <div className="flex items-center gap-3 rounded-md border border-mist-200 p-4 mb-4">
         <span className="w-11 h-11 rounded-lg bg-signal-blue text-white flex items-center justify-center shrink-0">
