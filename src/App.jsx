@@ -66633,7 +66633,7 @@ const walletErr = (e) =>
     : e?.message || "Request failed.";
 
 function WalletModal({ title, onClose, children }) {
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/40 p-4">
       <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
         <div className="mb-4 flex items-center justify-between">
@@ -66648,89 +66648,533 @@ function WalletModal({ title, onClose, children }) {
         </div>
         {children}
       </div>
+    </div>,
+    document.body,
+  );
+}
+
+// ============================================================
+// Optional payment-proof ("reference") images for wallet top-ups.
+// Files go to the private bucket `wallet-top-up-images`; one row per image in
+// `wallet_transaction_images` (see supabase_wallet_top_up_images.sql).
+// ============================================================
+const WALLET_PROOF_BUCKET = "wallet-top-up-images";
+const WALLET_PROOF_TABLE = "wallet_transaction_images";
+const WALLET_PROOF_MAX = 5;
+const walletProofErr = (e) =>
+  /does not exist|schema cache|bucket not found|row-level security|not found/i.test(
+    e?.message || "",
+  )
+    ? "Run supabase_wallet_top_up_images.sql in Supabase first."
+    : e?.message || "Upload failed.";
+
+// Dashed drop zone (DRSB look). Always optional.
+function WalletProofPicker({ files, setFiles, disabled = false }) {
+  const [previews, setPreviews] = useState([]);
+  const [over, setOver] = useState(false);
+  const inputRef = useRef(null);
+  useEffect(() => {
+    const urls = files.map((f) => URL.createObjectURL(f));
+    setPreviews(urls);
+    return () => urls.forEach((u) => URL.revokeObjectURL(u));
+  }, [files]);
+  function add(list) {
+    const next = [...files];
+    for (const f of Array.from(list || [])) {
+      const bad = validateCnImage(f);
+      if (bad) {
+        emitCBToast("err", "Invalid image", `${f.name}: ${bad}`);
+        continue;
+      }
+      if (next.length >= WALLET_PROOF_MAX) {
+        emitCBToast(
+          "err",
+          "Too many images",
+          `Maximum ${WALLET_PROOF_MAX} images.`,
+        );
+        break;
+      }
+      next.push(f);
+    }
+    setFiles(next);
+    if (inputRef.current) inputRef.current.value = "";
+  }
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-[15px] font-semibold text-slate-900">
+          Upload Reference Images
+        </span>
+        <span className="text-sm text-slate-600">optional</span>
+      </div>
+      {files.length < WALLET_PROOF_MAX && (
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => inputRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setOver(true);
+          }}
+          onDragLeave={() => setOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setOver(false);
+            add(e.dataTransfer.files);
+          }}
+          style={WTU_NO_RING}
+          className={`flex h-40 w-full flex-col items-center justify-center gap-1 rounded-lg border border-dashed bg-white text-center transition hover:bg-slate-50 disabled:opacity-50 ${
+            over ? "border-slate-600 bg-slate-50" : "border-slate-300"
+          }`}
+        >
+          <Icons.UploadCloud
+            size={36}
+            strokeWidth={1.6}
+            className="text-slate-900"
+          />
+          <span className="mt-2 text-base font-medium text-slate-900">
+            Upload Reference Images
+          </span>
+          <span className="text-sm text-slate-500">
+            or browse files from your computer
+          </span>
+        </button>
+      )}
+      <p className="mt-1.5 text-xs text-slate-500">
+        Proof of payment (e.g. bank transfer screenshot). JPG, PNG or WEBP · max
+        5 MB each · up to {WALLET_PROOF_MAX} images. Shown in the transaction
+        detail.
+      </p>
+      {previews.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-3">
+          {previews.map((u, k) => (
+            <div key={u} className="relative h-20 w-20">
+              <img
+                src={u}
+                alt=""
+                className="h-full w-full rounded-lg border border-slate-200 object-cover"
+              />
+              <button
+                type="button"
+                aria-label="Remove image"
+                disabled={disabled}
+                onClick={() => setFiles(files.filter((_, j) => j !== k))}
+                className="absolute -right-1.5 -top-1.5 grid h-5 w-5 place-items-center rounded-full bg-slate-900 text-white"
+              >
+                <Icons.X size={11} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <input
+        ref={inputRef}
+        type="file"
+        multiple
+        accept="image/jpeg,image/png,image/webp"
+        className="hidden"
+        onChange={(e) => add(e.target.files)}
+      />
     </div>
   );
 }
 
+// Run right after wallet_top_up succeeds: find the new transaction, then upload.
+// Never throws — the money has already moved, so a failure is only reported.
+async function attachWalletProofs(customerId, amount, files, user) {
+  if (!supabase || !files.length) return { ok: 0, error: "" };
+  try {
+    const { data, error } = await supabase
+      .from("wallet_transactions")
+      .select("id, amount, created_at")
+      .eq("customer_id", String(customerId))
+      .eq("type", "top_up")
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    const row = data?.[0];
+    if (
+      !row ||
+      Math.abs(Number(row.amount) - amount) > 0.005 ||
+      Date.now() - new Date(row.created_at).getTime() > 5 * 60000
+    )
+      return {
+        ok: 0,
+        error: "Could not find the new transaction to attach the images to.",
+      };
+    let ok = 0;
+    let firstErr = "";
+    for (const file of files) {
+      let path = "";
+      try {
+        const bad = validateCnImage(file);
+        if (bad) throw new Error(bad);
+        const dataUrl = await compressImage(file, 1600, 0.8);
+        const blob = await (await fetch(dataUrl)).blob();
+        path = `${row.id}/${makeId()}.jpg`;
+        const { error: upErr } = await supabase.storage
+          .from(WALLET_PROOF_BUCKET)
+          .upload(path, blob, { contentType: "image/jpeg" });
+        if (upErr) throw upErr;
+        const { error: insErr } = await supabase
+          .from(WALLET_PROOF_TABLE)
+          .insert({
+            wallet_tx_id: String(row.id),
+            customer_id: String(customerId),
+            storage_path: path,
+            created_by: user?.name || user?.email || "Admin",
+          });
+        if (insErr) {
+          await supabase.storage.from(WALLET_PROOF_BUCKET).remove([path]);
+          throw insErr;
+        }
+        ok++;
+      } catch (e) {
+        if (!firstErr) firstErr = walletProofErr(e);
+      }
+    }
+    WALLET_PROOF_COUNTS.delete(String(row.id));
+    return { ok, error: firstErr };
+  } catch (e) {
+    return { ok: 0, error: walletProofErr(e) };
+  }
+}
+
+// Read side. Counts are fetched in one batched query for every cell that
+// asks during the same tick, so a table of 15 rows costs one request.
+const WALLET_PROOF_COUNTS = new Map(); // txId -> number of images
+let walletProofBatch = null;
+let walletProofOff = false; // table missing -> stop asking
+function walletProofCount(txId) {
+  const key = String(txId);
+  if (WALLET_PROOF_COUNTS.has(key))
+    return Promise.resolve(WALLET_PROOF_COUNTS.get(key));
+  if (walletProofOff || !supabase) return Promise.resolve(0);
+  let batch = walletProofBatch;
+  if (!batch) {
+    batch = { ids: new Set(), waiters: [] };
+    walletProofBatch = batch;
+    setTimeout(async () => {
+      walletProofBatch = null;
+      const ids = [...batch.ids];
+      const counts = {};
+      try {
+        for (let i = 0; i < ids.length; i += 100) {
+          const { data, error } = await supabase
+            .from(WALLET_PROOF_TABLE)
+            .select("wallet_tx_id")
+            .in("wallet_tx_id", ids.slice(i, i + 100));
+          if (error) throw error;
+          (data || []).forEach(
+            (r) => (counts[r.wallet_tx_id] = (counts[r.wallet_tx_id] || 0) + 1),
+          );
+        }
+        ids.forEach((id) => WALLET_PROOF_COUNTS.set(id, counts[id] || 0));
+      } catch (e) {
+        if (/does not exist|schema cache/i.test(e?.message || ""))
+          walletProofOff = true;
+      }
+      batch.waiters.forEach((w) => w());
+    }, 40);
+  }
+  batch.ids.add(key);
+  return new Promise((res) =>
+    batch.waiters.push(() => res(WALLET_PROOF_COUNTS.get(key) || 0)),
+  );
+}
+
+async function loadWalletProofImages(txId) {
+  const { data, error } = await supabase
+    .from(WALLET_PROOF_TABLE)
+    .select("storage_path, created_at")
+    .eq("wallet_tx_id", String(txId))
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  const paths = (data || []).map((r) => r.storage_path);
+  if (!paths.length) return [];
+  const { data: signed } = await supabase.storage
+    .from(WALLET_PROOF_BUCKET)
+    .createSignedUrls(paths, 3600);
+  const byPath = {};
+  (signed || []).forEach((r) => {
+    if (r?.signedUrl && r.path) byPath[r.path] = r.signedUrl;
+  });
+  return paths
+    .map((pth, i) => ({
+      url: byPath[pth],
+      name: `Payment proof ${i + 1} / ${paths.length}`,
+    }))
+    .filter((x) => x.url);
+}
+
+// Table cell: image count -> opens the DRSB-style viewer.
+function WalletProofCell({ txId, type }) {
+  const eligible = type === "top_up" && txId != null;
+  const [count, setCount] = useState(() =>
+    eligible ? (WALLET_PROOF_COUNTS.get(String(txId)) ?? null) : 0,
+  );
+  const [images, setImages] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!eligible) return undefined;
+    let alive = true;
+    walletProofCount(txId).then((n) => alive && setCount(n));
+    return () => {
+      alive = false;
+    };
+  }, [txId, eligible]);
+  if (!eligible || !count) return <span className="text-slate-300">—</span>;
+  async function open(e) {
+    e.stopPropagation();
+    if (busy) return;
+    setBusy(true);
+    try {
+      const list = await loadWalletProofImages(txId);
+      if (list.length) setImages(list);
+      else emitCBToast("err", "No images", "Could not load the payment proof.");
+    } catch (err) {
+      emitCBToast("err", "Could not load images", walletProofErr(err));
+    }
+    setBusy(false);
+  }
+  return (
+    <>
+      <button
+        type="button"
+        onClick={open}
+        title="View payment proof"
+        className="inline-flex h-7 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 text-xs font-bold text-slate-700 hover:bg-slate-50"
+      >
+        {busy ? (
+          <Icons.Loader2 size={13} className="animate-spin" />
+        ) : (
+          <Icons.Image size={13} />
+        )}
+        {count}
+      </button>
+      {images && (
+        <AirImageViewer images={images} onClose={() => setImages(null)} />
+      )}
+    </>
+  );
+}
+
+// Top up for one known customer (Customer detail / CN orders). Same app-style
+// modal as WalletTopUpCreateModal, minus the customer search.
 function TopUpModal({ customer, onClose, onDone }) {
+  const [method, setMethod] = useState("");
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
+  const [proofs, setProofs] = useState([]);
+  const { user } = useAuth();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const amt = Number(amount);
   const valid = Number.isFinite(amt) && amt > 0;
+  const bal = Number(customer.balance || 0);
+  const label = "mb-2 block text-[15px] font-semibold text-slate-900";
   const field =
-    "mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
+    "h-12 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-[15px] font-medium text-slate-900 shadow-sm transition placeholder:font-normal placeholder:text-slate-500 focus:border-slate-500";
+
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && !busy && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+
   async function submit() {
     if (!valid || busy) return;
     setBusy(true);
     setErr("");
+    // The RPC stores a single note, so the payment method rides in front of it.
+    const finalNote = [method, note.trim()].filter(Boolean).join(" · ");
     const { error } = await supabase.rpc("wallet_top_up", {
       p_customer_id: String(customer.id),
       p_amount: Math.round(amt * 100) / 100,
-      p_note: note.trim() || null,
+      p_note: finalNote || null,
     });
+    if (error) {
+      setBusy(false);
+      return setErr(walletErr(error));
+    }
+    const proof = proofs.length
+      ? await attachWalletProofs(customer.id, amt, proofs, user)
+      : null;
     setBusy(false);
-    if (error) return setErr(walletErr(error));
     emitCBToast(
       "ok",
       "Top up successful",
-      `${money(amt)} added to ${customer.name}.`,
+      `${money(amt)} added to ${customer.name}.${proof?.ok ? ` ${proof.ok} reference image${proof.ok > 1 ? "s" : ""} attached.` : ""}`,
     );
+    if (proof && proof.error)
+      emitCBToast("err", "Reference images not saved", proof.error);
     onDone();
   }
-  return (
-    <WalletModal title={`Top up — ${customer.name}`} onClose={onClose}>
-      <div className="mb-3 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
-        Current balance:{" "}
-        <b
-          className={
-            Number(customer.balance) < 0 ? "text-red-600" : "text-slate-900"
-          }
-        >
-          {moneyS(customer.balance || 0)}
-        </b>
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[3px]"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Top Up Wallet"
+    >
+      <div className="flex max-h-[92vh] w-full max-w-[820px] flex-col rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-8 py-6">
+          <h3 className="text-2xl font-bold text-slate-950">Top Up Wallet</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="grid h-9 w-9 place-items-center rounded-lg text-slate-700 transition hover:bg-slate-100 hover:text-slate-900"
+          >
+            <Icons.X size={18} />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto px-8 py-7">
+          <span className={label}>Customer</span>
+          <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+            <div className="min-w-0">
+              <div className="truncate text-[15px] font-bold text-slate-900">
+                {customer.customer_code
+                  ? `${customer.customer_code} · ${customer.name}`
+                  : customer.name}
+              </div>
+              {customer.phone && (
+                <div className="text-xs font-medium text-slate-500">
+                  {customer.phone}
+                </div>
+              )}
+            </div>
+            <div className="ml-4 shrink-0 text-right">
+              <div className="text-xs font-medium text-slate-500">
+                Current balance
+              </div>
+              <div
+                className={`text-base font-bold ${bal < 0 ? "text-red-600" : "text-slate-900"}`}
+              >
+                {moneyS(bal)}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-6 grid gap-6 sm:grid-cols-2">
+            <div>
+              <label className={label} htmlFor="tu-method">
+                Payment Method
+              </label>
+              <div className="relative">
+                <select
+                  id="tu-method"
+                  value={method}
+                  onChange={(e) => setMethod(e.target.value)}
+                  className={`${field} cursor-pointer appearance-none pr-10 ${method ? "" : "font-normal text-slate-500"}`}
+                  style={WTU_NO_RING}
+                >
+                  <option value="">Select an option…</option>
+                  {CN_PAYMENT_METHODS.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+                <Icons.ChevronDown
+                  size={16}
+                  className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-500"
+                />
+              </div>
+            </div>
+            <div>
+              <label className={label} htmlFor="tu-amount">
+                Amount <span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[15px] font-medium text-slate-700">
+                  $
+                </span>
+                <input
+                  id="tu-amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  autoFocus
+                  className={`${field} pl-8 pr-16`}
+                  style={WTU_NO_RING}
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && submit()}
+                  placeholder="0.00"
+                />
+                <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-900">
+                  USD
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-6">
+            <div className="mb-2 flex items-center justify-between">
+              <label
+                className="text-[15px] font-semibold text-slate-900"
+                htmlFor="tu-note"
+              >
+                Remark
+              </label>
+              <span className="text-sm text-slate-600">optional</span>
+            </div>
+            <textarea
+              id="tu-note"
+              rows={6}
+              className="w-full resize-none rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-[15px] font-medium text-slate-900 shadow-sm transition placeholder:font-normal placeholder:text-slate-500 focus:border-slate-500"
+              style={WTU_NO_RING}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. ABA transfer, cash"
+            />
+          </div>
+
+          <div className="mt-6">
+            <WalletProofPicker
+              files={proofs}
+              setFiles={setProofs}
+              disabled={busy}
+            />
+          </div>
+
+          {valid && (
+            <div className="mt-6 flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3.5 text-sm text-slate-600">
+              <span>New balance</span>
+              <b className="text-base text-slate-900">{moneyS(bal + amt)}</b>
+            </div>
+          )}
+          {err && (
+            <p className="mt-3 text-xs font-semibold text-red-600">{err}</p>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-slate-100 px-8 py-5">
+          <button
+            type="button"
+            disabled={!valid || busy}
+            onClick={submit}
+            className="h-11 rounded-lg bg-blue-600 px-7 text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
+          >
+            {busy ? "Saving…" : "Submit"}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-slate-300 px-5 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50"
+          >
+            <Icons.X size={14} />
+            Cancel
+          </button>
+        </div>
       </div>
-      <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
-        Amount (USD)
-        <input
-          type="number"
-          min="0"
-          step="0.01"
-          autoFocus
-          className={field}
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-        />
-      </label>
-      <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-slate-500">
-        Note (optional)
-        <input
-          className={field}
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder="e.g. ABA transfer, cash"
-        />
-      </label>
-      {err && <p className="mt-3 text-xs font-semibold text-red-600">{err}</p>}
-      <div className="mt-5 flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={onClose}
-          className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600 hover:bg-slate-50"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          disabled={!valid || busy}
-          onClick={submit}
-          className="h-10 rounded-xl bg-blue-600 px-5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-        >
-          {busy ? "Saving…" : "Top up"}
-        </button>
-      </div>
-    </WalletModal>
+    </div>,
+    document.body,
   );
 }
 
@@ -68502,7 +68946,7 @@ function CdTable({
               slice.map((r, i) => (
                 <tr
                   key={r._rowKey || r.id || r.tk || i}
-                  className={`hover:bg-slate-50/60 ${getRowPath ? "cursor-pointer" : ""}`}
+                  className={`hover:bg-slate-50/60 ${getRowPath && getRowPath(r) ? "cursor-pointer" : ""}`}
                   onClick={
                     getRowPath
                       ? (e) => {
@@ -69900,6 +70344,7 @@ function CustomerDetailPage() {
   const [addressModal, setAddressModal] = useState(false);
   const [editAddress, setEditAddress] = useState(null);
   const [routeModal, setRouteModal] = useState(false);
+  const [avatarViewer, setAvatarViewer] = useState(false);
   const [reload, setReload] = useState(0);
   const canViewAir = hasPermission(user, "air_order.view");
   const canViewCnOrders = hasPermission(user, "cn_order.view");
@@ -70236,6 +70681,13 @@ function CustomerDetailPage() {
       render: (r) => <AirStatusBadge status={r.status} />,
     },
   ];
+  // Only top-ups / reversals have a detail page (/wallet-top-up/:id).
+  const txDetailPath = (r) =>
+    canTopUp &&
+    r?.id != null &&
+    (r.type === "top_up" || r.type === "top_up_reversal")
+      ? `/wallet-top-up/${encodeURIComponent(r.id)}`
+      : null;
   const txCols = [
     {
       key: "created_at",
@@ -70256,20 +70708,33 @@ function CustomerDetailPage() {
       key: "type",
       label: "Type",
       search: (r) => r.type,
-      render: (r) =>
-        ({
-          top_up: "Top up",
-          top_up_reversal: "Top up reversed",
-          shipping_payment: "Shipping payment",
-          shipping_payment_cash: "Paid by admin",
-          shipping_payment_wallet: "Shipping payment (wallet)",
-          cn_order_payment_cash: "CN order paid by admin",
-          cn_order_payment_wallet: "CN order payment (wallet)",
-          shop_order_payment_wallet: "Shop order payment (wallet)",
-          shop_order_refund_wallet: "Shop order refund (wallet)",
-          cn_order_refund: "CN order refund",
-          cn_order_refund_reversal: "CN order refund reversed",
-        })[r.type] || r.type,
+      render: (r) => {
+        const label =
+          {
+            top_up: "Top up",
+            top_up_reversal: "Top up reversed",
+            shipping_payment: "Shipping payment",
+            shipping_payment_cash: "Paid by admin",
+            shipping_payment_wallet: "Shipping payment (wallet)",
+            cn_order_payment_cash: "CN order paid by admin",
+            cn_order_payment_wallet: "CN order payment (wallet)",
+            shop_order_payment_wallet: "Shop order payment (wallet)",
+            shop_order_refund_wallet: "Shop order refund (wallet)",
+            cn_order_refund: "CN order refund",
+            cn_order_refund_reversal: "CN order refund reversed",
+          }[r.type] || r.type;
+        const path = txDetailPath(r);
+        return path ? (
+          <Link
+            to={path}
+            className="font-semibold text-blue-700 hover:underline"
+          >
+            {label}
+          </Link>
+        ) : (
+          label
+        );
+      },
     },
     {
       key: "tk",
@@ -70327,6 +70792,12 @@ function CustomerDetailPage() {
       render: (r) => (r.balance_after != null ? moneyS(r.balance_after) : "—"),
     },
     { key: "created_by", label: "By", render: (r) => r.created_by || "—" },
+    {
+      key: "proof",
+      label: "Proof",
+      search: () => "",
+      render: (r) => <WalletProofCell txId={r.id} type={r.type} />,
+    },
   ];
   const addrCols = [
     {
@@ -70707,12 +71178,40 @@ function CustomerDetailPage() {
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
           <div className="flex flex-wrap items-center gap-x-7 gap-y-4">
             <div className="flex items-center gap-3.5">
-              <div className="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-blue-600 text-xl font-bold text-white ring-4 ring-blue-50">
-                <UserAvatar
-                  url={cust.avatar_url}
-                  initials={(cust.name || "?").slice(0, 1).toUpperCase()}
-                />
-              </div>
+              {cust.avatar_url ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setAvatarViewer(true)}
+                    aria-label="View profile photo"
+                    title="View photo"
+                    className="relative flex h-14 w-14 shrink-0 cursor-zoom-in items-center justify-center rounded-full overflow-hidden bg-slate-100 text-lg font-semibold leading-none whitespace-nowrap text-slate-600 ring-4 ring-slate-50 transition hover:ring-blue-200 focus:outline-none focus-visible:ring-blue-300"
+                  >
+                    <UserAvatar
+                      url={cust.avatar_url}
+                      initials={nameInitials(cust.name)}
+                    />
+                  </button>
+                  {avatarViewer && (
+                    <AirImageViewer
+                      images={[
+                        {
+                          url: cust.avatar_url,
+                          name: `${cust.name || cust.customer_code} (${cust.customer_code})`,
+                        },
+                      ]}
+                      onClose={() => setAvatarViewer(false)}
+                    />
+                  )}
+                </>
+              ) : (
+                <div className="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full overflow-hidden bg-slate-100 text-lg font-semibold leading-none whitespace-nowrap text-slate-600 ring-4 ring-slate-50">
+                  <UserAvatar
+                    url={cust.avatar_url}
+                    initials={nameInitials(cust.name)}
+                  />
+                </div>
+              )}
               <div className="min-w-0">
                 <div className="text-xs font-medium text-slate-500">
                   {cust.customer_code}
@@ -70822,6 +71321,7 @@ function CustomerDetailPage() {
               <CdTable
                 cols={txCols}
                 rows={tx}
+                getRowPath={txDetailPath}
                 empty="No wallet transactions yet."
               />
             )}
@@ -71015,22 +71515,45 @@ function wtuStart(range) {
   return 0;
 }
 
+// App-style modal (DRSB look): divider under the title, blurred backdrop, a
+// "Search Type" picker next to the search box, 2-column fields, Submit/Cancel.
+// The app's global CSS paints a blue outline on focused inputs; inline style wins.
+const WTU_NO_RING = { outline: "none", boxShadow: "none" };
+const WTU_SEARCH_TYPES = [
+  ["id", "Customer ID", "Search by Customer ID…"],
+  ["name", "Customer Name", "Search by customer name…"],
+  ["phone", "Phone Number", "Search by phone number…"],
+];
+
 function WalletTopUpCreateModal({ onClose, onDone, initialCustomer = null }) {
+  const [searchType, setSearchType] = useState("id");
   const [q, setQ] = useState("");
   const [results, setResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [customer, setCustomer] = useState(initialCustomer);
+  const [method, setMethod] = useState("");
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
+  const [proofs, setProofs] = useState([]);
+  const { user } = useAuth();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const reqId = useRef(0);
   const amt = Number(amount);
   const valid = !!customer && Number.isFinite(amt) && amt > 0;
+  const placeholder =
+    WTU_SEARCH_TYPES.find((t) => t[0] === searchType)?.[2] || "Search…";
+  const label = "mb-2 block text-[15px] font-semibold text-slate-900";
   const field =
-    "mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
+    "h-12 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-[15px] font-medium text-slate-900 shadow-sm transition placeholder:font-normal placeholder:text-slate-500 focus:border-slate-500";
 
-  // Debounced customer search (Customer ID / name / phone)
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && !busy && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+
+  // Debounced customer search (by the chosen Search Type)
   useEffect(() => {
     const term = q.trim();
     if (customer || term.length < 1 || !supabase) {
@@ -71042,184 +71565,305 @@ function WalletTopUpCreateModal({ onClose, onDone, initialCustomer = null }) {
     const my = ++reqId.current;
     const t = setTimeout(async () => {
       const safe = term.replace(/[,()%]/g, " ");
-      const { data, error } = await supabase
+      let query = supabase
         .from("customers")
-        .select("id, customer_code, name, phone, balance")
-        .or(
-          `customer_code.ilike.%${safe}%,name.ilike.%${safe}%,phone.ilike.%${safe}%`,
-        )
-        .limit(8);
+        .select("id, customer_code, name, phone, balance");
+      if (searchType === "id")
+        query = query.ilike("customer_code", `%${safe}%`);
+      else if (searchType === "name") query = query.ilike("name", `%${safe}%`);
+      else query = query.ilike("phone", `%${safe}%`);
+      const { data, error } = await query.limit(8);
       if (my !== reqId.current) return;
       setResults(error ? [] : data || []);
       setSearching(false);
     }, 300);
     return () => clearTimeout(t);
-  }, [q, customer]);
+  }, [q, customer, searchType]);
 
   async function submit() {
     if (!valid || busy) return;
     setBusy(true);
     setErr("");
+    // The RPC stores a single note, so the payment method rides in front of it.
+    const finalNote = [method, note.trim()].filter(Boolean).join(" · ");
     const { error } = await supabase.rpc("wallet_top_up", {
       p_customer_id: String(customer.id),
       p_amount: Math.round(amt * 100) / 100,
-      p_note: note.trim() || null,
+      p_note: finalNote || null,
     });
+    if (error) {
+      setBusy(false);
+      return setErr(walletErr(error));
+    }
+    const proof = proofs.length
+      ? await attachWalletProofs(customer.id, amt, proofs, user)
+      : null;
     setBusy(false);
-    if (error) return setErr(walletErr(error));
     emitCBToast(
       "ok",
       "Top up successful",
-      `${money(amt)} added to ${customer.name} (${customer.customer_code}).`,
+      `${money(amt)} added to ${customer.name} (${customer.customer_code}).${proof?.ok ? ` ${proof.ok} reference image${proof.ok > 1 ? "s" : ""} attached.` : ""}`,
     );
+    if (proof && proof.error)
+      emitCBToast("err", "Reference images not saved", proof.error);
     onDone();
   }
 
-  return (
-    <WalletModal title="Create Wallet Top Up" onClose={onClose}>
-      <label className="text-xs font-bold uppercase tracking-wide text-slate-500">
-        Customer ID
-        {customer ? (
-          <div className="mt-1 flex items-center justify-between rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-bold text-slate-900">
-                {customer.customer_code} · {customer.name}
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[3px]"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Create Wallet Top Up"
+    >
+      <div className="flex max-h-[92vh] w-full max-w-[820px] flex-col rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-8 py-6">
+          <h3 className="text-2xl font-bold text-slate-950">
+            Create Wallet Top Up
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="grid h-9 w-9 place-items-center rounded-lg text-slate-700 transition hover:bg-slate-100 hover:text-slate-900"
+          >
+            <Icons.X size={18} />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto px-8 py-7">
+          {/* Customer: Search Type + search box */}
+          <div>
+            <span className={label}>
+              Search Type <span className="text-red-500">*</span>
+            </span>
+            {customer ? (
+              <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-bold text-slate-900">
+                    {customer.customer_code} · {customer.name}
+                  </div>
+                  <div className="text-xs font-medium text-slate-500">
+                    {customer.phone || "No phone"} · Balance{" "}
+                    <b className="text-slate-800">
+                      {moneyS(customer.balance || 0)}
+                    </b>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCustomer(null);
+                    setQ("");
+                  }}
+                  className="ml-3 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-white hover:text-slate-700"
+                  title="Change customer"
+                >
+                  <Icons.X size={16} />
+                </button>
               </div>
-              <div className="text-xs font-medium normal-case text-slate-500">
-                {customer.phone || "No phone"} · Balance{" "}
-                <b className="text-slate-800">
-                  {moneyS(customer.balance || 0)}
-                </b>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                setCustomer(null);
-                setQ("");
-              }}
-              className="ml-3 text-slate-400 hover:text-slate-700"
-              title="Change customer"
-            >
-              <Icons.X size={16} />
-            </button>
-          </div>
-        ) : (
-          <div className="relative">
-            <Icons.Search
-              size={15}
-              className="absolute left-3 top-1/2 mt-0.5 -translate-y-1/2 text-slate-400"
-            />
-            <input
-              autoFocus
-              className={`${field} pl-9`}
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search Customer ID, name or phone…"
-            />
-            {q.trim() && (
-              <div className="absolute z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-                {searching && (
-                  <div className="px-3 py-3 text-xs font-medium normal-case text-slate-400">
-                    Searching…
+            ) : (
+              <div className="relative">
+                <div className="flex h-12 items-stretch overflow-hidden rounded-lg border border-slate-300 bg-white shadow-sm transition focus-within:border-slate-500">
+                  <div className="relative border-r border-slate-300 bg-white">
+                    <select
+                      value={searchType}
+                      onChange={(e) => setSearchType(e.target.value)}
+                      aria-label="Search type"
+                      className="h-full cursor-pointer appearance-none bg-transparent pl-3.5 pr-9 text-[15px] font-semibold text-slate-900"
+                      style={WTU_NO_RING}
+                    >
+                      {WTU_SEARCH_TYPES.map(([k, l]) => (
+                        <option key={k} value={k}>
+                          {l}
+                        </option>
+                      ))}
+                    </select>
+                    <Icons.ChevronDown
+                      size={15}
+                      className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500"
+                    />
+                  </div>
+                  <div className="relative flex-1">
+                    <Icons.Search
+                      size={16}
+                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                    />
+                    <input
+                      autoFocus
+                      className="h-full w-full bg-transparent pl-10 pr-3 text-[15px] font-medium text-slate-900 placeholder:font-normal placeholder:text-slate-500"
+                      style={WTU_NO_RING}
+                      value={q}
+                      onChange={(e) => setQ(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && results[0]) {
+                          e.preventDefault();
+                          setCustomer(results[0]);
+                          setResults([]);
+                        }
+                      }}
+                      placeholder={placeholder}
+                    />
+                  </div>
+                </div>
+                {q.trim() && (
+                  <div className="absolute z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+                    {searching && (
+                      <div className="px-3 py-3 text-xs font-medium text-slate-400">
+                        Searching…
+                      </div>
+                    )}
+                    {!searching && results.length === 0 && (
+                      <div className="px-3 py-3 text-xs font-medium text-slate-400">
+                        No customer found.
+                      </div>
+                    )}
+                    {results.map((c) => (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => {
+                          setCustomer(c);
+                          setResults([]);
+                        }}
+                        className="flex w-full items-center justify-between px-3 py-2.5 text-left hover:bg-slate-50"
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-bold text-slate-900">
+                            {c.customer_code} · {c.name}
+                          </span>
+                          <span className="block text-xs font-medium text-slate-400">
+                            {c.phone || "No phone"}
+                          </span>
+                        </span>
+                        <span className="ml-3 text-xs font-bold text-slate-600">
+                          {moneyS(c.balance || 0)}
+                        </span>
+                      </button>
+                    ))}
                   </div>
                 )}
-                {!searching && results.length === 0 && (
-                  <div className="px-3 py-3 text-xs font-medium normal-case text-slate-400">
-                    No customer found.
-                  </div>
-                )}
-                {results.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => {
-                      setCustomer(c);
-                      setResults([]);
-                    }}
-                    className="flex w-full items-center justify-between px-3 py-2.5 text-left hover:bg-slate-50"
-                  >
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-bold normal-case text-slate-900">
-                        {c.customer_code} · {c.name}
-                      </span>
-                      <span className="block text-xs font-medium normal-case text-slate-400">
-                        {c.phone || "No phone"}
-                      </span>
-                    </span>
-                    <span className="ml-3 text-xs font-bold normal-case text-slate-600">
-                      {moneyS(c.balance || 0)}
-                    </span>
-                  </button>
-                ))}
               </div>
             )}
           </div>
-        )}
-      </label>
 
-      <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-slate-500">
-        Amount (USD)
-        <input
-          type="number"
-          min="0"
-          step="0.01"
-          className={field}
-          value={amount}
-          onChange={(e) => setAmount(e.target.value)}
-          placeholder="0.00"
-        />
-      </label>
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        {[5, 10, 20, 50, 100].map((v) => (
-          <button
-            key={v}
-            type="button"
-            onClick={() => setAmount(String(v))}
-            className="h-8 rounded-lg border border-slate-200 px-3 text-xs font-bold text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
-          >
-            ${v}
-          </button>
-        ))}
-      </div>
+          <div className="mt-6 grid gap-6 sm:grid-cols-2">
+            <div>
+              <label className={label} htmlFor="wtu-method">
+                Payment Method
+              </label>
+              <div className="relative">
+                <select
+                  id="wtu-method"
+                  value={method}
+                  onChange={(e) => setMethod(e.target.value)}
+                  className={`${field} cursor-pointer appearance-none pr-10 ${method ? "" : "font-normal text-slate-500"}`}
+                  style={WTU_NO_RING}
+                >
+                  <option value="">Select an option…</option>
+                  {CN_PAYMENT_METHODS.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+                <Icons.ChevronDown
+                  size={16}
+                  className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-500"
+                />
+              </div>
+            </div>
+            <div>
+              <label className={label} htmlFor="wtu-amount">
+                Amount <span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[15px] font-medium text-slate-700">
+                  $
+                </span>
+                <input
+                  id="wtu-amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  className={`${field} pl-8 pr-16`}
+                  style={WTU_NO_RING}
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="0.00"
+                />
+                <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-900">
+                  USD
+                </span>
+              </div>
+            </div>
+          </div>
 
-      <label className="mt-3 block text-xs font-bold uppercase tracking-wide text-slate-500">
-        Note (optional)
-        <input
-          className={field}
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder="e.g. ABA transfer, cash"
-        />
-      </label>
+          <div className="mt-6">
+            <div className="mb-2 flex items-center justify-between">
+              <label
+                className="text-[15px] font-semibold text-slate-900"
+                htmlFor="wtu-note"
+              >
+                Remark
+              </label>
+              <span className="text-sm text-slate-600">optional</span>
+            </div>
+            <textarea
+              id="wtu-note"
+              rows={6}
+              className="w-full resize-none rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-[15px] font-medium text-slate-900 shadow-sm transition placeholder:font-normal placeholder:text-slate-500 focus:border-slate-500"
+              style={WTU_NO_RING}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="e.g. ABA transfer, cash"
+            />
+          </div>
 
-      {customer && valid && (
-        <div className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
-          New balance:{" "}
-          <b className="text-slate-900">
-            {moneyS(Number(customer.balance || 0) + amt)}
-          </b>
+          <div className="mt-6">
+            <WalletProofPicker
+              files={proofs}
+              setFiles={setProofs}
+              disabled={busy}
+            />
+          </div>
+
+          {customer && valid && (
+            <div className="mt-6 flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3.5 text-sm text-slate-600">
+              <span>New balance</span>
+              <b className="text-base text-slate-900">
+                {moneyS(Number(customer.balance || 0) + amt)}
+              </b>
+            </div>
+          )}
+          {err && (
+            <p className="mt-3 text-xs font-semibold text-red-600">{err}</p>
+          )}
         </div>
-      )}
-      {err && <p className="mt-3 text-xs font-semibold text-red-600">{err}</p>}
-      <div className="mt-5 flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={onClose}
-          className="h-10 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600 hover:bg-slate-50"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          disabled={!valid || busy}
-          onClick={submit}
-          className="h-10 rounded-xl bg-blue-600 px-5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
-        >
-          {busy ? "Saving…" : "Top Up"}
-        </button>
+
+        <div className="flex justify-end gap-2 border-t border-slate-100 px-8 py-5">
+          <button
+            type="button"
+            disabled={!valid || busy}
+            onClick={submit}
+            className="h-11 rounded-lg bg-blue-600 px-7 text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
+          >
+            {busy ? "Saving…" : "Submit"}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-slate-300 px-5 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50"
+          >
+            <Icons.X size={14} />
+            Cancel
+          </button>
+        </div>
       </div>
-    </WalletModal>
+    </div>,
+    document.body,
   );
 }
 
@@ -72711,6 +73355,7 @@ function LoyaltyPage() {
 }
 
 function WalletTopUpPage() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const canTopUp = hasPermission(user, "payment.manage");
   const [rows, setRows] = useState([]);
@@ -72901,6 +73546,11 @@ function WalletTopUpPage() {
       render: (r) => <span className="text-slate-500">{r.note || "—"}</span>,
     },
     {
+      key: "proof",
+      label: "Proof",
+      render: (r) => <WalletProofCell txId={r.id} type={r.type} />,
+    },
+    {
       key: "created_by",
       label: "By",
       render: (r) => (
@@ -72910,7 +73560,7 @@ function WalletTopUpPage() {
   ];
 
   return (
-    <div className="mx-auto max-w-7xl">
+    <div className="w-full min-w-0">
       <h1 className="cb-page-title mb-5 text-2xl font-extrabold text-slate-900">
         Wallet Top Up
       </h1>
@@ -73035,6 +73685,9 @@ function WalletTopUpPage() {
             loading={loading && rows.length === 0}
             skeletonRows={6}
             minWidth={820}
+            onRowClick={(r) =>
+              navigate(`/wallet-top-up/${encodeURIComponent(r.id)}`)
+            }
             error={error ? { title: error } : null}
             onRetry={() => setReload((n) => n + 1)}
             emptyTitle="No top-ups found."
@@ -73069,6 +73722,829 @@ function WalletTopUpPage() {
           onClose={() => setCreate(false)}
           onDone={() => {
             setCreate(false);
+            setReload((n) => n + 1);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// Top Up invoice in the same layout as the CN / Shipment invoice (A4, logo,
+// customer block, table, three signatures). Shown in InvoicePreviewModal.
+function topUpInvoiceHtml({ company, customer, rows, issuedBy, when }) {
+  const e = htmlEsc;
+  const logo = company?.logoUrl || company?.logoDataUrl || "";
+  const usd = (n) => `$${(Number(n) || 0).toFixed(2)}`;
+  const grand = rows.reduce((t, r) => t + (Number(r.amount) || 0), 0);
+  const body = rows
+    .map(
+      (r, i) =>
+        `<tr><td>${i + 1}</td><td>${e(r.ref)}</td><td>${e(r.date)}</td><td>${e(r.method || "—")}</td><td>${e(r.note || "—")}</td><td>${usd(r.amount)}</td></tr>`,
+    )
+    .join("");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Top Up Invoice ${e(customer.code)}</title>
+<style>
+@page{size:A4;margin:16mm 14mm}*{box-sizing:border-box}body{font-family:'Inter','Noto Sans Khmer',Arial,sans-serif;font-size:14px;color:#111;margin:0}
+.top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;margin-bottom:22px}.logo img{max-height:60px;max-width:200px;object-fit:contain}.logo b{font-size:20px}.top h1{font-size:22px;font-weight:600;margin:0;text-align:center}.meta{text-align:right;line-height:1.55}.cust{line-height:1.8;margin-bottom:16px;font-size:15px}
+table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:12px}th,td{border:1px solid #9aa3b5;padding:8px 5px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f1f3f6;font-weight:700}.total{text-align:right;font-weight:700;padding-right:14px}.sum{font-weight:700}.sign{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;margin-top:34px;font-size:14px;font-weight:600}.sign div{padding-bottom:48px}.line{border-top:1px solid #d5d9e0;margin-top:18px}
+</style></head><body><div class="top"><div class="logo">${logo ? `<img src="${e(logo)}" alt="">` : `<b>${e(company?.name || "")}</b>`}</div><h1>Top Up Invoice</h1><div class="meta"><div><b>Date:</b> ${e(when)}</div><div><b>Issued By:</b> ${e(issuedBy)}</div></div></div>
+<div class="cust"><div><b>Customer ID:</b> ${e(customer.code)}</div><div><b>Customer Name:</b> ${e(customer.name)}</div><div><b>Phone Number:</b> ${e(customer.phone)}</div></div>
+<table><colgroup><col style="width:6%"><col style="width:16%"><col style="width:20%"><col style="width:15%"><col style="width:25%"><col style="width:18%"></colgroup><tr><th>#</th><th>Reference</th><th>Date (ICT)</th><th>Source</th><th>Note</th><th>Top Up Amount (USD)</th></tr>
+${body}<tr><td colspan="5" class="total">Total Amount</td><td class="sum">${usd(grand)}</td></tr></table><div class="sign"><div>Customer Signature</div><div>Employee Signature</div><div>Authorized Signature</div></div><div class="line"></div></body></html>`;
+}
+
+// ============================================================
+// TOP UP DETAIL — /wallet-top-up/:id  (DRSB "Top Up Request Details" look)
+// Opened by clicking a row on the Wallet Top Up list. Header (customer +
+// wallet balance), Details / Transaction tabs, Request, Source of funds,
+// Approval, Audit trail, Related items and the payment-proof images.
+// Reads wallet_transactions / customers / wallet_transaction_images only.
+// ============================================================
+const WTD_TZ = "Asia/Phnom_Penh";
+function wtdStamp(v) {
+  if (!v) return "—";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "—";
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: WTD_TZ,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(d)
+      .map((x) => [x.type, x.value]),
+  );
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} ICT`;
+}
+function wtdDay(v) {
+  return wtdStamp(v).slice(0, 10);
+}
+function wtdAgo(v) {
+  const s = Math.max(0, (Date.now() - new Date(v).getTime()) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  if (s < 86400 * 30) return `${Math.floor(s / 86400)}d ago`;
+  if (s < 86400 * 365) return `${Math.floor(s / (86400 * 30))}mo ago`;
+  return `${Math.floor(s / (86400 * 365))}y ago`;
+}
+// The create form stores "<method> · <note>" in one column.
+function wtdSplitNote(note) {
+  const parts = String(note || "")
+    .split(" · ")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  const known = /^(aba|khqr|wing|acleda|cash|bank|transfer|abapay|truemoney)/i;
+  if (parts.length && known.test(parts[0]))
+    return { method: parts[0], note: parts.slice(1).join(" · ") };
+  return { method: "", note: parts.join(" · ") };
+}
+const WTD_TYPE = {
+  top_up: ["Deposit", "bg-emerald-50 text-emerald-700 border-emerald-200"],
+  top_up_reversal: ["Reversal", "bg-red-50 text-red-600 border-red-200"],
+  refund: ["Refund", "bg-emerald-50 text-emerald-700 border-emerald-200"],
+  withdraw: ["Withdraw", "bg-red-50 text-red-600 border-red-200"],
+  withdrawal: ["Withdraw", "bg-red-50 text-red-600 border-red-200"],
+  debit: ["Debit", "bg-red-50 text-red-600 border-red-200"],
+  payment: ["Payment", "bg-red-50 text-red-600 border-red-200"],
+};
+function wtdTypeBadge(type) {
+  const [label, tone] = WTD_TYPE[type] || [
+    String(type || "—").replace(/_/g, " "),
+    "bg-slate-50 text-slate-600 border-slate-200",
+  ];
+  return (
+    <span
+      className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-semibold capitalize ${tone}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+// Nice reference: TU-000123 (needs supabase_wallet_ref_no.sql); falls back to
+// the first 8 characters of the row id until that script has been run.
+function wtdRef(r) {
+  return (
+    r?.ref_no ||
+    String(r?.id || "")
+      .replace(/-/g, "")
+      .slice(0, 8)
+      .toUpperCase()
+  );
+}
+
+function WalletTopUpDetailPage() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const canTopUp = hasPermission(user, "payment.manage");
+  const [tx, setTx] = useState(null);
+  const [cust, setCust] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [reversals, setReversals] = useState([]);
+  const [images, setImages] = useState([]);
+  const [viewer, setViewer] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [tab, setTab] = useState("details");
+  const [reverse, setReverse] = useState(false);
+  const [invoice, setInvoice] = useState(null);
+  const company = useSystemSettings()?.company;
+  const [copied, setCopied] = useState(false);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    if (!supabase) {
+      setLoading(false);
+      setError("Supabase is not configured.");
+      return undefined;
+    }
+    (async () => {
+      setLoading(true);
+      const { data: row, error: e1 } = await supabase
+        .from("wallet_transactions")
+        .select("*")
+        .eq("id", id)
+        .maybeSingle();
+      if (!alive) return;
+      if (e1 || !row) {
+        setError(e1 ? walletErr(e1) : "Top up not found.");
+        setLoading(false);
+        return;
+      }
+      const [c, h] = await Promise.all([
+        supabase
+          .from("customers")
+          .select("id, customer_code, name, phone, balance, avatar_url")
+          .eq("id", row.customer_id)
+          .maybeSingle(),
+        supabase
+          .from("wallet_transactions")
+          .select("*")
+          .eq("customer_id", row.customer_id)
+          .order("created_at", { ascending: false })
+          .limit(200),
+      ]);
+      // Reversals of this top up (column name differs between installs → ignore errors).
+      let rev = [];
+      try {
+        const r = await supabase
+          .from("wallet_transactions")
+          .select("*")
+          .eq("reversal_of", String(row.id))
+          .order("created_at", { ascending: true });
+        if (!r.error) rev = r.data || [];
+      } catch {
+        /* optional */
+      }
+      let imgs = [];
+      if (row.type === "top_up") {
+        try {
+          imgs = await loadWalletProofImages(row.id);
+        } catch {
+          /* proof table optional */
+        }
+      }
+      if (!alive) return;
+      setTx(row);
+      setCust(c.data || null);
+      setHistory(h.data || []);
+      setReversals(rev);
+      setImages(imgs);
+      setError("");
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [id, reload]);
+
+  if (loading && !tx)
+    return (
+      <div className="w-full min-w-0 animate-pulse">
+        <div className="mb-5 h-8 w-72 rounded-lg bg-slate-200" />
+        <div className="h-40 rounded-2xl bg-slate-100" />
+        <div className="mt-5 h-96 rounded-2xl bg-slate-100" />
+      </div>
+    );
+  if (error || !tx)
+    return (
+      <div className="mx-auto max-w-xl p-10 text-center">
+        <p className="mb-4 text-slate-500">{error || "Top up not found."}</p>
+        <Link to="/wallet-top-up" className="font-bold text-blue-700">
+          ← Back to Wallet Top Up
+        </Link>
+      </div>
+    );
+
+  const isReversalRow = tx.type === "top_up_reversal";
+  const amount = Math.abs(Number(tx.amount) || 0);
+  const reversedAmt = Number(tx.reversed_amount) || 0;
+  const fullyReversed = !!tx.reversed_at;
+  const { method, note } = wtdSplitNote(tx.note);
+  const statusLabel = isReversalRow
+    ? "Reversal"
+    : fullyReversed
+      ? "Reversed"
+      : reversedAmt > 0
+        ? "Partly reversed"
+        : "Approved";
+  const statusTone = isReversalRow
+    ? "bg-red-50 text-red-700 border-red-200"
+    : fullyReversed
+      ? "bg-slate-100 text-slate-600 border-slate-200"
+      : reversedAmt > 0
+        ? "bg-amber-50 text-amber-700 border-amber-200"
+        : "bg-emerald-50 text-emerald-700 border-emerald-200";
+  const dot = isReversalRow
+    ? "bg-red-500"
+    : fullyReversed
+      ? "bg-slate-400"
+      : reversedAmt > 0
+        ? "bg-amber-500"
+        : "bg-emerald-500";
+  const statusPill = (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-semibold ${statusTone}`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+      {statusLabel}
+    </span>
+  );
+  const ref = wtdRef(tx);
+  const prev = history.find(
+    (h) =>
+      h.type === "top_up" &&
+      String(h.id) !== String(tx.id) &&
+      new Date(h.created_at) < new Date(tx.created_at),
+  );
+  const prevReversal = history.find(
+    (h) =>
+      h.type === "top_up_reversal" &&
+      String(h.id) !== String(tx.id) &&
+      new Date(h.created_at) < new Date(tx.created_at),
+  );
+  const canReverse = canTopUp && tx.type === "top_up" && !fullyReversed;
+
+  // Audit trail: created → each reversal.
+  const trail = [
+    {
+      at: tx.created_at,
+      what: isReversalRow ? "Reversed" : "Approved",
+      who: tx.created_by || "System",
+      detail: isReversalRow ? note || "" : "",
+    },
+    ...reversals.map((r) => ({
+      at: r.created_at,
+      what: "Reversed",
+      who: r.created_by || "System",
+      detail: [`−${money(Math.abs(Number(r.amount) || 0))}`, r.note]
+        .filter(Boolean)
+        .join(" · "),
+    })),
+  ];
+  if (tx.reversed_at && !reversals.length)
+    trail.push({
+      at: tx.reversed_at,
+      what: "Reversed",
+      who: tx.reversed_by || "—",
+      detail: [
+        reversedAmt ? `−${money(reversedAmt)}` : "",
+        tx.reversed_reason || tx.reverse_reason || "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    });
+
+  const row = (label, value) => (
+    <div className="grid grid-cols-[180px_1fr] items-center gap-3 border-t border-slate-100 px-4 py-3 text-sm">
+      <div className="text-slate-500">{label}</div>
+      <div className="min-w-0 font-medium text-slate-800">{value}</div>
+    </div>
+  );
+  const section = (title) => (
+    <div className="border-t border-slate-100 bg-slate-50 px-4 py-2.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+      {title}
+    </div>
+  );
+
+  function openInvoice() {
+    setInvoice(
+      topUpInvoiceHtml({
+        company,
+        customer: {
+          code: cust?.customer_code || String(tx.customer_id),
+          name: cust?.name || "—",
+          phone: cust?.phone || "—",
+        },
+        rows: [
+          {
+            ref,
+            date: wtdStamp(tx.created_at),
+            method,
+            note,
+            amount,
+          },
+        ],
+        issuedBy: user?.name || user?.email || "—",
+        when: invoiceStamp(),
+      }),
+    );
+  }
+
+  async function copyRef() {
+    try {
+      await navigator.clipboard.writeText(ref);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard blocked */
+    }
+  }
+
+  return (
+    <div className="w-full min-w-0">
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={() => navigate("/wallet-top-up")}
+          title="Back to Wallet Top Up"
+          className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 print:hidden"
+        >
+          <Icons.ArrowLeft size={16} />
+        </button>
+        <h1 className="cb-page-title text-2xl font-extrabold text-slate-900">
+          Top Up Request Details
+        </h1>
+        <div className="ml-auto flex items-center gap-2 print:hidden">
+          <button
+            type="button"
+            onClick={openInvoice}
+            disabled={isReversalRow}
+            title={
+              isReversalRow
+                ? "Reversals have no invoice"
+                : "Print top up invoice"
+            }
+            className="flex h-10 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+          >
+            <Icons.Printer size={15} /> Print
+          </button>
+          {canReverse && (
+            <button
+              type="button"
+              onClick={() => setReverse(true)}
+              className="flex h-10 items-center gap-1.5 rounded-xl border border-red-200 bg-white px-4 text-sm font-bold text-red-600 hover:bg-red-50"
+            >
+              <Icons.Undo2 size={15} /> Reverse
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setReload((n) => n + 1)}
+            title="Refresh"
+            className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+          >
+            <Icons.RefreshCw
+              size={15}
+              className={loading ? "animate-spin" : ""}
+            />
+          </button>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        {/* Customer header */}
+        <div className="flex flex-wrap items-center gap-4 p-5">
+          <div className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-full border border-slate-200 bg-slate-50 text-slate-400">
+            {cust?.avatar_url ? (
+              <img
+                src={cust.avatar_url}
+                alt=""
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <Icons.UserRound size={26} />
+            )}
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="truncate text-lg font-extrabold text-slate-900">
+                {cust?.name || "—"}
+              </span>
+              {cust?.customer_code && (
+                <Link
+                  to={`/customers/${encodeURIComponent(cust.customer_code)}`}
+                  title="Open customer"
+                  className="text-slate-400 hover:text-blue-600"
+                >
+                  <Icons.Link2 size={15} />
+                </Link>
+              )}
+            </div>
+            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-slate-500">
+              <span className="font-mono">
+                ID {cust?.customer_code || tx.customer_id}
+              </span>
+              {cust?.phone && <span className="font-mono">{cust.phone}</span>}
+            </div>
+          </div>
+          <div className="ml-auto text-right">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              Wallet balance
+            </div>
+            <div
+              className={`text-2xl font-extrabold ${Number(cust?.balance) < 0 ? "text-red-600" : "text-emerald-700"}`}
+            >
+              {cust ? `${moneyS(cust.balance || 0)} USD` : "—"}
+            </div>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex gap-6 border-b border-slate-200 px-5 print:hidden">
+          {[
+            ["details", "Details"],
+            ["transaction", `Transaction (${history.length})`],
+          ].map(([k, l]) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setTab(k)}
+              className={`-mb-px border-b-2 px-1 py-3 text-sm font-bold ${
+                tab === k
+                  ? "border-blue-600 text-blue-700"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              {l}
+            </button>
+          ))}
+        </div>
+
+        {tab === "details" && (
+          <div className="p-5">
+            <div className="overflow-hidden rounded-xl border border-slate-200">
+              <div className="bg-slate-50 px-4 py-2 text-xs italic text-slate-500">
+                All times shown in ICT (UTC+7) · Phnom Penh.
+              </div>
+              {/* Summary strip */}
+              <div className="grid gap-4 border-t border-slate-100 px-4 py-4 sm:grid-cols-2 lg:grid-cols-5">
+                <div>
+                  <div className="text-xs text-slate-500">Amount</div>
+                  <div
+                    className={`text-2xl font-extrabold ${isReversalRow ? "text-red-600" : fullyReversed ? "text-slate-400 line-through" : "text-emerald-600"}`}
+                  >
+                    {isReversalRow ? "−" : "+"}
+                    {money(amount)} USD
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500">Customer</div>
+                  <div className="mt-1 text-[15px] font-bold text-slate-900">
+                    {cust?.name || "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500">Source of funds</div>
+                  <div className="mt-1 text-[15px] font-bold text-slate-900">
+                    {method || "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500">Requested</div>
+                  <div className="mt-1 text-[15px] font-bold text-slate-900">
+                    {wtdStamp(tx.created_at)}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-slate-500">Status</div>
+                  <div className="mt-1.5">{statusPill}</div>
+                </div>
+              </div>
+
+              <div className="grid lg:grid-cols-[1fr_380px]">
+                {/* Left column */}
+                <div className="min-w-0">
+                  {section("Request")}
+                  {row(
+                    "Reference",
+                    <span className="flex items-center gap-2">
+                      <span className="font-mono">{ref}</span>
+                      <button
+                        type="button"
+                        onClick={copyRef}
+                        className="text-xs font-bold text-blue-600 hover:underline print:hidden"
+                      >
+                        {copied ? "Copied" : "Copy"}
+                      </button>
+                    </span>,
+                  )}
+                  {row("Operation Type", wtdTypeBadge(tx.type))}
+                  {row(
+                    "Source Type",
+                    method ? (
+                      <span className="rounded-md border border-slate-200 bg-slate-50 px-2 py-0.5 text-xs font-semibold">
+                        {method}
+                      </span>
+                    ) : (
+                      "—"
+                    ),
+                  )}
+                  {row("Requested by", cust?.phone || tx.created_by || "—")}
+                  {row("Status", statusPill)}
+                  {row(
+                    "Balance after",
+                    tx.balance_after != null ? moneyS(tx.balance_after) : "—",
+                  )}
+                  {reversedAmt > 0 &&
+                    row(
+                      "Reversed amount",
+                      <span className="font-bold text-red-600">
+                        −{money(reversedAmt)}
+                      </span>,
+                    )}
+
+                  {section("Source of funds")}
+                  {row("Method", method || "—")}
+                  {row("Note", note || "—")}
+
+                  {section("Approval")}
+                  {row("Proceed By", tx.created_by || "—")}
+                  {row("Proceed At", wtdStamp(tx.created_at))}
+                  {row(
+                    "Reason",
+                    isReversalRow
+                      ? note || "—"
+                      : tx.reversed_reason || tx.reverse_reason || "—",
+                  )}
+                  {row("Note", note || "—")}
+
+                  {section("Audit trail")}
+                  <div className="border-t border-slate-100">
+                    {trail.map((t, i) => (
+                      <div
+                        key={i}
+                        className="grid grid-cols-[130px_1fr] gap-3 px-4 py-3 text-sm"
+                      >
+                        <div className="font-mono text-xs text-slate-500">
+                          {wtdStamp(t.at).replace(/^\d{4}-/, "")}
+                        </div>
+                        <div>
+                          <span className="font-bold text-slate-900">
+                            {t.what}
+                          </span>{" "}
+                          <span className="rounded border border-blue-200 bg-blue-50 px-1.5 py-0.5 text-[10px] font-bold text-blue-700">
+                            HUMAN
+                          </span>
+                          <div className="text-slate-600">{t.who}</div>
+                          {t.detail && (
+                            <div className="text-xs text-slate-500">
+                              {t.detail}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Right column */}
+                <div className="min-w-0 border-t border-slate-100 lg:border-l lg:border-t-0">
+                  {section("Related items")}
+                  <div className="space-y-3 px-4 py-3 text-sm">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                        Previous request
+                      </span>
+                      {prev ? (
+                        <span className="flex items-center gap-2">
+                          <Link
+                            to={`/wallet-top-up/${encodeURIComponent(prev.id)}`}
+                            className="font-mono text-blue-600 hover:underline"
+                          >
+                            {wtdRef(prev)}
+                          </Link>
+                          <span className="text-slate-500">
+                            {wtdDay(prev.created_at)} · +
+                            {money(Math.abs(Number(prev.amount) || 0))}
+                          </span>
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
+                            PREV
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="italic text-slate-400">None</span>
+                      )}
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                        Prior reversal
+                      </span>
+                      {prevReversal ? (
+                        <span className="flex items-center gap-2">
+                          <Link
+                            to={`/wallet-top-up/${encodeURIComponent(prevReversal.id)}`}
+                            className="font-mono text-blue-600 hover:underline"
+                          >
+                            {wtdRef(prevReversal)}
+                          </Link>
+                          <span className="text-slate-500">
+                            {wtdDay(prevReversal.created_at)}
+                          </span>
+                          <span className="rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-bold text-red-600">
+                            REVERSED
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="italic text-slate-400">None</span>
+                      )}
+                    </div>
+                    <div className="border-t border-slate-100 pt-3 text-xs text-slate-500">
+                      <div>
+                        Record:{" "}
+                        <b className="font-mono text-slate-800">{ref}</b>
+                      </div>
+                      <div>
+                        Snapshot:{" "}
+                        <b className="font-mono text-slate-800">
+                          {wtdStamp(new Date())}
+                        </b>
+                      </div>
+                    </div>
+                  </div>
+
+                  {section(`Payment proof (${images.length})`)}
+                  <div className="px-4 py-3">
+                    {images.length ? (
+                      <div className="flex flex-wrap gap-3">
+                        {images.map((im, k) => (
+                          <button
+                            key={im.url}
+                            type="button"
+                            onClick={() => setViewer(k)}
+                            className="h-24 w-24 overflow-hidden rounded-lg border border-slate-200 hover:ring-2 hover:ring-blue-300"
+                          >
+                            <img
+                              src={im.url}
+                              alt={im.name}
+                              className="h-full w-full object-cover"
+                            />
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-sm italic text-slate-400">
+                        No payment proof attached.
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === "transaction" && (
+          <div className="p-5">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-lg font-extrabold text-blue-700">
+                Transaction History
+              </h2>
+              <button
+                type="button"
+                onClick={() => setReload((n) => n + 1)}
+                className="flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <Icons.RefreshCw
+                  size={14}
+                  className={loading ? "animate-spin" : ""}
+                />{" "}
+                Refresh
+              </button>
+            </div>
+            <div className="overflow-hidden rounded-xl border border-slate-200">
+              <DataTable
+                caption="Customer wallet transactions"
+                rows={history}
+                rowKey={(r) => r.id}
+                minWidth={760}
+                emptyTitle="No transactions."
+                onRowClick={(r) => {
+                  if (r.type === "top_up" || r.type === "top_up_reversal")
+                    navigate(`/wallet-top-up/${encodeURIComponent(r.id)}`);
+                }}
+                columns={[
+                  {
+                    key: "id",
+                    label: "ID",
+                    render: (r) => (
+                      <span
+                        className={`font-mono text-xs ${String(r.id) === String(tx.id) ? "font-bold text-blue-700" : "text-slate-600"}`}
+                      >
+                        {wtdRef(r)}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: "type",
+                    label: "Operation Type",
+                    render: (r) => wtdTypeBadge(r.type),
+                  },
+                  {
+                    key: "amount",
+                    label: "Amount",
+                    render: (r) => {
+                      const n = Number(r.amount) || 0;
+                      const neg =
+                        n < 0 ||
+                        [
+                          "top_up_reversal",
+                          "withdraw",
+                          "withdrawal",
+                          "debit",
+                          "payment",
+                        ].includes(r.type);
+                      return (
+                        <span
+                          className={`font-bold ${neg ? "text-red-600" : "text-slate-800"}`}
+                        >
+                          {neg ? "−" : ""}
+                          {money(Math.abs(n))}
+                        </span>
+                      );
+                    },
+                  },
+                  {
+                    key: "note",
+                    label: "Source / Note",
+                    wrap: true,
+                    render: (r) => (
+                      <span className="text-slate-600">{r.note || "—"}</span>
+                    ),
+                  },
+                  {
+                    key: "created",
+                    label: "Created At",
+                    render: (r) => (
+                      <>
+                        <div className="font-semibold text-slate-800">
+                          {wtdStamp(r.created_at).slice(0, 16)}
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          {wtdAgo(r.created_at)}
+                        </div>
+                      </>
+                    ),
+                  },
+                  {
+                    key: "status",
+                    label: "Status",
+                    render: (r) =>
+                      r.reversed_at ? (
+                        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+                          Reversed
+                        </span>
+                      ) : (
+                        <span className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                          Approved
+                        </span>
+                      ),
+                  },
+                ]}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {invoice && (
+        <InvoicePreviewModal
+          title="Top Up Invoice Preview"
+          html={invoice}
+          onClose={() => setInvoice(null)}
+        />
+      )}
+      {viewer != null && (
+        <AirImageViewer
+          images={images}
+          start={viewer}
+          onClose={() => setViewer(null)}
+        />
+      )}
+      {reverse && (
+        <ReverseTopUpModal
+          row={{ ...tx, _c: cust }}
+          onClose={() => setReverse(false)}
+          onDone={() => {
+            setReverse(false);
             setReload((n) => n + 1);
           }}
         />
@@ -83035,6 +84511,10 @@ function AdminApp() {
                 element={<CustomerRecoveryPage />}
               />
               <Route path="/wallet-top-up" element={<WalletTopUpPage />} />
+              <Route
+                path="/wallet-top-up/:id"
+                element={<WalletTopUpDetailPage />}
+              />
               <Route path="/loyalty" element={<LoyaltyPage />} />
               <Route path="/shop/dashboard" element={<ShopDashboardPage />} />
               <Route path="/shop/reports" element={<ShopReportsPage />} />
