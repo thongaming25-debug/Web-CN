@@ -3346,6 +3346,17 @@ const PERMISSION_GROUPS = [
     ],
   },
   {
+    // Final "Complete Order" step. Kept separate from tk.process /
+    // cn_order.purchase so only the people given this permission can
+    // complete an order (Super Admin always can).
+    key: "complete",
+    label: "Complete Order",
+    perms: [
+      ["complete.shipment", "Complete Order — Shipment (TK)"],
+      ["complete.parse_link", "Complete Order — Parse Link (CN Order)"],
+    ],
+  },
+  {
     key: "shop",
     label: "Online Shop",
     perms: [
@@ -22990,10 +23001,12 @@ function Login() {
         @media (prefers-reduced-motion: reduce) {
           .cb-wave { animation: none !important; }
         }
-        .cb-login-input{width:100%;border:1px solid transparent;border-radius:6px;background:#eaf0fd;padding:13px 14px;font-size:14.5px;color:#0f172a;outline:none;transition:background .15s,border-color .15s,box-shadow .15s;}
-        .cb-login-input:focus{background:#fff;border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.12);}
+        .cb-login-input{width:100%;border:1px solid #d1d5db;border-radius:8px;background:#fff;padding:14px 14px;font-size:14.5px;color:#0f172a;outline:none;box-shadow:none;transition:border-color .15s;}
+        .cb-login-input:focus{background:#fff;border-color:#9ca3af;box-shadow:none;outline:none;}
+        .cb-login-input:-webkit-autofill,.cb-login-input:-webkit-autofill:focus{-webkit-box-shadow:0 0 0 1000px #fff inset;-webkit-text-fill-color:#0f172a;}
         html.cb-admin-dark .cb-login-input{background:#0f1626;color:#e5e7eb;border-color:#263043;}
-        html.cb-admin-dark .cb-login-input:focus{background:#0b1120;border-color:#60a5fa;}
+        html.cb-admin-dark .cb-login-input:focus{background:#0f1626;border-color:#475569;box-shadow:none;}
+        html.cb-admin-dark .cb-login-input:-webkit-autofill{-webkit-box-shadow:0 0 0 1000px #0f1626 inset;-webkit-text-fill-color:#e5e7eb;}
       `}</style>
 
       {/* Floating waves behind the card */}
@@ -26273,7 +26286,7 @@ function ShipmentLookup() {
                               // Parse Link: exactly the CN Orders status
                               // (Inbound Origin, Outbound Origin, Delivery ...)
                               <CnStatusBadge
-                                status={cnOrderTableStatus(row.cn_row)}
+                                status={cnStaffTableStatus(row.cn_row)}
                                 partial={!!row.cn_row.is_partial}
                                 cancelled={cnIsCancelledUnpaid(row.cn_row)}
                               />
@@ -28321,6 +28334,7 @@ function PackageDetail() {
     logStatus,
     ready: pkgReady,
   } = usePackageTracking();
+  const [showCompleteShipment, setShowCompleteShipment] = useState(false);
   // A TK scanned through Inbound/Outbound Origin lives in the shared
   // package registry (see PackageTrackingContext) — Packages / TK,
   // Inbound Origin and Outbound Origin all already read it from there.
@@ -28508,6 +28522,60 @@ function PackageDetail() {
     );
   }
 
+  // ---- Complete Order (Shipment type only) --------------------------------
+  // Same rule as the CN Order "Complete Order": allowed only once the TK is at
+  // Inbound Warehouse AND its shipping fee is fully paid. Parse Link TKs are
+  // completed from their CN Order instead. The staff member who confirms is
+  // recorded (packages.updated_by + status_history.created_by) so the
+  // timeline shows "Proceed By" like every other status.
+  const isShipmentTk = !data.cn_order_id && !isParseLinkPkg(data);
+  const atInboundWarehouse = currentStage === "Inbound Warehouse";
+  const canCompleteShipment =
+    !isCustomerRole && hasPermission(user, "complete.shipment");
+  const completeShipFee = shippingFeeOf(data);
+  const completeShipFeePaid = completeShipFee.state === "paid";
+  const showCompleteShipmentBtn =
+    isShipmentTk && atInboundWarehouse && canCompleteShipment;
+
+  async function handleCompleteShipment() {
+    if (!canCompleteShipment)
+      throw new Error(
+        "You do not have permission to complete this order (Complete Order — Shipment).",
+      );
+    const by = cnBy(user);
+    // Re-read the row so a stale screen can't complete an unpaid / moved TK.
+    let fresh = sourceRecord || data;
+    if (supabase) {
+      const { data: row, error } = await supabase
+        .from("packages")
+        .select("*")
+        .eq("tk", data.tk)
+        .maybeSingle();
+      if (error) throw error;
+      if (!row) throw new Error("TK not found. Reload and try again.");
+      fresh = row;
+    }
+    if (fresh.cn_order_id)
+      throw new Error(
+        "This is a Parse Link TK — complete its CN Order instead.",
+      );
+    if (String(fresh.status || "").trim() !== "Inbound Warehouse")
+      throw new Error(
+        `The order can only be completed at Inbound Warehouse (current: ${fresh.status || "No status"}). Reload and try again.`,
+      );
+    if (shippingFeeOf(fresh).state !== "paid")
+      throw new Error("Shipping fee must be paid before completing the order.");
+
+    await upsertPackage({
+      tk: fresh.tk,
+      status: "Completed",
+      updated_by: by,
+      updated_at: new Date().toISOString(),
+    });
+    logStatus(fresh.tk, "Completed", by, "Order marked complete by staff.");
+    emitCBToast("ok", "Order completed", `${fresh.tk} → Completed`);
+  }
+
   // Unknown TK while the registry is still loading → skeleton, not "—" rows.
   if (!pkgReady && !registryRecord && !PACKAGE_DETAILS[tk])
     return (
@@ -28540,15 +28608,21 @@ function PackageDetail() {
   // ---- Status action (same rules as before, just moved under the stepper) ----
   const statusAction = (
     <>
-      {!isComplete && !gatedStage && !isInboundStage && canProcessStatus && (
-        <button
-          onClick={handleAdvance}
-          className="flex items-center gap-1.5 bg-signal-blue text-white text-xs font-medium px-3 py-1.5 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
-        >
-          <ChevronRight size={14} />
-          Process to next status
-        </button>
-      )}
+      {/* Shipment at Inbound Warehouse completes through "Complete Order"
+          (paid check + who completed), not the generic next-status click. */}
+      {!isComplete &&
+        !gatedStage &&
+        !isInboundStage &&
+        canProcessStatus &&
+        !(isShipmentTk && atInboundWarehouse) && (
+          <button
+            onClick={handleAdvance}
+            className="flex items-center gap-1.5 bg-signal-blue text-white text-xs font-medium px-3 py-1.5 rounded-md hover:bg-signal-blue/90 disabled:opacity-60"
+          >
+            <ChevronRight size={14} />
+            Process to next status
+          </button>
+        )}
       {!isComplete && !gatedStage && !isInboundStage && !canProcessStatus && (
         <span className="flex items-center gap-1.5 text-xs font-medium text-ink-600/45">
           <Eye size={14} />
@@ -28732,6 +28806,22 @@ function PackageDetail() {
             </div>
 
             <div className="cn-detail-actions shipment-actions">
+              {showCompleteShipmentBtn && (
+                <button
+                  type="button"
+                  onClick={() => setShowCompleteShipment(true)}
+                  disabled={!completeShipFeePaid}
+                  title={
+                    completeShipFeePaid
+                      ? undefined
+                      : "Shipping fee must be paid before completing the order"
+                  }
+                  className="flex items-center gap-1.5 bg-blue-600 text-white text-sm font-semibold px-3.5 py-1.5 rounded-md hover:bg-blue-500 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500"
+                >
+                  <CircleCheck size={15} />
+                  Complete Order
+                </button>
+              )}
               {canPrintLabel && (
                 <button
                   type="button"
@@ -28884,6 +28974,30 @@ function PackageDetail() {
             )}
           </div>
         </div>
+
+        {showCompleteShipmentBtn && (
+          <div
+            className={`rounded-md px-4 py-3 text-sm ${completeShipFeePaid ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800"}`}
+          >
+            {completeShipFeePaid ? (
+              <>
+                The shipment has reached <b>Inbound Warehouse</b> and the
+                shipping fee is paid. Confirm <b>Complete Order</b> when the
+                customer has received the goods.
+              </>
+            ) : (
+              <>
+                The shipment has reached <b>Inbound Warehouse</b>, but the
+                customer has not paid the <b>Shipping Fee</b>
+                {completeShipFee.state === "due"
+                  ? ` (${money(completeShipFee.due)} due)`
+                  : " (no shipping fee recorded)"}
+                . <b>Complete Order</b> is available only after the shipping fee
+                is paid.
+              </>
+            )}
+          </div>
+        )}
 
         {/* Parse Link TK opened directly: point to its CN Order detail */}
         {isParseLinkPkg(data) && CN_ORDER_NO_BY_ID[data.cn_order_id] && (
@@ -29517,6 +29631,16 @@ function PackageDetail() {
         onClose={() => setShowTrackingHistory(false)}
         steps={timeline}
       />
+      {showCompleteShipmentBtn && (
+        <ConfirmModal
+          open={showCompleteShipment}
+          title="Complete Order"
+          message={`Mark ${data.tk} as completed? Do this when the customer has received the goods. Your name will be recorded as the person who completed it.`}
+          confirmLabel="Complete Order"
+          onClose={() => setShowCompleteShipment(false)}
+          onConfirm={handleCompleteShipment}
+        />
+      )}
       {canChangeTk && (
         <ChangeTkNumberModal
           open={showChangeTk}
@@ -52691,6 +52815,22 @@ const cnOrderTableStatus = (row) => {
   return core || "Waiting Order Payment";
 };
 
+// Admin / Staff version of the table status: identical to the customer one
+// except the last mile keeps its real stage ("Shipping to Branch" /
+// "Inbound Warehouse") instead of being collapsed into "Delivery".
+// Display-only; customers keep using cnOrderTableStatus().
+const CN_STAFF_TABLE_STATUS_FLOW = CN_ORDER_TABLE_STATUS_FLOW.flatMap((s) =>
+  s === "Delivery" ? ["Shipping to Branch", "Inbound Warehouse"] : [s],
+);
+const cnStaffTableStatus = (row) => {
+  const s = cnOrderTableStatus(row);
+  if (s !== "Delivery") return s;
+  const core = cnNormalizeStatus(row?.status);
+  return core === "Shipping to Branch" || core === "Inbound Warehouse"
+    ? core
+    : s;
+};
+
 const CN_ORDER_STATUS_FLOW = [
   "Order Processing",
   "Purchased",
@@ -52741,7 +52881,9 @@ const cnStageLabel = (s) => {
 const cnAdvanceLabel = (next) =>
   next === "Purchased"
     ? "Mark as Purchased"
-    : `Update (${next ? cnStageLabel(next) : "—"})`;
+    : next === "Complete Order"
+      ? "Complete Order"
+      : `Update (${next ? cnStageLabel(next) : "—"})`;
 
 // Order types: they only differ in how the order is created. After
 // "Shipping to China WH" both follow the exact same TK-driven flow.
@@ -55360,6 +55502,9 @@ function CnStatusUpdateModal({ open, row, parcels = [], onClose, onSaved }) {
   // message only shows (as an error) when Update is pressed / Enter is hit.
   // Purchased + In Transit use the wide, minimal form (no subtitle / note).
   const isTransitStep = next === "Shipping to China WH" || next === "Purchased";
+  // Complete Order uses the same confirm layout as Shipment: plain message,
+  // "Cancel" on the left and a "Complete Order" button on the right.
+  const isCompleteStep = next === "Complete Order";
   const trackingOnlyBlocker =
     !!blocker &&
     ((next === "Shipping to China WH" && /tracking number/i.test(blocker)) ||
@@ -55367,6 +55512,13 @@ function CnStatusUpdateModal({ open, row, parcels = [], onClose, onSaved }) {
 
   async function submit(e) {
     e.preventDefault();
+    if (
+      next === "Complete Order" &&
+      !hasPermission(user, "complete.parse_link")
+    )
+      return setError(
+        "You do not have permission to complete this order (Complete Order — Parse Link).",
+      );
     if (blocker) return setError(blocker);
     setBusy(true);
     setError("");
@@ -55626,7 +55778,7 @@ function CnStatusUpdateModal({ open, row, parcels = [], onClose, onSaved }) {
     <CnModalShell
       title={cnAdvanceLabel(next)}
       subtitle={
-        isTransitStep
+        isTransitStep || isCompleteStep
           ? undefined
           : `${row.order_id} · ${cnStageLabel(row.status)} → ${next ? cnStageLabel(next) : "—"}`
       }
@@ -55640,30 +55792,56 @@ function CnStatusUpdateModal({ open, row, parcels = [], onClose, onSaved }) {
       busyLabel="Saving…"
       submitDisabled={!next || (!!blocker && !trackingOnlyBlocker)}
       footer={
-        <>
-          <button
-            type="submit"
-            disabled={busy || !next || (!!blocker && !trackingOnlyBlocker)}
-            className="cbx-btn cbx-btn-primary"
-          >
-            {busy ? (
-              <Icons.Loader2 size={15} className="animate-spin" />
-            ) : (
-              <Icons.Save size={15} />
-            )}
-            {busy ? "Saving…" : "Update"}
-          </button>
-          <button
-            type="button"
-            className="cbx-btn"
-            onClick={onClose}
-            disabled={busy}
-          >
-            <Icons.X size={15} /> Cancel
-          </button>
-        </>
+        isCompleteStep ? (
+          <>
+            <button
+              type="button"
+              className="cbx-btn"
+              onClick={onClose}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={busy || !next || !!blocker}
+              className="cbx-btn cbx-btn-primary"
+            >
+              {busy && <Icons.Loader2 size={15} className="animate-spin" />}
+              {busy ? "Processing..." : "Complete Order"}
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="submit"
+              disabled={busy || !next || (!!blocker && !trackingOnlyBlocker)}
+              className="cbx-btn cbx-btn-primary"
+            >
+              {busy ? (
+                <Icons.Loader2 size={15} className="animate-spin" />
+              ) : (
+                <Icons.Save size={15} />
+              )}
+              {busy ? "Saving…" : "Update"}
+            </button>
+            <button
+              type="button"
+              className="cbx-btn"
+              onClick={onClose}
+              disabled={busy}
+            >
+              <Icons.X size={15} /> Cancel
+            </button>
+          </>
+        )
       }
     >
+      {isCompleteStep && (
+        <p className="cbx-modal-text">
+          {`Mark ${row.order_id} as completed? Do this when the customer has received the goods. Your name will be recorded as the person who completed it.`}
+        </p>
+      )}
       {blocker && !error && !trackingOnlyBlocker && (
         <div className="rounded-xl bg-amber-50 text-amber-800 px-3 py-2 text-sm">
           {blocker}
@@ -55710,7 +55888,7 @@ function CnStatusUpdateModal({ open, row, parcels = [], onClose, onSaved }) {
           />
         </div>
       )}
-      {!isTransitStep && (
+      {!isTransitStep && !isCompleteStep && (
         <div>
           <label className={LABEL_CLS}>Note</label>
           <textarea
@@ -57860,7 +58038,7 @@ function CnOrdersPage() {
   const filtered = rows.filter(
     (r) =>
       (!q || searchableOrder(r).includes(q.toLowerCase())) &&
-      (!status || cnOrderTableStatus(r) === status) &&
+      (!status || cnStaffTableStatus(r) === status) &&
       (!pay || r.payment_status === pay) &&
       (!quickTest || quickTest(r)) &&
       dateInRange(r.created_at, dateRange),
@@ -58166,7 +58344,7 @@ function CnOrdersPage() {
         [
           { label: "CN Order", key: "order_id" },
           { label: "Customer", key: "customer" },
-          { label: "Order Status", csv: (x) => cnOrderTableStatus(x) },
+          { label: "Order Status", csv: (x) => cnStaffTableStatus(x) },
           { label: "Customer Charges (USD)", csv: (x) => r2(x.total_due_usd) },
           { label: "Customer Paid (USD)", csv: (x) => r2(paidOf(x)) },
           {
@@ -58242,7 +58420,7 @@ function CnOrdersPage() {
                 : Math.max(0, (Number(x.total_due_usd) || 0) - paidOf(x)),
           },
           { label: "Payment", key: "payment_status" },
-          { label: "Status", csv: (x) => cnOrderTableStatus(x) },
+          { label: "Status", csv: (x) => cnStaffTableStatus(x) },
           { label: "Created", csv: (x) => formatIso(x.created_at) },
           { label: "Updated", csv: (x) => formatIso(x.updated_at) },
         ],
@@ -58765,7 +58943,7 @@ function CnOrdersPage() {
       label: "Status",
       render: (r) => (
         <CnStatusBadge
-          status={cnOrderTableStatus(r)}
+          status={cnStaffTableStatus(r)}
           partial={r.is_partial}
           cancelled={cnIsCancelledUnpaid(r)}
         />
@@ -58967,7 +59145,7 @@ function CnOrdersPage() {
                 value={status}
                 onChange={setStatus}
                 allLabel="All Status"
-                options={[...CN_ORDER_TABLE_STATUS_FLOW, CN_ORDER_TERMINAL]}
+                options={[...CN_STAFF_TABLE_STATUS_FLOW, CN_ORDER_TERMINAL]}
               />
               <FilterDropdown
                 value={pay}
@@ -59645,6 +59823,8 @@ function CnOrderDetailPage() {
         hasPermission(user, "cn_order.pay_manual")) &&
       !isPlaceholder,
     canPurchase = hasPermission(user, "cn_order.purchase") && !isPlaceholder,
+    canCompleteOrder =
+      hasPermission(user, "complete.parse_link") && !isPlaceholder,
     canRefund = hasPermission(user, "cn_order.refund") && !isPlaceholder,
     canEdit = hasPermission(user, "cn_order.edit") && !isPlaceholder,
     canDelete = hasPermission(user, "cn_order.delete") && !isPlaceholder;
@@ -60049,8 +60229,12 @@ function CnOrderDetailPage() {
   // The Purchased button stays hidden until the customer has paid the order.
   const awaitingOrderPayment =
     next === "Purchased" && cnOrderTableStatus(row) === "Waiting Order Payment";
+  // The last step (Complete Order) needs its own permission; every earlier
+  // step still uses cn_order.purchase.
   const canAdvance =
-    canPurchase && cnStatusCanAdvance(row.status) && !awaitingOrderPayment;
+    cnStatusCanAdvance(row.status) &&
+    !awaitingOrderPayment &&
+    (next === "Complete Order" ? canCompleteOrder : canPurchase);
   // Completing the order requires the China → Cambodia shipping fee to be paid.
   const shipFeeBlockDue =
     next === "Complete Order" ? cnShipFeeSummary(parcels).due : 0;
@@ -60441,6 +60625,8 @@ function CnOrderDetailPage() {
               >
                 {next === "Purchased" ? (
                   <Icons.ShoppingCart size={16} />
+                ) : next === "Complete Order" ? (
+                  <CircleCheck size={16} />
                 ) : (
                   <Icons.Package size={16} />
                 )}
@@ -60766,7 +60952,7 @@ function CnOrderDetailPage() {
                     <dt>Status</dt>
                     <dd>
                       <CnStatusBadge
-                        status={cnOrderTableStatus(row)}
+                        status={cnStaffTableStatus(row)}
                         partial={partial}
                         cancelled={cnIsCancelledUnpaid(row)}
                       />
@@ -70783,7 +70969,7 @@ function CustomerQuickView({ row, onClose }) {
                       >
                         {o.order_id}
                       </Link>
-                      <CnStatusBadge status={cnOrderTableStatus(o)} />
+                      <CnStatusBadge status={cnStaffTableStatus(o)} />
                     </div>
                     <div className="mt-1 flex items-center justify-between text-xs text-slate-500">
                       <span>{cdDate(o.created_at)}</span>
@@ -71458,9 +71644,9 @@ function CustomerDetailPage() {
       "arrived destination": "Arrive Destination",
       "arrive destination": "Arrive Destination",
       "arrived wh": "Arrive Destination",
-      "shipping to branch": "Delivery",
+      "shipping to branch": "Shipping to Branch",
       delivery: "Delivery",
-      "inbound warehouse": "Delivery",
+      "inbound warehouse": "Inbound Warehouse",
       "pending shipping payment": "Pending Shipping Payment",
       "shipping paid": "Shipping Paid",
       completed: "Completed",
@@ -71473,7 +71659,7 @@ function CustomerDetailPage() {
   };
   const orderStatusForFilter = (r) => {
     if (r._orderKind === "cn")
-      return normalizeCombinedOrderStatus(cnOrderTableStatus(r));
+      return normalizeCombinedOrderStatus(cnStaffTableStatus(r));
     const displayed = pkgDisplayStatus(r) || r.status || "";
     // Keep payment states explicit; all other TK stages use the same local
     // customer-facing labels as the shared Order status filter.
@@ -71492,7 +71678,7 @@ function CustomerDetailPage() {
     },
     {
       name: "Destination & Delivery",
-      items: ["Arrive Destination", "Delivery"],
+      items: ["Arrive Destination", "Shipping to Branch", "Inbound Warehouse"],
     },
     { name: "Final Status", items: ["Completed", "Refund Order"] },
   ];
