@@ -5896,10 +5896,10 @@ function ListTab({ active, label, count, onClick, tone }) {
       role="tab"
       aria-selected={!!active}
       onClick={onClick}
-      className={`shrink-0 whitespace-nowrap flex items-center gap-2 px-3.5 py-3.5 text-sm font-semibold border-b-[3px] -mb-px transition-colors ${
+      className={`cbx-listtab shrink-0 whitespace-nowrap flex items-center gap-2 px-3.5 py-3.5 text-sm font-semibold border-b-[3px] -mb-px transition-colors ${
         active
           ? "border-signal-blue text-signal-blue"
-          : "border-transparent text-ink-700 hover:text-ink-900 hover:border-mist-200"
+          : "border-transparent text-ink-700 hover:text-signal-blue hover:border-signal-blue"
       }`}
     >
       {tone && (
@@ -59288,6 +59288,8 @@ html.cb-admin-dark .cn-detail-page{--cn-surface:#151c2c;--cn-soft:#101827;--cn-b
 .cn-detail-page button:focus-visible,.cn-detail-page a:focus-visible{outline:2px solid var(--cn-blue);outline-offset:3px}
 .cn-detail-tabs{display:flex;gap:24px;border-bottom:1px solid var(--cn-border);margin-top:24px;margin-bottom:24px}
 .cn-detail-tab{display:flex;align-items:center;gap:8px;padding:12px 2px;border-bottom:2px solid transparent;margin-bottom:-1px;font-size:14px;font-weight:650;color:var(--cn-muted)}
+.cn-detail-tab{transition:color .15s ease,border-color .15s ease;cursor:pointer}
+.cn-detail-tab:hover,.cn-detail-tab:focus-visible{color:var(--cn-blue);border-bottom-color:var(--cn-blue);outline:none}
 .cn-detail-tab[aria-selected="true"]{color:var(--cn-blue);border-bottom-color:var(--cn-blue)}
 .cn-detail-count{padding:2px 7px;border-radius:20px;background:var(--cn-soft);font-size:11px;line-height:1.5}
 .cn-detail-top{display:grid;grid-template-columns:minmax(0,1.85fr) minmax(280px,1fr);align-items:start;gap:20px}
@@ -78957,7 +78959,7 @@ function ShopCategoriesPage() {
 
   return (
     <ShopGate perm="shop.view" title="Shop categories">
-      <div className="mx-auto max-w-5xl">
+      <div className="w-full min-w-0">
         <div className="mb-5 flex items-center justify-between">
           <h1 className="cb-page-title text-2xl font-extrabold text-slate-900">
             Shop Categories
@@ -79533,7 +79535,7 @@ function ShopProductsPage() {
 
   return (
     <ShopGate perm="shop.view" title="Shop products">
-      <div className="mx-auto max-w-7xl">
+      <div className="w-full min-w-0">
         <div className="mb-5 flex items-center justify-between">
           <h1 className="cb-page-title text-2xl font-extrabold text-slate-900">
             Shop Products
@@ -80763,7 +80765,7 @@ function ShopInventoryPage() {
 
   return (
     <ShopGate perm="shop.view" title="Shop inventory">
-      <div className="mx-auto max-w-7xl">
+      <div className="w-full min-w-0">
         <h1 className="cb-page-title mb-5 text-2xl font-extrabold text-slate-900">
           Shop Inventory
         </h1>
@@ -81388,7 +81390,7 @@ function ShopOrdersPage() {
 
   return (
     <ShopGate perm="shop.order.review" title="Shop orders">
-      <div className="mx-auto max-w-7xl">
+      <div className="w-full min-w-0">
         <h1 className="cb-page-title mb-5 text-2xl font-extrabold text-slate-900">
           Shop Orders
         </h1>
@@ -81762,7 +81764,8 @@ function ShopInvoiceModal({ order, items, onClose }) {
 const SHOP_DETAIL_LAYOUT_CSS = `
 .shop-detail-page .shop-detail-actions{flex:1 1 420px}
 .shop-detail-page .shop-detail-customer-chip{display:inline-flex;align-items:center;gap:8px;padding:4px 12px 4px 6px;margin-top:14px;border:1px solid var(--cn-border);border-radius:999px;background:var(--cn-soft);font-size:13px;font-weight:600;max-width:100%;overflow-wrap:anywhere}
-.shop-detail-page .shop-detail-tabs{overflow-x:auto}
+.shop-detail-page .shop-detail-tabs{overflow-x:auto;overflow-y:hidden}
+.shop-detail-page .shop-detail-tabs .cn-detail-tab{margin-bottom:0}
 .shop-detail-page .shop-detail-tabs button{white-space:nowrap;flex-shrink:0}
 .shop-detail-page .shop-detail-summary{font-size:14px;margin-top:12px}
 .shop-detail-page .shop-detail-summary>div{display:flex;justify-content:space-between;gap:16px;padding:10px 0;border-bottom:1px solid var(--cn-border)}
@@ -82739,7 +82742,7 @@ function ShopSettingsPage() {
   const missingPickup = !v.pk_name.trim() || !v.pk_address.trim();
   return (
     <ShopGate perm="shop.view" title="Shop settings">
-      <div className="mx-auto max-w-3xl">
+      <div className="w-full min-w-0">
         <h1 className="cb-page-title mb-5 text-2xl font-extrabold text-slate-900">
           Shop Settings
         </h1>
@@ -84790,7 +84793,7 @@ function ShopReportsPage() {
   }
   return (
     <ShopGate perm="shop.report" title="Shop reports">
-      <div className="mx-auto max-w-7xl">
+      <div className="w-full min-w-0">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h1 className="cb-page-title text-2xl font-extrabold text-slate-900">
             Shop Sales Reports
@@ -85169,6 +85172,8 @@ const CB_DESIGN_CSS = `
 [class~="text-mist-100/80"]{color:rgba(241,245,249,.80)!important}
 [class~="text-mist-100/90"]{color:rgba(241,245,249,.90)!important}
 
+.cbx-listtab{border-bottom-style:solid;border-bottom-color:transparent}
+.cbx-listtab:hover,.cbx-listtab[aria-selected="true"]{border-bottom-color:#2563eb!important}
 [class~="border-mist-100"]{border-color:#f1f5f9!important}
 [class~="border-mist-200"]{border-color:#e2e8f0!important}
 [class~="border-mist-300"]{border-color:#cbd5e1!important}
