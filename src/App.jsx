@@ -34505,6 +34505,13 @@ const CUSTOMER_FEATURES = [
   },
   {
     group: "Wallet & Payment",
+    key: "wallet_tx_detail",
+    label: "Wallet transaction detail",
+    kh: "ព័ត៌មានលម្អិតប្រតិបត្តិការកាបូប",
+    desc: "Tap a Top up in My Wallet to open Transaction Details (TXID, status, payment proof images).",
+  },
+  {
+    group: "Wallet & Payment",
     key: "pay_shipping",
     label: "Pay shipping from wallet",
     kh: "បង់ថ្លៃដឹកពីកាបូប",
@@ -39588,6 +39595,8 @@ const CustomerApp = (() => {
   // ---------- Wallet ----------
   function WalletPage() {
     const { wallet, walletReady, refreshMoney, tr } = useApp();
+    const feat = useCustomerFeatures();
+    const canOpenTx = feat("wallet_tx_detail");
     useEffect(() => {
       refreshMoney();
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -39662,10 +39671,15 @@ const CustomerApp = (() => {
             {walletReady &&
               rows.map((t) => {
                 const n = Number(t.amount) || 0;
+                const open = canOpenTx && t.type === "top_up" && t.id != null;
+                const Row = open ? Link : "div";
                 return (
-                  <div
+                  <Row
                     key={t.id}
-                    className="flex items-center gap-3 px-4 py-3 cb-fade-in"
+                    {...(open
+                      ? { to: `/customer/wallet/${encodeURIComponent(t.id)}` }
+                      : {})}
+                    className={`flex items-center gap-3 px-4 py-3 cb-fade-in ${open ? "active:bg-slate-50" : ""}`}
                     style={{
                       animationDelay: `${Math.min(rows.indexOf(t), 8) * 30}ms`,
                     }}
@@ -39690,7 +39704,16 @@ const CustomerApp = (() => {
                         {tr("Bal", "សមតុល្យ")} {moneyS(t._after)}
                       </p>
                     </div>
-                  </div>
+                    {/* same width on every row so the amounts line up */}
+                    {open ? (
+                      <ChevronRight
+                        size={16}
+                        className="shrink-0 text-slate-300"
+                      />
+                    ) : (
+                      <span className="w-4 shrink-0" aria-hidden="true" />
+                    )}
+                  </Row>
                 );
               })}
             {walletReady && !wallet.tx.length && (
@@ -39700,6 +39723,167 @@ const CustomerApp = (() => {
             )}
           </Card>
         </div>
+      </>
+    );
+  }
+
+  // ---------- Wallet · Transaction Details (customer, DRSB look) ----------
+  // Needs supabase_customer_wallet_tx_detail.sql (RPC + storage policy).
+  function WalletTxDetailPage() {
+    const { id } = useParams();
+    const nav = useNavigate();
+    const { tr } = useApp();
+    const [d, setD] = useState(null);
+    const [images, setImages] = useState([]);
+    const [viewer, setViewer] = useState(null);
+    const [state, setState] = useState("loading"); // loading | ready | missing
+    useEffect(() => {
+      let alive = true;
+      (async () => {
+        if (!supabase) return alive && setState("missing");
+        const { data, error } = await supabase.rpc(
+          "customer_wallet_tx_detail",
+          { p_tx_id: String(id) },
+        );
+        if (!alive) return;
+        if (error || !data) return setState("missing");
+        setD(data);
+        setState("ready");
+        const paths = Array.isArray(data.images) ? data.images : [];
+        if (paths.length) {
+          const { data: signed } = await supabase.storage
+            .from(WALLET_PROOF_BUCKET)
+            .createSignedUrls(paths, 3600);
+          if (!alive) return;
+          setImages(
+            (signed || [])
+              .filter((x) => x?.signedUrl)
+              .map((x, i) => ({
+                url: x.signedUrl,
+                name: `${tr("Payment proof", "ភស្តុតាងបង់ប្រាក់")} ${i + 1} / ${paths.length}`,
+              })),
+          );
+        }
+      })();
+      return () => {
+        alive = false;
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [id]);
+    const when = (v) => {
+      if (!v) return "—";
+      const p = Object.fromEntries(
+        new Intl.DateTimeFormat("en-GB", {
+          timeZone: "Asia/Phnom_Penh",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+          hour: "2-digit",
+          minute: "2-digit",
+          hourCycle: "h12",
+        })
+          .formatToParts(new Date(v))
+          .map((x) => [x.type, x.value]),
+      );
+      return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute} ${String(p.dayPeriod || "").toUpperCase()}`;
+    };
+    const row = (k, v, cls = "text-slate-900") => (
+      <div className="flex items-start justify-between gap-4 py-2.5 text-[15px]">
+        <span className="text-slate-500">{k}</span>
+        <span className={`text-right font-semibold break-words ${cls}`}>
+          {v}
+        </span>
+      </div>
+    );
+    const { method, note } = wtdSplitNote(d?.note);
+    const amount = Math.abs(Number(d?.amount) || 0);
+    return (
+      <>
+        <Top
+          title={tr("Transaction Details", "ព័ត៌មានលម្អិតប្រតិបត្តិការ")}
+          back
+        />
+        <div className="px-4 pt-5 space-y-4 pb-8">
+          {state === "loading" && (
+            <Card className="p-5">
+              <TxRowsSkeleton rows={4} />
+            </Card>
+          )}
+          {state === "missing" && (
+            <Card className="p-8 text-center text-sm text-slate-500">
+              {tr(
+                "This transaction could not be found.",
+                "រកមិនឃើញប្រតិបត្តិការនេះទេ។",
+              )}
+            </Card>
+          )}
+          {state === "ready" && d && (
+            <>
+              <Card className="px-5 py-2 divide-y divide-slate-100">
+                {row(
+                  tr("TXID", "លេខប្រតិបត្តិការ"),
+                  `#${d.ref_no || String(d.id).replace(/-/g, "").slice(0, 8).toUpperCase()}`,
+                )}
+                {method &&
+                  row(tr("Payment Method", "វិធីសាស្ត្របង់ប្រាក់"), method)}
+              </Card>
+              <Card className="px-5 py-3">
+                {row(tr("Date", "កាលបរិច្ឆេទ"), when(d.created_at))}
+                {row(
+                  tr("Operation Type", "ប្រភេទប្រតិបត្តិការ"),
+                  tr("Deposit", "បញ្ចូលទឹកប្រាក់"),
+                )}
+                <div className="my-1 border-t border-dashed border-slate-300" />
+                {row(tr("Request Amount", "ចំនួនទឹកប្រាក់"), money(amount))}
+                {row(
+                  tr("Payment Status", "ស្ថានភាព"),
+                  tr("Approved", "បានអនុម័ត"),
+                  "text-emerald-600",
+                )}
+                {row(tr("Note", "កំណត់ចំណាំ"), note || "NA")}
+                {row(tr("Reason", "មូលហេតុ"), "NA")}
+              </Card>
+              {images.length > 0 && (
+                <Card className="p-4">
+                  <div className="flex flex-wrap gap-3">
+                    {images.map((im, k) => (
+                      <button
+                        key={im.url}
+                        type="button"
+                        onClick={() => setViewer(k)}
+                        aria-label={tr("View", "មើល")}
+                        className="relative h-28 w-28 overflow-hidden rounded-2xl bg-slate-100 active:opacity-80"
+                      >
+                        <img
+                          src={im.url}
+                          alt={im.name}
+                          className="h-full w-full object-cover"
+                        />
+                        <span className="absolute inset-x-0 bottom-0 bg-black/45 py-1 text-center text-[11px] font-bold text-white">
+                          {tr("View", "មើល")}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </Card>
+              )}
+            </>
+          )}
+          <button
+            type="button"
+            onClick={() => nav("/customer/wallet", { replace: true })}
+            className="h-12 w-full rounded-2xl bg-blue-600 text-[15px] font-bold text-white active:bg-blue-700"
+          >
+            {tr("Done", "រួចរាល់")}
+          </button>
+        </div>
+        {viewer != null && (
+          <AirImageViewer
+            images={images}
+            start={viewer}
+            onClose={() => setViewer(null)}
+          />
+        )}
       </>
     );
   }
@@ -45942,6 +46126,16 @@ const CustomerApp = (() => {
               element={
                 <Gate k="wallet">
                   <WalletPage />
+                </Gate>
+              }
+            />
+            <Route
+              path="wallet/:id"
+              element={
+                <Gate k="wallet">
+                  <Gate k="wallet_tx_detail">
+                    <WalletTxDetailPage />
+                  </Gate>
                 </Gate>
               }
             />
