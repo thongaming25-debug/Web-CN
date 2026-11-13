@@ -3107,6 +3107,7 @@ const NAV_SECTIONS = [
         icon: "ToggleRight",
         path: "/customer-features",
       },
+      { label: "Telegram Bots", icon: "Send", path: "/telegram-bots" },
       { label: "Banner", icon: "Images", path: "/banners" },
     ],
   },
@@ -3453,6 +3454,7 @@ const PATH_VIEW = {
   "/users": "user.view",
   "/roles": "role.view",
   "/customer-features": "role.view",
+  "/telegram-bots": "role.manage",
   "/banners": "banner.view",
   "/permissions": "role.view",
   "/status-master": "status_master.view",
@@ -46235,6 +46237,248 @@ create policy customer_roles_manage_current on public.customer_roles
   using (exists (select 1 from public.users u where u.auth_user_id = auth.uid() and (u.role = 'Super Admin' or public.has_permission('role.edit'))))
   with check (exists (select 1 from public.users u where u.auth_user_id = auth.uid() and (u.role = 'Super Admin' or public.has_permission('role.edit'))));`;
 
+// ============================================================
+// TELEGRAM BOTS — /telegram-bots  (Super Admin)
+// Settings for the "new customer registered" bot. Needs
+// supabase_telegram_register_bot.sql. The token is write-only: it is saved in
+// the database and never sent back to the browser.
+// ============================================================
+function TelegramBotsPage() {
+  const { user } = useAuth();
+  const canManage = hasPermission(user, "role.manage");
+  const NAME = "customer_register";
+  const [loading, setLoading] = useState(true);
+  const [exists, setExists] = useState(false);
+  const [enabled, setEnabled] = useState(true);
+  const [hint, setHint] = useState("");
+  const [token, setToken] = useState("");
+  const [chatId, setChatId] = useState("");
+  const [adminUrl, setAdminUrl] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [msg, setMsg] = useState(null); // { ok, text }
+
+  const load = async () => {
+    if (!supabase) {
+      setLoading(false);
+      setMsg({ ok: false, text: "Supabase is not configured." });
+      return;
+    }
+    const { data, error } = await supabase.rpc("telegram_bot_get", {
+      p_name: NAME,
+    });
+    if (error) {
+      setMsg({
+        ok: false,
+        text: /does not exist|schema cache/i.test(error.message)
+          ? "Run supabase_telegram_register_bot.sql in Supabase first."
+          : error.message,
+      });
+    } else if (data) {
+      setExists(!!data.exists);
+      setEnabled(data.exists ? !!data.enabled : true);
+      setChatId(data.chat_id || "");
+      setAdminUrl(data.admin_url || window.location.origin);
+      setHint(data.token_hint || "");
+    }
+    setLoading(false);
+  };
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const save = async (nextEnabled = enabled) => {
+    setSaving(true);
+    setMsg(null);
+    const { error } = await supabase.rpc("telegram_bot_save", {
+      p_name: NAME,
+      p_token: token,
+      p_chat_id: chatId,
+      p_admin_url: adminUrl,
+      p_enabled: nextEnabled,
+    });
+    setSaving(false);
+    if (error) {
+      setMsg({ ok: false, text: error.message });
+      return false;
+    }
+    setToken("");
+    setEnabled(nextEnabled);
+    setMsg({ ok: true, text: "Saved." });
+    load();
+    return true;
+  };
+
+  const sendTest = async () => {
+    setTesting(true);
+    setMsg(null);
+    const { data: rid, error } = await supabase.rpc("telegram_bot_test", {
+      p_name: NAME,
+    });
+    if (error) {
+      setTesting(false);
+      return setMsg({ ok: false, text: error.message });
+    }
+    // pg_net sends asynchronously — poll Telegram's answer for a few seconds.
+    for (let i = 0; i < 8; i += 1) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const { data: res } = await supabase.rpc("telegram_bot_test_result", {
+        p_id: rid,
+      });
+      if (res?.done) {
+        setTesting(false);
+        return setMsg(
+          res.status === 200
+            ? {
+                ok: true,
+                text: "Test message sent — check your Telegram group.",
+              }
+            : {
+                ok: false,
+                text: `Telegram says: ${res.description || res.error || `HTTP ${res.status}`}`,
+              },
+        );
+      }
+    }
+    setTesting(false);
+    setMsg({ ok: false, text: "No answer from Telegram yet. Try again." });
+  };
+
+  const input =
+    "h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm outline-none focus:border-blue-500 disabled:bg-slate-50";
+  const canSave = canManage && chatId.trim() && (exists || token.trim());
+
+  return (
+    <div className="w-full min-w-0">
+      <h1 className="cb-page-title mb-1 text-2xl font-extrabold text-slate-900">
+        Telegram Bots
+      </h1>
+      <p className="mb-5 text-sm text-slate-500">
+        Sends a message to your Telegram group when a customer registers an
+        account in the app.
+      </p>
+      {!canManage && (
+        <p className="mb-4 rounded-xl bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
+          Only Super Admin can change Telegram settings.
+        </p>
+      )}
+      <div className="max-w-2xl rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex items-center justify-between gap-4 border-b border-slate-100 pb-4">
+          <div>
+            <div className="font-extrabold text-slate-900">
+              New customer registered
+            </div>
+            <div className="text-xs text-slate-500">
+              {loading
+                ? "Loading…"
+                : !exists
+                  ? "Not set up yet"
+                  : enabled
+                    ? "Enabled — messages are being sent"
+                    : "Disabled — no messages are sent"}
+            </div>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={enabled}
+            disabled={!canManage || !exists || saving}
+            title={exists ? "Enable / disable" : "Save the bot settings first"}
+            onClick={() => save(!enabled)}
+            className={`relative h-7 w-12 shrink-0 rounded-full transition-colors disabled:opacity-40 ${enabled ? "bg-emerald-500" : "bg-slate-300"}`}
+          >
+            <span
+              className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-all ${enabled ? "left-[22px]" : "left-0.5"}`}
+            />
+          </button>
+        </div>
+
+        <div className="space-y-4 pt-4">
+          <label className="block">
+            <span className="mb-1 block text-sm font-bold text-slate-700">
+              Bot Token
+            </span>
+            <input
+              type="password"
+              autoComplete="off"
+              disabled={!canManage || loading}
+              value={token}
+              onChange={(e) => setToken(e.target.value)}
+              placeholder={
+                exists
+                  ? `Saved (ends with …${hint}) — leave blank to keep`
+                  : "123456789:ABC-DEF… (from @BotFather)"
+              }
+              className={`${input} font-mono`}
+            />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-sm font-bold text-slate-700">
+              Chat ID
+            </span>
+            <input
+              disabled={!canManage || loading}
+              value={chatId}
+              onChange={(e) => setChatId(e.target.value)}
+              placeholder="-1001234567890"
+              className={`${input} font-mono`}
+            />
+            <span className="mt-1 block text-xs text-slate-400">
+              Group id — open
+              https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates after sending
+              a message in the group.
+            </span>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-sm font-bold text-slate-700">
+              Admin site URL
+            </span>
+            <input
+              disabled={!canManage || loading}
+              value={adminUrl}
+              onChange={(e) => setAdminUrl(e.target.value)}
+              placeholder="https://admin.yourdomain.com"
+              className={input}
+            />
+            <span className="mt-1 block text-xs text-slate-400">
+              Used by the “Review Customer Information.” button. Must be a
+              public https address (Telegram rejects localhost).
+            </span>
+          </label>
+        </div>
+
+        {msg && (
+          <p
+            className={`mt-4 rounded-xl px-3 py-2.5 text-sm font-semibold ${msg.ok ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}
+          >
+            {msg.text}
+          </p>
+        )}
+
+        <div className="mt-5 flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={!canSave || saving}
+            onClick={() => save()}
+            className="h-11 rounded-xl bg-blue-600 px-5 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-40"
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+          <button
+            type="button"
+            disabled={!canManage || !exists || testing || saving}
+            onClick={sendTest}
+            className="h-11 rounded-xl border border-slate-200 bg-white px-5 text-sm font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+          >
+            {testing ? "Sending…" : "Send test message"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CustomerFeaturesPage() {
   const { user } = useAuth();
   const canManage = hasPermission(user, "role.manage");
@@ -84682,6 +84926,7 @@ function AdminApp() {
                 path="/customer-features"
                 element={<CustomerFeaturesPage />}
               />
+              <Route path="/telegram-bots" element={<TelegramBotsPage />} />
               <Route path="/banners" element={<BannerManagementPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/reports" element={<ReportsHubPage />} />
@@ -84742,6 +84987,7 @@ function AdminApp() {
                     "/kh-warehouse",
                     "/roles",
                     "/customer-features",
+                    "/telegram-bots",
                     "/banners",
                     "/deleted-accounts", // custom page above
                     "/customer-recovery", // custom page above
