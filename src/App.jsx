@@ -67451,7 +67451,7 @@ function TopUpModal({ customer, onClose, onDone }) {
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[3px]"
+      className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[3px]"
       role="dialog"
       aria-modal="true"
       aria-label="Top Up Wallet"
