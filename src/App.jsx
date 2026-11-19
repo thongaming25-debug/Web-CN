@@ -11557,20 +11557,20 @@ const SCAN_CSS = `
   padding: 0 !important;
   line-height: 1.2;
 }
-/* Dotted red ring spinner (bigger + bolder), shown while a scan is being checked */
+/* Dotted crimson ring spinner (8 equal dots, no fading tail), shown while a scan is being checked */
 .cb-scan .cb-ico-spin {
-  color: #e11d48;
+  color: #c30142;
   inset: auto;
-  left: -3px;
-  top: -3px;
-  width: 24px;
-  height: 24px;
+  left: -2px;
+  top: -2px;
+  width: 22px;
+  height: 22px;
 }
 .cb-scan--idle .cb-ico-scan { opacity: .55; }
 .cb-scan--scanning .cb-ico-scan { opacity: 0; transform: scale(.6); animation: none; }
 .cb-scan--scanning .cb-ico-spin {
   opacity: 1; transform: none;
-  animation: cb-scan-spin .55s linear infinite;
+  animation: cb-scan-spin 1.5s linear infinite;
 }
 @keyframes cb-scan-spin { to { transform: rotate(360deg); } }
 
@@ -11597,7 +11597,7 @@ const SCAN_CSS = `
 @media (prefers-reduced-motion: reduce) {
   .cb-scan, .cb-scan *, .cb-scan-msg, .cb-scan-row-in { animation: none !important; transition: none !important; }
   /* keep the loading ring turning even with reduced motion (it is the only feedback) */
-  .cb-scan--scanning .cb-ico-spin { animation: cb-scan-spin .55s linear infinite !important; }
+  .cb-scan--scanning .cb-ico-spin { animation: cb-scan-spin 1.5s linear infinite !important; }
 }
 `;
 
@@ -11615,16 +11615,15 @@ function ScanIconStack() {
         height="18"
         fill="currentColor"
       >
-        {/* 8 bold dots in a ring; size + opacity fade gives a clear direction of spin */}
+        {/* 8 equal dots evenly spaced on a ring (same size + opacity, like the reference) */}
         {Array.from({ length: 8 }).map((_, i) => {
           const a = (i / 8) * 2 * Math.PI;
           return (
             <circle
               key={i}
-              cx={12 + 8.6 * Math.sin(a)}
-              cy={12 - 8.6 * Math.cos(a)}
-              r={3.4 - i * 0.18}
-              opacity={1 - i * 0.07}
+              cx={12 + 9.6 * Math.sin(a)}
+              cy={12 - 9.6 * Math.cos(a)}
+              r={2.3}
             />
           );
         })}
@@ -17792,7 +17791,7 @@ function Sidebar({ open, onClose, collapsed = false, onToggleCollapse }) {
           )}
         </div>
 
-        <nav className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 space-y-4">
+        <nav className="cb-nav-noscrollbar flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 space-y-4">
           {NAV_SECTIONS.map((section, i) => {
             const items = section.items.filter(
               (item) =>
@@ -86793,8 +86792,8 @@ html.cb-admin-dark{
 }
 @media(hover:hover) and (pointer:fine){
  .cb-app .cbx-sidebar .cbx-nav-link:hover{
-  transform:translateX(3px);border-color:#dbe8ff;
-  box-shadow:0 4px 12px -7px rgba(37,99,235,.25);
+  transform:translateX(3px);border-color:transparent;
+  box-shadow:none;
  }
  .cb-app .cbx-sidebar .cbx-nav-link:hover svg{transform:scale(1.08);}
  .cb-app .cbx-sidebar.is-collapsed .cbx-nav-link:hover{transform:none;}
@@ -86897,6 +86896,9 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .jz-customer .jz-nav-pill{position:absolute;top:6px;bottom:6px;left:0;border-radius:16px;pointer-events:none;z-index:0;background:linear-gradient(180deg,rgba(59,130,246,.2),rgba(59,130,246,.1));box-shadow:inset 0 0 0 1px rgba(59,130,246,.22),0 6px 14px -8px rgba(59,130,246,.65);will-change:transform,width;}
 .jz-customer .jz-nav-pill.is-anim{transition:transform .5s cubic-bezier(.22,1.15,.36,1),width .5s cubic-bezier(.22,1.15,.36,1),opacity .2s ease;}
 @media (prefers-reduced-motion:reduce){.jz-customer .jz-nav-pill.is-anim,.jz-customer .jz-bottom-nav a svg{transition-duration:.01ms;}}
+/* Sidebar menu: scrolls normally but hides the scrollbar track/thumb. */
+.cb-nav-noscrollbar{scrollbar-width:none;-ms-overflow-style:none;-webkit-overflow-scrolling:touch;}
+.cb-nav-noscrollbar::-webkit-scrollbar{display:none;width:0;height:0;}
 /* Status chip rows (CN Orders / Shipments / AIR): same look, no visible scrollbar. */
 .jz-customer .jz-chip-row{scrollbar-width:none;-ms-overflow-style:none;-webkit-overflow-scrolling:touch;}
 .jz-customer .jz-chip-row::-webkit-scrollbar{display:none;width:0;height:0;}
@@ -86998,6 +87000,21 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .cb-app .cbx-side-group{font-size:13px;font-weight:600;letter-spacing:.015em;}
 .cb-app .cbx-side-title{font-size:17px;font-weight:700;}
 .cb-app .cbx-side-sub{font-size:12.5px;}
+/* Sidebar items: compact, standard look (flat gray hover, no border/shadow/movement). */
+html:not(.cb-admin-dark) .cb-app .cbx-sidebar{--cbx-side-hover-bg:#f1f3f6;--cbx-side-hover-text:#17263e;}
+.cb-app .cbx-sidebar .cbx-nav-link{font-size:14.5px;font-weight:500;line-height:1.4;min-height:38px;padding:8px 12px;gap:12px;border:0;border-radius:10px;}
+.cb-app .cbx-sidebar .cbx-nav-link svg{width:20px;height:20px;stroke-width:1.8;}
+.cb-app .cbx-sidebar .cbx-nav-link.is-active{border:0;font-weight:600;background:#f7f8fb;color:#2563eb;}
+@media(hover:hover) and (pointer:fine){
+ .cb-app .cbx-sidebar .cbx-nav-link:hover{transform:none;border:0;box-shadow:none;background:#f7f8fb;color:#2563eb;font-weight:600;}
+ .cb-app .cbx-sidebar .cbx-nav-link:hover svg{transform:none;}
+ .cb-app .cbx-sidebar .cbx-nav-link.is-active:hover{background:#f7f8fb;color:#2563eb;}
+}
+.cb-app .cbx-sidebar .cbx-nav-link:focus-visible{border:0;outline:2px solid #93b8f5;outline-offset:-2px;}
+html.cb-admin-dark .cb-app .cbx-sidebar .cbx-nav-link.is-active,html.cb-admin-dark .cb-app .cbx-sidebar .cbx-nav-link:hover{background:var(--cbx-side-hover-bg);color:#93c5fd;}
+.cb-app .cbx-sidebar .cbx-side-group{font-size:12px;font-weight:500;}
+/* Order/table lists: one flat neutral row hover (matches DRSB), no blue tint. */
+html:not(.cb-admin-dark) .cb-app main :is(table tbody tr,.cbx-row,.cb-table-row):hover,html:not(.cb-admin-dark) .cb-app main table tbody tr:hover>td{background:#eef0f3!important;box-shadow:none!important;}
 .cb-app .cbx-topbar .cbx-page-title{font-size:28px;font-weight:700;}
 .cb-app main :is(h1,.cbx-h1,.cb-page-title){font-size:30px;font-weight:700;}
 .cb-app main :is(h2,.cb-section-title){font-size:20px;font-weight:650;}
