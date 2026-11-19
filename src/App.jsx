@@ -15796,46 +15796,37 @@ function Timeline({ steps }) {
         const done = step.state === "done";
         const active = step.state === "active";
         const isLast = i === steps.length - 1;
+        const meta = [step.time, step.proceedBy && `${step.proceedBy}`]
+          .filter(Boolean)
+          .join(" · ");
         return (
-          <div key={step.label} className="flex gap-3">
+          <div key={step.label} className="flex gap-4">
             <div className="flex flex-col items-center">
               <span
-                className={`w-6 h-6 rounded-full grid place-items-center shrink-0 ${
+                className={`grid h-6 w-6 shrink-0 place-items-center rounded-full ${
                   done
                     ? "bg-emerald-500 text-white"
                     : active
-                      ? "bg-blue-600 text-white animate-pulse"
-                      : "bg-white border-2 border-slate-200 text-transparent"
+                      ? "bg-blue-600 text-white ring-4 ring-blue-100"
+                      : "border-2 border-slate-200 bg-white text-transparent"
                 }`}
               >
-                {done ? (
-                  <Check size={13} />
-                ) : active ? (
-                  <span className="w-1.5 h-1.5 rounded-full bg-white" />
-                ) : null}
+                {(done || active) && <Check size={13} strokeWidth={3} />}
               </span>
               {!isLast && (
                 <span
-                  className={`w-0.5 flex-1 min-h-6 ${done ? "bg-emerald-300" : "bg-slate-200"}`}
+                  className={`min-h-6 w-0.5 flex-1 ${done ? "bg-emerald-400" : "bg-slate-200"}`}
                 />
               )}
             </div>
             <div className="pb-5">
               <p
-                className={`text-sm font-semibold ${done || active ? "text-slate-900" : "text-slate-400"}`}
+                className={`text-[15px] font-medium leading-6 ${active ? "text-blue-700" : done ? "text-slate-900" : "text-slate-400"}`}
               >
                 {step.label}
               </p>
-              {step.time && (
-                <p className="text-xs text-slate-500 mt-0.5">{step.time}</p>
-              )}
-              {(done || active) && (
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Proceed By: {step.proceedBy || "NA"}
-                </p>
-              )}
-              {active && (
-                <p className="text-xs text-blue-600 mt-0.5">In progress</p>
+              {(done || active) && (meta || active) && (
+                <p className="mt-0.5 text-sm text-slate-600">{meta || "—"}</p>
               )}
             </div>
           </div>
@@ -26625,15 +26616,19 @@ function UpdatePackageDrawer({
     }
   }
 
+  const DLABEL = "mb-1.5 block text-sm font-semibold text-slate-800";
+  const DINPUT =
+    "h-11 w-full rounded-xl border border-slate-200 bg-white px-3.5 text-[15px] font-medium text-slate-900 outline-none placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-50 disabled:text-slate-700";
+  const Req = () => <span className="text-red-500"> *</span>;
   const tabCls = (on) =>
-    `rounded-lg px-4 py-2 text-sm font-bold transition ${on ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-800"}`;
+    `rounded-lg px-4 py-2 text-[15px] font-bold transition ${on ? "bg-white text-blue-700 shadow-sm" : "text-slate-500 hover:text-slate-800"}`;
   const sizeCls = (on) =>
-    `rounded-xl border px-3 py-2.5 text-sm font-bold transition ${on ? "border-blue-600 bg-blue-600 text-white shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-blue-300"}`;
+    `rounded-xl border px-3 py-3 text-[15px] font-bold transition ${on ? "border-blue-600 bg-blue-600 text-white shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-blue-300"}`;
   const rateLabel = isCbm ? "Rate Per CBM" : "Rate";
 
   return createPortal(
     <div className="fixed inset-0 z-[100]" role="presentation">
-      <style>{`@media (prefers-reduced-motion:no-preference){.cb-drawer-panel{animation:cb-drawer-in .22s ease-out}}@keyframes cb-drawer-in{from{transform:translateX(28px);opacity:0}to{transform:none;opacity:1}}`}</style>
+      <style>{`.cb-drawer-panel{font-family:Inter,"Noto Sans Khmer","Kantumruy Pro",system-ui,sans-serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}.cb-drawer-panel :is(input,button){font-family:inherit}@media (prefers-reduced-motion:no-preference){.cb-drawer-panel{animation:cb-drawer-in .22s ease-out}}@keyframes cb-drawer-in{from{transform:translateX(28px);opacity:0}to{transform:none;opacity:1}}`}</style>
       <div
         className="absolute inset-0 bg-slate-900/40"
         onClick={() => !saving && onClose()}
@@ -26643,9 +26638,9 @@ function UpdatePackageDrawer({
         role="dialog"
         aria-modal="true"
         aria-labelledby="update-pkg-title"
-        className="cb-drawer-panel absolute right-0 top-0 flex h-full w-full max-w-[480px] flex-col bg-white shadow-2xl"
+        className="cb-drawer-panel absolute right-0 top-0 flex h-full w-full max-w-[560px] flex-col bg-white shadow-2xl"
       >
-        <header className="flex items-start gap-3 border-b border-slate-100 bg-slate-50/60 px-5 py-4">
+        <header className="flex items-start gap-3 border-b border-slate-100 bg-slate-50/60 px-6 py-4">
           <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-blue-100 text-blue-600">
             <Icons.Package size={20} />
           </span>
@@ -26656,7 +26651,7 @@ function UpdatePackageDrawer({
             >
               Update Package {index}
             </h2>
-            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] font-semibold">
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
               <span className="rounded-md border border-slate-200 bg-white px-2 py-0.5 text-slate-700">
                 Parcel Number {index}
               </span>
@@ -26687,7 +26682,7 @@ function UpdatePackageDrawer({
           </button>
         </header>
 
-        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        <div className="flex-1 space-y-4 overflow-y-auto px-6 py-5">
           {fee.state !== "none" && fee.total > 0 && (
             <section className="overflow-hidden rounded-xl border border-slate-200">
               <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50/70 px-4 py-3">
@@ -26696,7 +26691,7 @@ function UpdatePackageDrawer({
                     <Icons.CreditCard size={16} />
                   </span>
                   <div>
-                    <div className="text-sm font-bold text-slate-900">
+                    <div className="text-base font-bold text-slate-900">
                       Payments
                     </div>
                     <div className="text-xs text-slate-500">
@@ -26774,9 +26769,12 @@ function UpdatePackageDrawer({
                   ["height", "Height"],
                 ].map(([k, label]) => (
                   <div key={k}>
-                    <label className={LABEL_CLS}>{label} *</label>
+                    <label className={DLABEL}>
+                      {label}
+                      <Req />
+                    </label>
                     <input
-                      className={INPUT_CLS}
+                      className={DINPUT}
                       type="number"
                       min="0"
                       step="any"
@@ -26828,13 +26826,19 @@ function UpdatePackageDrawer({
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={LABEL_CLS}>Parcel Number *</label>
-              <input className={INPUT_CLS} value={index} disabled readOnly />
+              <label className={DLABEL}>
+                Parcel Number
+                <Req />
+              </label>
+              <input className={DINPUT} value={index} disabled readOnly />
             </div>
             <div>
-              <label className={LABEL_CLS}>Quantity *</label>
+              <label className={DLABEL}>
+                Quantity
+                <Req />
+              </label>
               <input
-                className={INPUT_CLS}
+                className={DINPUT}
                 type="number"
                 min="1"
                 step="1"
@@ -26843,7 +26847,7 @@ function UpdatePackageDrawer({
               />
             </div>
             <div>
-              <label className={LABEL_CLS}>Sensitive Package</label>
+              <label className={DLABEL}>Sensitive Package</label>
               <button
                 type="button"
                 role="switch"
@@ -26855,7 +26859,7 @@ function UpdatePackageDrawer({
                       x.cargo_type === "Sensitive" ? "Normal" : "Sensitive",
                   }))
                 }
-                className="flex h-[42px] w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-600"
+                className="flex h-11 w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3.5 text-sm font-semibold text-slate-700"
               >
                 {f.cargo_type === "Sensitive" ? "Active" : "Inactive"}
                 <span
@@ -26868,12 +26872,22 @@ function UpdatePackageDrawer({
               </button>
             </div>
             <div>
-              <label className={LABEL_CLS}>
-                {isAir ? "Weight (KG) *" : rateLabel}
+              <label className={DLABEL}>
+                {isAir ? (
+                  <>
+                    Weight (KG)
+                    <Req />
+                  </>
+                ) : (
+                  <>
+                    {rateLabel}
+                    {isCbm && <Req />}
+                  </>
+                )}
               </label>
               {isAir ? (
                 <input
-                  className={INPUT_CLS}
+                  className={DINPUT}
                   type="number"
                   step="any"
                   min="0"
@@ -26882,7 +26896,7 @@ function UpdatePackageDrawer({
                 />
               ) : (
                 <input
-                  className={INPUT_CLS}
+                  className={DINPUT}
                   value={calc.ok ? calc.rate : ""}
                   placeholder="—"
                   disabled
@@ -26892,9 +26906,9 @@ function UpdatePackageDrawer({
             </div>
             {!isAir && (
               <div className="col-span-2">
-                <label className={LABEL_CLS}>Weight (KG)</label>
+                <label className={DLABEL}>Weight (KG)</label>
                 <input
-                  className={INPUT_CLS}
+                  className={DINPUT}
                   type="number"
                   step="any"
                   min="0"
@@ -26912,7 +26926,7 @@ function UpdatePackageDrawer({
             </div>
             {calc.ok ? (
               <div className="mt-0.5 flex items-center justify-between">
-                <span className="text-xs text-slate-500">
+                <span className="text-sm text-slate-600">
                   {pkg.freight_overridden
                     ? `Custom rate — kept at ${money(pkg.freight_fee)} on save`
                     : "Recalculated automatically on save"}
@@ -26929,14 +26943,17 @@ function UpdatePackageDrawer({
           </div>
 
           <div>
-            <label className={LABEL_CLS}>Reason *</label>
+            <label className={DLABEL}>
+              Reason
+              <Req />
+            </label>
             <input
-              className={INPUT_CLS}
+              className={DINPUT}
               value={f.reason ?? ""}
               onChange={set("reason")}
               placeholder="Why is this package being updated?"
             />
-            <p className="mt-1 text-[11px] text-slate-400">
+            <p className="mt-1 text-xs text-slate-500">
               Saved to the TK history.
             </p>
           </div>
@@ -26950,19 +26967,19 @@ function UpdatePackageDrawer({
           )}
         </div>
 
-        <footer className="flex items-center justify-end gap-3 border-t border-slate-100 bg-white px-5 py-3">
+        <footer className="flex items-center justify-end gap-3 border-t border-slate-100 bg-white px-6 py-3">
           <button
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="h-10 rounded-xl border border-slate-200 bg-white px-5 text-sm font-bold text-slate-700 hover:bg-slate-50"
+            className="h-11 rounded-xl border border-slate-200 bg-white px-5 text-[15px] font-bold text-slate-700 hover:bg-slate-50"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={saving}
-            className="h-10 rounded-xl bg-blue-600 px-6 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-60"
+            className="h-11 rounded-xl bg-blue-600 px-6 text-[15px] font-bold text-white hover:bg-blue-700 disabled:opacity-60"
           >
             {saving ? "កំពុងSave..." : "Save"}
           </button>
@@ -27452,6 +27469,69 @@ function DeletePackageModal({ open, tk, onClose, onDeleted }) {
   );
 }
 
+// Right-side "Tracking History" drawer shell (Shipment + Parse Link).
+function TrackingDrawerShell({
+  title = "Tracking History",
+  status,
+  onClose,
+  tabs,
+  children,
+}) {
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose?.();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return createPortal(
+    <div className="fixed inset-0 z-[120]" role="presentation">
+      <style>{`.cb-th-panel{font-family:Inter,"Noto Sans Khmer","Kantumruy Pro",system-ui,sans-serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}@media (prefers-reduced-motion:no-preference){.cb-th-panel{animation:cb-th-in .22s ease-out}}@keyframes cb-th-in{from{transform:translateX(28px);opacity:0}to{transform:none;opacity:1}}`}</style>
+      <div
+        className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]"
+        onClick={onClose}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="cb-th-panel absolute right-0 top-0 flex h-full w-full max-w-[560px] flex-col bg-white shadow-2xl sm:rounded-l-2xl"
+      >
+        <header className="flex items-start justify-between gap-3 border-b border-slate-200 px-6 py-5">
+          <div className="min-w-0">
+            <h3 className="text-xl font-bold text-slate-900">{title}</h3>
+            {status && (
+              <span className="mt-1.5 inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-1 text-sm font-medium text-blue-700">
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-600" />
+                {status}
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-500 hover:bg-slate-100"
+          >
+            <Icons.X size={20} />
+          </button>
+        </header>
+        {tabs}
+        <div className="flex-1 overflow-y-auto px-6 py-5">{children}</div>
+        <footer className="flex justify-end border-t border-slate-200 px-6 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-11 rounded-xl bg-blue-600 px-6 text-[15px] font-bold text-white hover:bg-blue-700"
+          >
+            Close
+          </button>
+        </footer>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 // ------------------------------------------------------------
 // components/TrackingHistoryModal.jsx
 // ------------------------------------------------------------
@@ -27459,42 +27539,14 @@ function DeletePackageModal({ open, tk, onClose, onDeleted }) {
 // (opened from the "Tracking History" button) instead of always being
 // shown inline on the page — same Timeline component/data, just a
 // cleaner default view of the page with the full history one click away.
-function TrackingHistoryModal({ open, onClose, steps }) {
-  // Esc to close (AppModal used to provide this)
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e) => {
-      if (e.key === "Escape") onClose?.();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+function TrackingHistoryModal({ open, onClose, steps, status }) {
   if (!open) return null;
-  // Same shell as CnHistoryModal (Order History): full-screen blur backdrop via
-  // portal, rounded-2xl card, header + X, scrollable body, no OK footer.
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[120] min-h-[100dvh] bg-slate-950/40 backdrop-blur-md flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg rounded-2xl bg-white shadow-2xl overflow-hidden"
-      >
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-          <h3 className="font-bold text-lg">Tracking History</h3>
-          <button type="button" onClick={onClose} aria-label="Close">
-            <Icons.X size={18} />
-          </button>
-        </div>
-        <div className="p-5 max-h-[70vh] overflow-y-auto">
-          <Timeline steps={steps} />
-        </div>
-      </div>
-    </div>,
-    document.body,
+  const current =
+    status || steps?.find((x) => x.state === "active")?.label || null;
+  return (
+    <TrackingDrawerShell status={current} onClose={onClose}>
+      <Timeline steps={steps || []} />
+    </TrackingDrawerShell>
   );
 }
 
@@ -30763,6 +30815,7 @@ function PackageDetail() {
         open={showTrackingHistory}
         onClose={() => setShowTrackingHistory(false)}
         steps={timeline}
+        status={data.status}
       />
       {showCompleteShipmentBtn && (
         <ConfirmModal
@@ -57817,75 +57870,57 @@ function CnRefundModal({ open, row, onClose, onSaved }) {
 // ------------------------------------------------------------
 // History
 // ------------------------------------------------------------
-function CnHistoryModal({ history, onClose, timeline = null }) {
+function CnHistoryModal({ history, onClose, timeline = null, status = null }) {
   const [tab, setTab] = useState(timeline ? "timeline" : "history");
-  // Portal to <body> so the backdrop covers the WHOLE screen (not clipped by a
-  // transformed/filtered parent) and sits above the topbar (z-20) / sidebar.
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[120] min-h-[100dvh] bg-slate-950/40 backdrop-blur-md flex items-center justify-center p-4"
-      onClick={onClose}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg rounded-2xl bg-white shadow-2xl overflow-hidden"
-      >
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-          <h3 className="font-bold text-lg">Order History</h3>
-          <button type="button" onClick={onClose}>
-            <Icons.X size={18} />
-          </button>
-        </div>
-        {timeline && (
-          <div className="flex gap-6 border-b border-slate-200 px-5">
-            {[
-              ["timeline", "Timeline"],
-              ["history", "History"],
-            ].map(([k, label]) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setTab(k)}
-                className={`-mb-px border-b-2 py-2.5 text-sm font-semibold ${tab === k ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-800"}`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-        {timeline && tab === "timeline" && (
-          <div className="p-5 max-h-[70vh] overflow-y-auto">{timeline}</div>
-        )}
-        <div
-          className={`p-5 max-h-[70vh] overflow-y-auto divide-y divide-slate-100 ${timeline && tab !== "history" ? "hidden" : ""}`}
+  const tabs = timeline ? (
+    <div className="flex gap-6 border-b border-slate-200 px-6">
+      {[
+        ["timeline", "Timeline"],
+        ["history", "History"],
+      ].map(([k, label]) => (
+        <button
+          key={k}
+          type="button"
+          onClick={() => setTab(k)}
+          className={`-mb-px border-b-2 py-3 text-[15px] font-semibold ${tab === k ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-800"}`}
         >
+          {label}
+        </button>
+      ))}
+    </div>
+  ) : null;
+  return (
+    <TrackingDrawerShell status={status} onClose={onClose} tabs={tabs}>
+      {timeline && tab === "timeline" ? (
+        timeline
+      ) : (
+        <div className="divide-y divide-slate-100">
           {!history.length && (
-            <p className="text-sm text-slate-400 text-center py-6">
+            <p className="py-6 text-center text-sm text-slate-400">
               No history.
             </p>
           )}
           {[...history].reverse().map((h) => (
             <div key={h.id} className="py-3 text-sm">
               <div className="flex items-center justify-between gap-3">
-                <span className="font-bold text-slate-900">
+                <span className="text-[15px] font-semibold text-slate-900">
                   {h.event === "payment"
                     ? "Payment"
                     : h.event === "edit"
                       ? "Edited"
                       : h.status || "Note"}
                 </span>
-                <span className="text-xs text-slate-400">
+                <span className="text-xs text-slate-500">
                   {formatDbTimestamp(h.created_at)}
                 </span>
               </div>
-              {h.note && <p className="text-slate-600 mt-0.5">{h.note}</p>}
-              <p className="text-xs text-slate-400 mt-0.5">{h.created_by}</p>
+              {h.note && <p className="mt-0.5 text-slate-700">{h.note}</p>}
+              <p className="mt-0.5 text-xs text-slate-500">{h.created_by}</p>
             </div>
           ))}
         </div>
-      </div>
-    </div>,
-    document.body,
+      )}
+    </TrackingDrawerShell>
   );
 }
 
@@ -58073,7 +58108,7 @@ function CnStatusTimeline({
                         done
                           ? "bg-emerald-500 text-white"
                           : active
-                            ? "bg-blue-600 text-white animate-pulse"
+                            ? "bg-blue-600 text-white ring-4 ring-blue-100"
                             : "bg-white border-2 border-slate-200 text-transparent"
                       }`
                 }
@@ -58094,7 +58129,7 @@ function CnStatusTimeline({
                     <Icons.Check size={13} />
                   )
                 ) : active && !cv ? (
-                  <span className="w-1.5 h-1.5 rounded-full bg-white" />
+                  <Icons.Check size={13} strokeWidth={3} />
                 ) : null}
               </span>
               {(!isLastVisible || refunded) && (
@@ -58102,7 +58137,7 @@ function CnStatusTimeline({
                   className={
                     cv
                       ? `cb-anim w-0.5 flex-1 min-h-[28px] ${done ? "bg-green-400" : "bg-slate-200"}`
-                      : `w-0.5 flex-1 min-h-6 ${done ? "bg-emerald-300" : "bg-slate-200"}`
+                      : `w-0.5 flex-1 min-h-6 ${done ? "bg-emerald-400" : "bg-slate-200"}`
                   }
                   style={
                     cv
@@ -58120,12 +58155,19 @@ function CnStatusTimeline({
                 className={
                   cv
                     ? `font-semibold text-[15px] ${active ? "text-blue-700" : done ? "text-slate-900" : "text-slate-400"}`
-                    : `text-sm font-semibold ${done || active ? "text-slate-900" : "text-slate-400"}`
+                    : `text-[15px] font-medium leading-6 ${active ? "text-blue-700" : done ? "text-slate-900" : "text-slate-400"}`
                 }
               >
                 {cnStageLabel(s)}
               </p>
-              {t ? (
+              {t && !cv ? (
+                <p className="text-sm text-slate-600 mt-0.5">
+                  {formatDbTimestamp(t)}
+                  {(done || active) && processorOf(s)
+                    ? ` · ${processorOf(s)}`
+                    : ""}
+                </p>
+              ) : t ? (
                 <p className="text-xs text-slate-500 mt-0.5">
                   {cv && formatStamp ? formatStamp(t) : formatDbTimestamp(t)}
                 </p>
@@ -58136,13 +58178,13 @@ function CnStatusTimeline({
                   </p>
                 )
               )}
-              {!customerView && (done || active) && processorOf(s) && (
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Proceed By: {processorOf(s)}
+              {!customerView && !t && (done || active) && processorOf(s) && (
+                <p className="text-sm text-slate-600 mt-0.5">
+                  {processorOf(s)}
                 </p>
               )}
               {!customerView && active && CN_AUTO_STAGES.has(s) && (
-                <p className="text-xs text-blue-600 mt-0.5">
+                <p className="text-sm text-blue-600 mt-0.5">
                   Updated automatically from the TK.
                 </p>
               )}
@@ -62981,6 +63023,7 @@ function CnOrderDetailPage() {
       {historyOpen && (
         <CnHistoryModal
           history={history}
+          status={cnStageLabel(cnNormalizeStatus(row.status))}
           onClose={() => setHistoryOpen(false)}
           timeline={
             <CnStatusTimeline
