@@ -3137,6 +3137,7 @@ const NAV_SECTIONS = [
     label: "Finance",
     items: [
       { label: "Wallet Top Up", icon: "Wallet", path: "/wallet-top-up" },
+      { label: "Service Charge", icon: "Receipt", path: "/service-charge" },
       { label: "Loyalty Points", icon: "Gift", path: "/loyalty" },
     ],
   },
@@ -3402,6 +3403,18 @@ const PERMISSION_GROUPS = [
     ],
   },
   {
+    key: "service_charge",
+    label: "Service Charge (Finance)",
+    perms: [
+      ["service_charge.view", "View Service Charge (menu & list)"],
+      ["service_charge.request", "Create Service Charge Request"],
+      [
+        "service_charge.approve",
+        "Approve / Reject Service Charge (deducts from customer wallet)",
+      ],
+    ],
+  },
+  {
     key: "support",
     label: "Support Tools",
     perms: [
@@ -3463,6 +3476,7 @@ const PATH_VIEW = {
   "/warehouse-operations": "warehouse_ops.view",
   "/exceptions": "exception.view",
   "/wallet-top-up": "payment.manage",
+  "/service-charge": "service_charge.view",
   "/loyalty": "points.view",
   "/shop/dashboard": "shop.report",
   "/shop/reports": "shop.report",
@@ -40936,11 +40950,15 @@ const CustomerApp = (() => {
     // even when admin-only reversals are hidden.
     const rows = useMemo(() => {
       let run = wallet.balance;
-      return wallet.tx.map((t) => {
-        const after = Math.round(run * 100) / 100;
-        run -= Number(t.amount) || 0;
-        return { ...t, _after: after };
-      });
+      // Admin-only "service_charge" rows stay in the walk (so the balance still
+      // adds up) but are never shown to the customer.
+      return wallet.tx
+        .map((t) => {
+          const after = Math.round(run * 100) / 100;
+          run -= Number(t.amount) || 0;
+          return { ...t, _after: after };
+        })
+        .filter((t) => t.type !== "service_charge");
     }, [wallet]);
     const label = {
       top_up: tr("Top up", "បញ្ចូលទឹកប្រាក់"),
@@ -41046,7 +41064,7 @@ const CustomerApp = (() => {
                   </Row>
                 );
               })}
-            {walletReady && !wallet.tx.length && (
+            {walletReady && !rows.length && (
               <p className="text-center text-sm text-slate-400 py-8">
                 {tr("No transactions yet", "មិនទាន់មានប្រតិបត្តិការទេ")}
               </p>
@@ -72478,12 +72496,15 @@ function CustomerDetailPage() {
     },
   ];
   // Only top-ups / reversals have a detail page (/wallet-top-up/:id).
+  const canSc = hasPermission(user, "service_charge.view");
   const txDetailPath = (r) =>
-    canTopUp &&
-    r?.id != null &&
-    (r.type === "top_up" || r.type === "top_up_reversal")
-      ? `/wallet-top-up/${encodeURIComponent(r.id)}`
-      : null;
+    canSc && r?.id != null && r.type === "service_charge"
+      ? `/service-charge/tx/${encodeURIComponent(r.id)}`
+      : canTopUp &&
+          r?.id != null &&
+          (r.type === "top_up" || r.type === "top_up_reversal")
+        ? `/wallet-top-up/${encodeURIComponent(r.id)}`
+        : null;
   const txCols = [
     {
       key: "created_at",
@@ -72509,6 +72530,7 @@ function CustomerDetailPage() {
           {
             top_up: "Top up",
             top_up_reversal: "Top up reversed",
+            service_charge: "Service charge",
             shipping_payment: "Shipping payment",
             shipping_payment_cash: "Paid by admin",
             shipping_payment_wallet: "Shipping payment (wallet)",
@@ -75150,6 +75172,941 @@ function LoyaltyPage() {
   );
 }
 
+// ============================================================
+// SERVICE CHARGE (Finance) — /service-charge  (DRSB "Service Charge" look)
+// Staff files a Service Charge Request (customer + amount + service type);
+// an approver then Approves it and the amount is DEDUCTED from the customer's
+// wallet. The wallet row is type "service_charge": admin / staff see it, the
+// customer never does (hidden in the customer My Wallet history).
+// Needs supabase_service_charge.sql (table + RPCs).
+// Permissions (Role Management): service_charge.view / .request / .approve
+// ============================================================
+const SC_TYPES = [
+  "Repacking",
+  "Re-labeling",
+  "Inspection / Quality Check",
+  "Storage Fee",
+  "Special Handling",
+  "Other",
+];
+const SC_TABS = ["Pending", "Approved", "Rejected"];
+const SC_STATUS_TONE = {
+  Pending: "bg-amber-50 text-amber-700 border-amber-200",
+  Approved: "bg-emerald-50 text-emerald-700 border-emerald-200",
+  Rejected: "bg-red-50 text-red-600 border-red-200",
+};
+const scErr = (e) =>
+  /service_charges|service_charge_|function .* does not exist|schema cache/i.test(
+    e?.message || "",
+  )
+    ? `Run supabase_service_charge.sql in Supabase first (then run: notify pgrst, 'reload schema';). Details: ${e?.message || ""}`
+    : e?.message || "Request failed.";
+function ScStatusBadge({ status }) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-semibold ${SC_STATUS_TONE[status] || "border-slate-200 bg-slate-50 text-slate-600"}`}
+    >
+      {status || "—"}
+    </span>
+  );
+}
+// Attach the customer row (code / name / phone / balance) to each request.
+async function scAttachCustomers(list) {
+  const ids = [...new Set((list || []).map((r) => r.customer_id))].filter(
+    Boolean,
+  );
+  const byId = {};
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data } = await supabase
+      .from("customers")
+      .select("id, customer_code, name, phone, balance")
+      .in("id", ids.slice(i, i + 100));
+    (data || []).forEach((c) => (byId[String(c.id)] = c));
+  }
+  return (list || []).map((r) => ({ ...r, _c: byId[String(r.customer_id)] }));
+}
+
+function ServiceChargePage() {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const canRequest = hasPermission(user, "service_charge.request");
+  const canApprove = hasPermission(user, "service_charge.approve");
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [tab, setTab] = useState("Pending");
+  const [search, setSearch] = useState("");
+  const [range, setRange] = useState("all");
+  const [create, setCreate] = useState(false);
+  const [action, setAction] = useState(null); // { row, mode }
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    if (!supabase) {
+      setLoading(false);
+      setError("Supabase is not configured.");
+      return;
+    }
+    setLoading(true);
+    (async () => {
+      const { data, error: e1 } = await supabase
+        .from("service_charges")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(2000);
+      if (!alive) return;
+      if (e1) {
+        setError(scErr(e1));
+        setLoading(false);
+        return;
+      }
+      const withC = await scAttachCustomers(data);
+      if (!alive) return;
+      setRows(withC);
+      setError("");
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [reload]);
+
+  const counts = useMemo(() => {
+    const c = { Pending: 0, Approved: 0, Rejected: 0 };
+    rows.forEach((r) => {
+      if (c[r.status] != null) c[r.status] += 1;
+    });
+    return c;
+  }, [rows]);
+
+  const shown = useMemo(() => {
+    const from = wtuStart(range);
+    const s = search.trim().toLowerCase();
+    return rows.filter((r) => {
+      if (r.status !== tab) return false;
+      const when =
+        tab === "Pending" ? r.created_at : r.decided_at || r.created_at;
+      if (from && new Date(when).getTime() < from) return false;
+      if (!s) return true;
+      return [
+        r._c?.customer_code,
+        r._c?.name,
+        r._c?.phone,
+        r.tracking_number,
+        r.service_type,
+      ]
+        .filter(Boolean)
+        .some((v) => String(v).toLowerCase().includes(s));
+    });
+  }, [rows, tab, search, range]);
+
+  const total = shown.reduce((a, r) => a + (Number(r.amount) || 0), 0);
+  const hasFilter = search || range !== "all";
+  const dateLabel = tab === "Pending" ? "Requested At" : `${tab} At`;
+
+  const cols = [
+    {
+      key: "date",
+      label: dateLabel,
+      render: (r) => {
+        const when =
+          tab === "Pending" ? r.created_at : r.decided_at || r.created_at;
+        return (
+          <>
+            <div className="font-semibold text-slate-800">
+              {wtdStamp(when).slice(0, 16)}
+            </div>
+            <div className="text-[11px] text-slate-400">{wtdAgo(when)}</div>
+          </>
+        );
+      },
+    },
+    {
+      key: "customer_code",
+      label: "Customer ID",
+      render: (r) =>
+        r._c?.customer_code ? (
+          <Link
+            to={`/customers/${encodeURIComponent(r._c.customer_code)}`}
+            onClick={(e) => e.stopPropagation()}
+            className="font-semibold text-blue-700 hover:underline"
+          >
+            {r._c.customer_code}
+          </Link>
+        ) : (
+          "—"
+        ),
+    },
+    {
+      key: "customer_name",
+      label: "Customer Name",
+      render: (r) => (
+        <span className="text-slate-800">{r._c?.name || "—"}</span>
+      ),
+    },
+    {
+      key: "amount",
+      label: "Request Amount",
+      numeric: true,
+      render: (r) => (
+        <span className="font-bold text-slate-900">{money(r.amount)}</span>
+      ),
+    },
+    {
+      key: "service_type",
+      label: "Service Type",
+      render: (r) => (
+        <span className="text-slate-600">{r.service_type || "—"}</span>
+      ),
+    },
+    {
+      key: "status",
+      label: "Status",
+      render: (r) => <ScStatusBadge status={r.status} />,
+    },
+    {
+      key: "by",
+      label: tab === "Pending" ? "Requested By" : `${tab} By`,
+      render: (r) => (
+        <span className="text-slate-500">
+          {(tab === "Pending" ? r.requested_by : r.decided_by) || "—"}
+        </span>
+      ),
+    },
+  ];
+
+  const tabBtn = (t) => (
+    <button
+      key={t}
+      type="button"
+      onClick={() => setTab(t)}
+      className={`relative -mb-px flex items-center gap-2 border-b-2 px-1 pb-3 pt-1 text-sm font-semibold transition ${tab === t ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+    >
+      {t}
+      {counts[t] > 0 && (
+        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">
+          {counts[t]}
+        </span>
+      )}
+    </button>
+  );
+
+  return (
+    <div className="w-full min-w-0">
+      <h1 className="cb-page-title mb-4 text-2xl font-extrabold text-slate-900">
+        Service Charge
+      </h1>
+
+      <div className="mb-5 flex gap-6 border-b border-slate-200">
+        {SC_TABS.map(tabBtn)}
+      </div>
+
+      <div className="mb-5 flex max-w-xs items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div
+          className={`flex h-12 w-12 items-center justify-center rounded-xl text-white ${tab === "Approved" ? "bg-emerald-500" : tab === "Rejected" ? "bg-red-500" : "bg-blue-500"}`}
+        >
+          <Icons.ArrowDownToLine size={20} />
+        </div>
+        <div>
+          <div className="text-xs font-semibold text-slate-500">
+            {tab} Amount
+          </div>
+          <div className="text-xl font-extrabold text-slate-900">
+            {money(total)}
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <div className="relative min-w-[220px] flex-1 sm:max-w-xs">
+            <Icons.Search
+              size={15}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+            />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search Customer ID, name, tracking…"
+              className="h-10 w-full rounded-xl border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+            />
+          </div>
+          <select
+            value={range}
+            onChange={(e) => setRange(e.target.value)}
+            className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
+          >
+            {[
+              ["all", "All time"],
+              ...WTU_RANGES.filter((x) => x[0] !== "all"),
+            ].map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </select>
+          {hasFilter && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearch("");
+                setRange("all");
+              }}
+              className="flex h-10 items-center gap-1.5 rounded-xl bg-red-50 px-3 text-sm font-semibold text-red-600 hover:bg-red-100"
+            >
+              <Icons.X size={14} /> Clear
+            </button>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            {canRequest && (
+              <button
+                type="button"
+                onClick={() => setCreate(true)}
+                className="flex h-10 items-center gap-1.5 rounded-xl bg-emerald-600 px-4 text-sm font-bold text-white hover:bg-emerald-700"
+              >
+                <Icons.Plus size={16} /> Service Charge Request
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setReload((n) => n + 1)}
+              title="Refresh"
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50"
+            >
+              <Icons.RefreshCw
+                size={15}
+                className={loading ? "animate-spin" : ""}
+              />
+            </button>
+          </div>
+        </div>
+
+        <div className="overflow-hidden rounded-xl border border-slate-200">
+          <DataTable
+            caption="Service charges"
+            columns={cols}
+            rows={shown}
+            rowKey={(r) => r.id}
+            loading={loading && rows.length === 0}
+            skeletonRows={6}
+            minWidth={860}
+            onRowClick={(r) =>
+              navigate(`/service-charge/${encodeURIComponent(r.id)}`)
+            }
+            error={error ? { title: error } : null}
+            onRetry={() => setReload((n) => n + 1)}
+            emptyTitle="You don't have any data available yet."
+            rowActions={(r) =>
+              canApprove && r.status === "Pending" ? (
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setAction({ row: r, mode: "approve" });
+                    }}
+                    className="h-8 rounded-lg bg-emerald-600 px-3 text-xs font-bold text-white hover:bg-emerald-700"
+                  >
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setAction({ row: r, mode: "reject" });
+                    }}
+                    className="h-8 rounded-lg border border-red-200 px-3 text-xs font-bold text-red-600 hover:bg-red-50"
+                  >
+                    Reject
+                  </button>
+                </div>
+              ) : null
+            }
+          />
+        </div>
+      </div>
+
+      {create && (
+        <ServiceChargeRequestModal
+          onClose={() => setCreate(false)}
+          onDone={() => {
+            setCreate(false);
+            setTab("Pending");
+            setReload((n) => n + 1);
+          }}
+        />
+      )}
+      {action && (
+        <ServiceChargeActionModal
+          row={action.row}
+          mode={action.mode}
+          onClose={() => setAction(null)}
+          onDone={() => {
+            setAction(null);
+            setReload((n) => n + 1);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// Approve (deducts from the wallet) or Reject a pending request.
+function ServiceChargeActionModal({ row, mode, onClose, onDone }) {
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const approve = mode === "approve";
+  const amt = Number(row.amount) || 0;
+  const bal = Number(row._c?.balance ?? row.customer_balance);
+  async function submit() {
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    const { error } = approve
+      ? await supabase.rpc("service_charge_approve", { p_id: String(row.id) })
+      : await supabase.rpc("service_charge_reject", {
+          p_id: String(row.id),
+          p_reason: reason.trim() || null,
+        });
+    setBusy(false);
+    if (error) return setErr(scErr(error));
+    emitCBToast(
+      "ok",
+      approve ? "Service charge approved" : "Service charge rejected",
+      approve
+        ? `${money(amt)} deducted from ${row._c?.name || "customer"} (${row._c?.customer_code || ""}).`
+        : "The request was rejected. No money was deducted.",
+    );
+    onDone();
+  }
+  return (
+    <WalletModal
+      title={approve ? "Approve Service Charge" : "Reject Service Charge"}
+      onClose={busy ? () => {} : onClose}
+    >
+      <div className="space-y-3 text-sm text-slate-700">
+        <div className="rounded-lg bg-slate-50 px-3 py-2.5">
+          <div className="font-bold text-slate-900">
+            {row._c?.customer_code} · {row._c?.name}
+          </div>
+          <div className="text-xs text-slate-500">
+            {row.service_type || "—"} · {money(amt)}
+          </div>
+        </div>
+        {approve ? (
+          <div className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2.5">
+            <span>Balance after deduction</span>
+            <b
+              className={
+                Number.isFinite(bal) && bal - amt < 0
+                  ? "text-red-600"
+                  : "text-slate-900"
+              }
+            >
+              {Number.isFinite(bal) ? moneyS(bal - amt) : "—"}
+            </b>
+          </div>
+        ) : (
+          <textarea
+            rows={3}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Reason (optional)"
+            className="w-full resize-none rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500"
+          />
+        )}
+        {approve && (
+          <p className="text-xs text-slate-500">
+            The amount is taken from the customer's wallet now. The customer
+            will not see this transaction.
+          </p>
+        )}
+        {err && <p className="text-xs font-semibold text-red-600">{err}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="h-10 rounded-lg border border-slate-300 px-4 text-sm font-semibold text-slate-800 hover:bg-slate-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={busy}
+            className={`h-10 rounded-lg px-5 text-sm font-bold text-white disabled:opacity-40 ${approve ? "bg-emerald-600 hover:bg-emerald-700" : "bg-red-600 hover:bg-red-700"}`}
+          >
+            {busy ? "Saving…" : approve ? "Approve" : "Reject"}
+          </button>
+        </div>
+      </div>
+    </WalletModal>
+  );
+}
+
+// "Service Charge Request" form — same layout as DRSB: Search Type + search,
+// Amount, Service Charge Type, optional Tracking Number.
+function ServiceChargeRequestModal({ onClose, onDone }) {
+  const [searchType, setSearchType] = useState("id");
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [customer, setCustomer] = useState(null);
+  const [amount, setAmount] = useState("");
+  const [type, setType] = useState("");
+  const [tracking, setTracking] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const reqId = useRef(0);
+  const amt = Number(amount);
+  const valid = !!customer && Number.isFinite(amt) && amt > 0 && !!type;
+  const placeholder =
+    WTU_SEARCH_TYPES.find((t) => t[0] === searchType)?.[2] || "Search…";
+  const label = "mb-2 block text-[15px] font-semibold text-slate-900";
+  const field =
+    "h-12 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-[15px] font-medium text-slate-900 shadow-sm transition placeholder:font-normal placeholder:text-slate-500 focus:border-slate-500";
+
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && !busy && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+
+  useEffect(() => {
+    const term = q.trim();
+    if (customer || term.length < 1 || !supabase) {
+      setResults([]);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    const my = ++reqId.current;
+    const t = setTimeout(async () => {
+      const safe = term.replace(/[,()%]/g, " ");
+      let query = supabase
+        .from("customers")
+        .select("id, customer_code, name, phone, balance");
+      if (searchType === "id")
+        query = query.ilike("customer_code", `%${safe}%`);
+      else if (searchType === "name") query = query.ilike("name", `%${safe}%`);
+      else query = query.ilike("phone", `%${safe}%`);
+      const { data, error } = await query.limit(8);
+      if (my !== reqId.current) return;
+      setResults(error ? [] : data || []);
+      setSearching(false);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q, customer, searchType]);
+
+  async function submit() {
+    if (!valid || busy) return;
+    setBusy(true);
+    setErr("");
+    const { error } = await supabase.rpc("service_charge_request", {
+      p_customer_id: String(customer.id),
+      p_amount: Math.round(amt * 100) / 100,
+      p_service_type: type,
+      p_tracking: tracking.trim() || null,
+    });
+    setBusy(false);
+    if (error) return setErr(scErr(error));
+    emitCBToast(
+      "ok",
+      "Service charge requested",
+      `${money(amt)} for ${customer.name} (${customer.customer_code}) is waiting for approval.`,
+    );
+    onDone();
+  }
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[3px]"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Service Charge Request"
+    >
+      <div className="flex max-h-[92vh] w-full max-w-[640px] flex-col rounded-2xl bg-white shadow-2xl">
+        <div className="flex items-center justify-between border-b border-slate-200 px-7 py-5">
+          <h3 className="text-xl font-bold text-slate-950">
+            Service Charge Request
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="grid h-9 w-9 place-items-center rounded-lg text-slate-700 transition hover:bg-slate-100"
+          >
+            <Icons.X size={18} />
+          </button>
+        </div>
+
+        <div className="overflow-y-auto px-7 py-6">
+          <span className={label}>
+            Search Type <span className="text-red-500">*</span>
+          </span>
+          {customer ? (
+            <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-bold text-slate-900">
+                  {customer.customer_code} · {customer.name}
+                </div>
+                <div className="text-xs font-medium text-slate-500">
+                  {customer.phone || "No phone"} · Balance{" "}
+                  <b className="text-slate-800">
+                    {moneyS(customer.balance || 0)}
+                  </b>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomer(null);
+                  setQ("");
+                }}
+                className="ml-3 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-white hover:text-slate-700"
+                title="Change customer"
+              >
+                <Icons.X size={16} />
+              </button>
+            </div>
+          ) : (
+            <div className="relative">
+              <div className="flex h-12 items-stretch overflow-hidden rounded-lg border border-slate-300 bg-white shadow-sm transition focus-within:border-slate-500">
+                <div className="relative border-r border-slate-300 bg-white">
+                  <select
+                    value={searchType}
+                    onChange={(e) => setSearchType(e.target.value)}
+                    aria-label="Search type"
+                    className="h-full cursor-pointer appearance-none bg-transparent pl-3.5 pr-9 text-[15px] font-semibold text-slate-900"
+                    style={WTU_NO_RING}
+                  >
+                    {WTU_SEARCH_TYPES.map(([k, l]) => (
+                      <option key={k} value={k}>
+                        {l}
+                      </option>
+                    ))}
+                  </select>
+                  <Icons.ChevronDown
+                    size={15}
+                    className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500"
+                  />
+                </div>
+                <div className="relative flex-1">
+                  <Icons.Search
+                    size={16}
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                  />
+                  <input
+                    autoFocus
+                    className="h-full w-full bg-transparent pl-10 pr-3 text-[15px] font-medium text-slate-900 placeholder:font-normal placeholder:text-slate-500"
+                    style={WTU_NO_RING}
+                    value={q}
+                    onChange={(e) => setQ(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && results[0]) {
+                        e.preventDefault();
+                        setCustomer(results[0]);
+                        setResults([]);
+                      }
+                    }}
+                    placeholder={placeholder}
+                  />
+                </div>
+              </div>
+              {q.trim() && (
+                <div className="absolute z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+                  {searching && (
+                    <div className="px-3 py-3 text-xs font-medium text-slate-400">
+                      Searching…
+                    </div>
+                  )}
+                  {!searching && results.length === 0 && (
+                    <div className="px-3 py-3 text-xs font-medium text-slate-400">
+                      No customer found.
+                    </div>
+                  )}
+                  {results.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => {
+                        setCustomer(c);
+                        setResults([]);
+                      }}
+                      className="flex w-full items-center justify-between px-3 py-2.5 text-left hover:bg-slate-50"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-bold text-slate-900">
+                          {c.customer_code} · {c.name}
+                        </span>
+                        <span className="block text-xs font-medium text-slate-400">
+                          {c.phone || "No phone"}
+                        </span>
+                      </span>
+                      <span className="ml-3 text-xs font-bold text-slate-600">
+                        {moneyS(c.balance || 0)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="mt-5 grid gap-5 sm:grid-cols-2">
+            <div>
+              <label className={label} htmlFor="sc-amount">
+                Amount <span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[15px] font-medium text-slate-700">
+                  $
+                </span>
+                <input
+                  id="sc-amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  className={`${field} pl-8 pr-16`}
+                  style={WTU_NO_RING}
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="0.00"
+                />
+                <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-900">
+                  USD
+                </span>
+              </div>
+            </div>
+            <div>
+              <label className={label} htmlFor="sc-type">
+                Service Charge Type <span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <select
+                  id="sc-type"
+                  value={type}
+                  onChange={(e) => setType(e.target.value)}
+                  className={`${field} cursor-pointer appearance-none pr-10 ${type ? "" : "font-normal text-slate-500"}`}
+                  style={WTU_NO_RING}
+                >
+                  <option value="">Select an option…</option>
+                  {SC_TYPES.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+                <Icons.ChevronDown
+                  size={16}
+                  className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-500"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <div className="mb-2 flex items-center justify-between">
+              <label
+                className="text-[15px] font-semibold text-slate-900"
+                htmlFor="sc-tracking"
+              >
+                Tracking Number
+              </label>
+              <span className="text-sm text-slate-600">optional</span>
+            </div>
+            <textarea
+              id="sc-tracking"
+              rows={4}
+              className="w-full resize-none rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-[15px] font-medium text-slate-900 shadow-sm transition placeholder:font-normal placeholder:text-slate-500 focus:border-slate-500"
+              style={WTU_NO_RING}
+              value={tracking}
+              onChange={(e) => setTracking(e.target.value)}
+              placeholder="TK numbers or a note (one per line)"
+            />
+          </div>
+          {err && (
+            <p className="mt-3 text-xs font-semibold text-red-600">{err}</p>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-slate-100 px-7 py-4">
+          <button
+            type="button"
+            disabled={!valid || busy}
+            onClick={submit}
+            className="h-11 rounded-lg bg-blue-600 px-7 text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
+          >
+            {busy ? "Saving…" : "Submit"}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-slate-300 px-5 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50"
+          >
+            <Icons.X size={14} />
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// Detail page — /service-charge/:id  (DRSB "Service Charge Details")
+function ServiceChargeDetailPage({ byTx = false }) {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const canApprove = hasPermission(user, "service_charge.approve");
+  const [row, setRow] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [action, setAction] = useState(null);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    if (!supabase) return;
+    setLoading(true);
+    (async () => {
+      const { data, error: e1 } = await supabase
+        .from("service_charges")
+        .select("*")
+        .eq(byTx ? "wallet_tx_id" : "id", id)
+        .maybeSingle();
+      if (!alive) return;
+      if (e1 || !data) {
+        setError(e1 ? scErr(e1) : "Service charge not found.");
+        setLoading(false);
+        return;
+      }
+      const [withC] = await scAttachCustomers([data]);
+      if (!alive) return;
+      setRow(withC);
+      setError("");
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [id, reload]);
+
+  const line = (k, v) => (
+    <div className="grid grid-cols-[180px_1fr] gap-4 border-b border-slate-100 py-3.5 text-sm last:border-0">
+      <div className="font-medium text-slate-600">{k}</div>
+      <div className="min-w-0 whitespace-pre-wrap break-words font-semibold text-slate-900">
+        {v || "—"}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="w-full min-w-0">
+      <div className="mb-5 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => navigate("/service-charge")}
+          className="grid h-9 w-9 place-items-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+          aria-label="Back"
+        >
+          <Icons.ChevronLeft size={18} />
+        </button>
+        <h1 className="cb-page-title text-2xl font-extrabold text-slate-900">
+          Service Charge Details
+        </h1>
+      </div>
+      {loading && !row && <p className="text-sm text-slate-400">Loading…</p>}
+      {error && !row && (
+        <p className="rounded-xl bg-red-50 px-4 py-3 text-sm font-semibold text-red-600">
+          {error}
+        </p>
+      )}
+      {row && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="mb-5 flex flex-wrap items-center gap-4">
+            <div>
+              <div className="text-xs font-semibold text-slate-500">
+                UID: {row._c?.customer_code || "—"}
+              </div>
+              {row._c?.customer_code ? (
+                <Link
+                  to={`/customers/${encodeURIComponent(row._c.customer_code)}`}
+                  className="text-lg font-bold text-blue-700 hover:underline"
+                >
+                  {row._c?.name || row._c.customer_code}
+                </Link>
+              ) : (
+                <div className="text-lg font-bold">—</div>
+              )}
+              <div className="mt-1 inline-flex rounded-full border border-slate-200 px-3 py-1 text-sm font-bold text-slate-800">
+                Wallet {moneyS(row._c?.balance || 0)}
+              </div>
+            </div>
+            {canApprove && row.status === "Pending" && (
+              <div className="ml-auto flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAction("approve")}
+                  className="h-10 rounded-lg bg-emerald-600 px-5 text-sm font-bold text-white hover:bg-emerald-700"
+                >
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAction("reject")}
+                  className="h-10 rounded-lg border border-red-200 px-5 text-sm font-bold text-red-600 hover:bg-red-50"
+                >
+                  Reject
+                </button>
+              </div>
+            )}
+          </div>
+          <h2 className="mb-1 border-b border-slate-200 pb-2 text-sm font-bold text-blue-700">
+            Service Charge Details
+          </h2>
+          {line("Phone Number", row._c?.phone)}
+          {line("Total Amount", money(row.amount))}
+          {line("Service Type", row.service_type)}
+          {line("Status", <ScStatusBadge status={row.status} />)}
+          {line("Note", row.tracking_number)}
+          {line("Created Date", wtdStamp(row.created_at))}
+          {line("Created By", row.requested_by)}
+          {row.status !== "Pending" &&
+            line(
+              row.status === "Approved" ? "Approval Name" : "Rejected By",
+              row.decided_by,
+            )}
+          {row.status !== "Pending" &&
+            line(
+              row.status === "Approved" ? "Approved Date" : "Rejected Date",
+              wtdStamp(row.decided_at),
+            )}
+          {row.status === "Rejected" &&
+            line("Reject Reason", row.reject_reason)}
+        </div>
+      )}
+      {action && row && (
+        <ServiceChargeActionModal
+          row={row}
+          mode={action}
+          onClose={() => setAction(null)}
+          onDone={() => {
+            setAction(null);
+            setReload((n) => n + 1);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 function WalletTopUpPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -75603,6 +76560,10 @@ function wtdSplitNote(note) {
 const WTD_TYPE = {
   top_up: ["Deposit", "bg-emerald-50 text-emerald-700 border-emerald-200"],
   top_up_reversal: ["Reversal", "bg-red-50 text-red-600 border-red-200"],
+  service_charge: [
+    "Service Charge",
+    "bg-amber-50 text-amber-700 border-amber-200",
+  ],
   refund: ["Refund", "bg-emerald-50 text-emerald-700 border-emerald-200"],
   withdraw: ["Withdraw", "bg-red-50 text-red-600 border-red-200"],
   withdrawal: ["Withdraw", "bg-red-50 text-red-600 border-red-200"],
@@ -76236,6 +77197,11 @@ function WalletTopUpDetailPage() {
                 onRowClick={(r) => {
                   if (r.type === "top_up" || r.type === "top_up_reversal")
                     navigate(`/wallet-top-up/${encodeURIComponent(r.id)}`);
+                  else if (
+                    r.type === "service_charge" &&
+                    hasPermission(user, "service_charge.view")
+                  )
+                    navigate(`/service-charge/tx/${encodeURIComponent(r.id)}`);
                 }}
                 columns={[
                   {
@@ -86309,6 +87275,15 @@ function AdminApp() {
                 element={<CustomerRecoveryPage />}
               />
               <Route path="/wallet-top-up" element={<WalletTopUpPage />} />
+              <Route path="/service-charge" element={<ServiceChargePage />} />
+              <Route
+                path="/service-charge/tx/:id"
+                element={<ServiceChargeDetailPage byTx />}
+              />
+              <Route
+                path="/service-charge/:id"
+                element={<ServiceChargeDetailPage />}
+              />
               <Route
                 path="/wallet-top-up/:id"
                 element={<WalletTopUpDetailPage />}
