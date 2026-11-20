@@ -75236,7 +75236,7 @@ function ServiceChargePage() {
   const [error, setError] = useState("");
   const [tab, setTab] = useState("Pending");
   const [search, setSearch] = useState("");
-  const [range, setRange] = useState("all");
+  const [dateRange, setDateRange] = useState(EMPTY_DATE_RANGE);
   const [create, setCreate] = useState(false);
   const [action, setAction] = useState(null); // { row, mode }
   const [reload, setReload] = useState(0);
@@ -75281,13 +75281,12 @@ function ServiceChargePage() {
   }, [rows]);
 
   const shown = useMemo(() => {
-    const from = wtuStart(range);
     const s = search.trim().toLowerCase();
     return rows.filter((r) => {
       if (r.status !== tab) return false;
       const when =
         tab === "Pending" ? r.created_at : r.decided_at || r.created_at;
-      if (from && new Date(when).getTime() < from) return false;
+      if (!dateInRange(when, dateRange)) return false;
       if (!s) return true;
       return [
         r._c?.customer_code,
@@ -75299,10 +75298,11 @@ function ServiceChargePage() {
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(s));
     });
-  }, [rows, tab, search, range]);
+  }, [rows, tab, search, dateRange]);
 
   const total = shown.reduce((a, r) => a + (Number(r.amount) || 0), 0);
-  const hasFilter = search || range !== "all";
+  const hasFilter =
+    search || dateRange.preset || dateRange.from || dateRange.to;
   const dateLabel = tab === "Pending" ? "Requested At" : `${tab} At`;
 
   const cols = [
@@ -75370,7 +75370,9 @@ function ServiceChargePage() {
       label: tab === "Pending" ? "Requested By" : `${tab} By`,
       render: (r) => (
         <span className="text-slate-500">
-          {(tab === "Pending" ? r.requested_by : r.decided_by) || "—"}
+          {(tab === "Pending"
+            ? r.requested_email || r.requested_by
+            : r.decided_email || r.decided_by) || "—"}
         </span>
       ),
     },
@@ -75381,7 +75383,7 @@ function ServiceChargePage() {
       key={t}
       type="button"
       onClick={() => setTab(t)}
-      className={`relative -mb-px flex items-center gap-2 border-b-2 px-1 pb-3 pt-1 text-sm font-semibold transition ${tab === t ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:text-slate-800"}`}
+      className={`relative -mb-px flex items-center gap-2 border-b-2 px-1 pb-3 pt-1 text-sm font-semibold transition ${tab === t ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:border-blue-600 hover:text-blue-700"}`}
     >
       {t}
       {counts[t] > 0 && (
@@ -75432,26 +75434,17 @@ function ServiceChargePage() {
               className="h-10 w-full rounded-xl border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
             />
           </div>
-          <select
-            value={range}
-            onChange={(e) => setRange(e.target.value)}
-            className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
-          >
-            {[
-              ["all", "All time"],
-              ...WTU_RANGES.filter((x) => x[0] !== "all"),
-            ].map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-          </select>
+          <DateRangeFilter
+            label={dateLabel}
+            value={dateRange}
+            onChange={setDateRange}
+          />
           {hasFilter && (
             <button
               type="button"
               onClick={() => {
                 setSearch("");
-                setRange("all");
+                setDateRange(EMPTY_DATE_RANGE);
               }}
               className="flex h-10 items-center gap-1.5 rounded-xl bg-red-50 px-3 text-sm font-semibold text-red-600 hover:bg-red-100"
             >
