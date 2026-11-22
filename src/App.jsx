@@ -2545,8 +2545,8 @@ function AppShellSkeleton() {
 // Once connected, the real Customer ID comes from the `customer_code_seq`
 // + trigger in supabase/schema.sql instead of this.
 function generateMockCustomerId() {
-  const n = Math.floor(900000 + Math.random() * 99999);
-  return `KH-${String(n).slice(0, 6)}`;
+  // Plain sequential-style number (no KH- prefix) — mock mode only.
+  return String(Math.floor(1000 + Math.random() * 9000));
 }
 
 // ------------------------------------------------------------
@@ -4198,6 +4198,88 @@ const pkgRowHref = (row) => {
     : `/packages/${encodeURIComponent(row.tk)}`;
 };
 // Row click for DataTable: open the detail, Ctrl/Cmd-click → new tab.
+// Short "System ID" number for staff users: real `user_no` column if present,
+// otherwise sign-up order (oldest = 1). Shared by the Users list and the
+// header account menu so both always show the same number.
+function userNumberMap(rows) {
+  const order = (rows || [])
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => {
+      const ta = a.r.created_at ? Date.parse(a.r.created_at) : 0;
+      const tb = b.r.created_at ? Date.parse(b.r.created_at) : 0;
+      return ta - tb || b.i - a.i;
+    });
+  return new Map(order.map((o, n) => [o.r, o.r.user_no ?? n + 1]));
+}
+
+// DRSB-style Users table (declared before MODULES, which reads it at load).
+const USERS_TABLE_COLUMNS = [
+  {
+    key: "name",
+    label: "Name",
+    render: (r) => (
+      <div className="flex items-center gap-3 min-w-[200px]">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-mist-200 bg-white text-signal-blue">
+          <Icons.User size={18} />
+        </span>
+        <div className="leading-tight min-w-0">
+          <div className="font-medium text-ink-900 truncate">
+            {r.name || "—"}
+          </div>
+          <div
+            className="text-ink-600/55 mt-0.5 whitespace-nowrap"
+            style={{ fontSize: 12 }}
+            title={`System ID: ${r.id}`}
+          >
+            System ID: {r.user_no ?? r.id}
+          </div>
+        </div>
+      </div>
+    ),
+  },
+  {
+    key: "username",
+    label: "Username",
+    render: (r) => r.username || r.email || "—",
+  },
+  {
+    key: "role",
+    label: "Roles",
+    render: (r) =>
+      r.role ? (
+        <span className="inline-flex items-center rounded-md border border-mist-200 bg-mist-50 px-2 py-0.5 text-[13px] text-ink-800 whitespace-nowrap">
+          {r.role}
+        </span>
+      ) : (
+        <span className="text-ink-600/40">—</span>
+      ),
+  },
+  {
+    key: "referral",
+    label: "Referral",
+    render: (r) =>
+      r.referral_code || r.referral ? (
+        <span className="font-mono text-[13px] text-signal-blue">
+          {r.referral_code || r.referral}
+        </span>
+      ) : (
+        <span className="text-signal-blue">—</span>
+      ),
+  },
+  {
+    key: "phone",
+    label: "Phone Number",
+    render: (r) => r.phone || r.phone_number || "—",
+  },
+  {
+    key: "warehouse_code",
+    label: "Warehouses",
+    render: (r) => <UserWarehouseCell code={r.warehouse_code} />,
+  },
+  { key: "email", label: "Email" },
+  { key: "status", label: "Status", status: true },
+];
+
 const openPkgRow = (navigate) => (row, e) => {
   const href = pkgRowHref(row);
   if (e && (e.metaKey || e.ctrlKey)) window.open(href, "_blank");
@@ -4807,6 +4889,8 @@ const MODULES = {
       col("email", "Email"),
       col("status", "Status", { status: true }),
     ],
+    // DRSB-style on-screen columns (export / edit still use `columns`).
+    tableColumns: USERS_TABLE_COLUMNS,
     rows: [], // live data only — loaded from the server
   },
 
@@ -6361,7 +6445,7 @@ function useCustomerPhone(code) {
 // first line, phone number under it. ID and phone copy on hover.
 function CnCustomerCell({ value }) {
   const raw = String(value || "").trim();
-  const m = raw.match(/^([A-Za-z]{1,8}-\d+)\s*·\s*(.+)$/);
+  const m = raw.match(/^((?:[A-Za-z]{1,8}-)?\d+)\s*·\s*(.+)$/);
   const code = m ? m[1] : "";
   const name = m ? m[2].trim() : "";
   const phone = useCustomerPhone(code);
@@ -6376,9 +6460,9 @@ function CnCustomerCell({ value }) {
         >
           {name}
         </Link>
-        <HoverCopy value={code} label="Copy customer ID">
+        <HoverCopy value={fmtCustomerId(code)} label="Copy customer ID">
           <span className="whitespace-nowrap text-xs text-ink-600/55">
-            {code}
+            {fmtCustomerId(code)}
           </span>
         </HoverCopy>
       </div>
@@ -8646,7 +8730,14 @@ function useCustomerLookup(transferType, query) {
             ? req.ilike("phone", `%${digits}%`)
             : req.eq("customer_code", "");
         } else if (transferType === "uid") {
-          req = req.ilike("customer_code", `%${q}%`);
+          if (/^\d+$/.test(q)) {
+            const n = String(Number(q));
+            req = req.or(
+              `customer_code.eq.${n},customer_code.eq.KH-${n.padStart(6, "0")}`,
+            );
+          } else {
+            req = req.ilike("customer_code", `%${q}%`);
+          }
         } else {
           req = req.ilike("name", `%${q}%`);
         }
@@ -8764,7 +8855,7 @@ function CustomerPicker({
       {value ? (
         <div className="flex items-center justify-between border border-mist-200 rounded-md px-3 py-2 text-sm bg-mist-50">
           <span className="font-medium text-ink-900">
-            {value.customer_code} · {value.name}
+            {fmtCustomerId(value.customer_code)} · {value.name}
             {strict && (
               <span className="flex items-center gap-1 text-xs font-normal text-signal-teal mt-0.5">
                 <Check size={12} strokeWidth={3} />
@@ -8818,7 +8909,7 @@ function CustomerPicker({
                     className="w-full text-left px-3 py-2 text-sm hover:bg-mist-50"
                   >
                     <span className="font-medium text-ink-900">
-                      {c.customer_code}
+                      {fmtCustomerId(c.customer_code)}
                     </span>
                     <span className="text-ink-600/55"> · {c.name}</span>
                   </button>
@@ -9946,8 +10037,8 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
     if (cnCustomer && f.customer.id !== cnCustomer.id)
       return setError(
         tr(
-          `This TK belongs to ${cnCustomer.customer_code} (Assisted Purchase) — it cannot be changed to another Customer`,
-          `TK នេះជារបស់ ${cnCustomer.customer_code} (Assisted Purchase) — មិនអាចប្តូរទៅអតិថិជនផ្សេងបានទេ`,
+          `This TK belongs to ${fmtCustomerId(cnCustomer.customer_code)} (Assisted Purchase) — it cannot be changed to another Customer`,
+          `TK នេះជារបស់ ${fmtCustomerId(cnCustomer.customer_code)} (Assisted Purchase) — មិនអាចប្តូរទៅអតិថិជនផ្សេងបានទេ`,
         ),
       );
     // Photos and Size/Freight are OPTIONAL at Inbound — staff can enter them
@@ -10203,7 +10294,7 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
               },
               {
                 label: tr("Customer", "អតិថិជន"),
-                value: `${f.customer.customer_code} · ${f.customer.name}`,
+                value: `${fmtCustomerId(f.customer.customer_code)} · ${f.customer.name}`,
                 span: true,
               },
               { label: tr("Freight Fee", "ថ្លៃដឹក"), value: money(finalFee) },
@@ -10294,8 +10385,8 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
                 {cnMatch.customer ? ` · ${cnMatch.customer}` : ""}) —{" "}
                 {cnCustomer
                   ? tr(
-                      `Customer ${cnCustomer.customer_code} was selected automatically (cannot be changed). You can enter Cargo / size here to set the freight like a Shipment (or leave it blank to price it on Arrive). Press Enter (when empty) or Save Inbound to finish.`,
-                      `អតិថិជន ${cnCustomer.customer_code} ត្រូវបានជ្រើសដោយស្វ័យប្រវត្តិ (មិនអាចប្តូរបាន)។ អាចបញ្ចូលទំនិញ/ទំហំ ដើម្បីកំណត់ថ្លៃដឹកនៅទីនេះបានដូច Shipment (ឬទុកទទេ ដើម្បីគិតពេល Arrive)។ ចុច Enter (បើទទេ) ឬ រក្សាទុកការទទួលចូល ដើម្បីបញ្ចប់។`,
+                      `Customer ${fmtCustomerId(cnCustomer.customer_code)} was selected automatically (cannot be changed). You can enter Cargo / size here to set the freight like a Shipment (or leave it blank to price it on Arrive). Press Enter (when empty) or Save Inbound to finish.`,
+                      `អតិថិជន ${fmtCustomerId(cnCustomer.customer_code)} ត្រូវបានជ្រើសដោយស្វ័យប្រវត្តិ (មិនអាចប្តូរបាន)។ អាចបញ្ចូលទំនិញ/ទំហំ ដើម្បីកំណត់ថ្លៃដឹកនៅទីនេះបានដូច Shipment (ឬទុកទទេ ដើម្បីគិតពេល Arrive)។ ចុច Enter (បើទទេ) ឬ រក្សាទុកការទទួលចូល ដើម្បីបញ្ចប់។`,
                     )
                   : tr(
                       "Please select the correct Customer.",
@@ -12144,6 +12235,206 @@ function TkScanField({
 }
 
 // ------------------------------------------------------------
+// Users page — DRSB-style layout (avatar + System ID, role chip, warehouse
+// pin, status chip, filter bar). Used by ListPage when path === "/users".
+// ------------------------------------------------------------
+let _whNameCache = null;
+let _whNamePromise = null;
+function useWarehouseNames() {
+  const [map, setMap] = useState(_whNameCache || {});
+  useEffect(() => {
+    if (_whNameCache || !supabase) return undefined;
+    let alive = true;
+    if (!_whNamePromise) {
+      _whNamePromise = supabase
+        .from("warehouses")
+        .select("code,name")
+        .then(({ data }) => {
+          _whNameCache = Object.fromEntries(
+            (data || []).map((w) => [w.code, w.name || w.code]),
+          );
+          return _whNameCache;
+        })
+        .catch(() => {
+          _whNamePromise = null;
+          return {};
+        });
+    }
+    _whNamePromise.then((m) => alive && setMap(m));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return map;
+}
+
+function UserWarehouseCell({ code }) {
+  const names = useWarehouseNames();
+  if (!code) return <span className="text-ink-600/40">—</span>;
+  return (
+    <span className="inline-flex items-center gap-2 text-ink-800">
+      <Icons.MapPin size={16} className="text-signal-blue shrink-0" />
+      <span className="truncate max-w-[220px]">{names[code] || code}</span>
+    </span>
+  );
+}
+
+function UsersFilterBar({
+  field,
+  setField,
+  search,
+  setSearch,
+  role,
+  setRole,
+  roles,
+  status,
+  setStatus,
+  statuses,
+  wh,
+  setWh,
+  whs,
+  hasFilters,
+  onClear,
+  canCreate,
+  onCreate,
+  onRefresh,
+}) {
+  const names = useWarehouseNames();
+  const [spin, setSpin] = useState(false);
+  const selBase =
+    "cbx-chip appearance-none cursor-pointer focus:outline-none focus:border-signal-blue";
+  const chev = {
+    backgroundImage:
+      "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>\")",
+    backgroundPosition: "right 10px center",
+    backgroundRepeat: "no-repeat",
+    backgroundSize: "14px 14px",
+    paddingRight: 32,
+  };
+  return (
+    <div className="flex items-center gap-3 px-4 lg:px-5 py-4 border-b border-mist-200 flex-wrap">
+      <div className="flex items-center rounded-[10px] border border-mist-200 bg-white h-11 focus-within:border-signal-blue">
+        <select
+          value={field}
+          onChange={(e) => setField(e.target.value)}
+          aria-label="Search field"
+          className="h-full bg-transparent pl-3 pr-1 text-sm font-medium outline-none border-r border-mist-200"
+        >
+          <option value="name">Name</option>
+          <option value="email">Email</option>
+          <option value="id">System ID</option>
+        </select>
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={`Search ${field === "name" ? "Name" : field === "email" ? "Email" : "System ID"}`}
+          className="h-full w-52 bg-transparent px-3 text-sm outline-none placeholder:text-ink-600/40"
+        />
+        <Search size={15} className="mr-3 text-ink-600/40" />
+      </div>
+
+      <select
+        value={role}
+        onChange={(e) => setRole(e.target.value)}
+        aria-label="Role"
+        className={selBase + (role ? " is-active" : "")}
+        style={chev}
+      >
+        <option value="">Role</option>
+        {roles.map((r) => (
+          <option key={r} value={r}>
+            {r}
+          </option>
+        ))}
+      </select>
+
+      {status ? (
+        <button
+          type="button"
+          onClick={() => setStatus("")}
+          className="cbx-chip is-active"
+          title="Clear status filter"
+        >
+          <Icons.CircleDot size={15} />
+          Status: {status}
+          <Icons.X size={14} />
+        </button>
+      ) : (
+        <select
+          value=""
+          onChange={(e) => setStatus(e.target.value)}
+          aria-label="Status"
+          className={selBase}
+          style={chev}
+        >
+          <option value="">Status</option>
+          {statuses.map((x) => (
+            <option key={x} value={x}>
+              {x}
+            </option>
+          ))}
+        </select>
+      )}
+
+      <select
+        value={wh}
+        onChange={(e) => setWh(e.target.value)}
+        aria-label="Warehouse"
+        className={selBase + (wh ? " is-active" : "")}
+        style={chev}
+      >
+        <option value="">Warehouse</option>
+        {whs.map((w) => (
+          <option key={w} value={w}>
+            {names[w] || w}
+          </option>
+        ))}
+      </select>
+
+      {hasFilters && (
+        <button
+          type="button"
+          onClick={onClear}
+          className="inline-flex items-center gap-1.5 h-11 px-3.5 rounded-[10px] bg-red-50 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors"
+        >
+          <Icons.X size={15} />
+          Clear
+        </button>
+      )}
+
+      <div className="flex-1" />
+
+      {canCreate && (
+        <button
+          type="button"
+          onClick={onCreate}
+          className="inline-flex items-center gap-1.5 h-11 px-4 rounded-[10px] bg-signal-blue text-white text-sm font-medium hover:bg-signal-blue/90 transition-colors"
+        >
+          <Plus size={16} />
+          Create
+        </button>
+      )}
+      <button
+        type="button"
+        aria-label="Refresh"
+        onClick={async () => {
+          setSpin(true);
+          try {
+            await onRefresh?.();
+          } finally {
+            setSpin(false);
+          }
+        }}
+        className="cbx-chip !px-0 w-11 justify-center"
+      >
+        <Icons.RefreshCw size={16} className={spin ? "animate-spin" : ""} />
+      </button>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
 // pages/WHArrivedListing.jsx — DRSB-style Listing tab for
 // "W.H Arrived (Destination)": Arrivals chart → fee strip → filters → table.
 // ------------------------------------------------------------
@@ -12667,7 +12958,9 @@ function WHArrivedListing({
           <div className="leading-tight">
             <div className="font-medium text-ink-900">
               {c.name}
-              <span className="ml-2 text-xs text-ink-600/55">{c.id}</span>
+              <span className="ml-2 text-xs text-ink-600/55">
+                {fmtCustomerId(c.id)}
+              </span>
             </div>
             {phone && (
               <div className="text-xs text-ink-600/55 mt-0.5">{phone}</div>
@@ -12956,7 +13249,7 @@ function ArrivedPrintLabelLoader({ row, onClose }) {
       open={!!pkg}
       onClose={onClose}
       pkg={pkg}
-      custId={c.id}
+      custId={fmtCustomerId(c.id)}
       custName={c.name}
     />
   );
@@ -13596,7 +13889,7 @@ function AssignedCustomers({ kind, wh, canManage }) {
               className="flex items-center justify-between px-3 py-2 text-sm"
             >
               <span className="text-ink-900">
-                <b>{c.customer_code}</b>
+                <b>{fmtCustomerId(c.customer_code)}</b>
                 {c.name ? ` · ${c.name}` : ""}
               </span>
               {canManage && (
@@ -16212,7 +16505,7 @@ function DataTable({
                               .toUpperCase()}
                           />
                         </span>
-                        <span>{row[col.key]}</span>
+                        <span>{fmtCustomerText(row[col.key])}</span>
                       </span>
                     ) : col.status ? (
                       <StatusBadge label={row[col.key]} />
@@ -16221,14 +16514,14 @@ function DataTable({
                         to={col.linkTo(row)}
                         className="font-medium text-signal-blue hover:underline"
                       >
-                        {row[col.key]}
+                        {fmtCustomerText(row[col.key])}
                       </Link>
                     ) : col.strong ? (
                       <span className="font-medium text-ink-900">
-                        {row[col.key]}
+                        {fmtCustomerText(row[col.key])}
                       </span>
                     ) : (
-                      row[col.key]
+                      fmtCustomerText(row[col.key])
                     )}
                   </td>
                 ))}
@@ -18831,6 +19124,36 @@ function Topbar({ title, onMenuClick }) {
   const [prefsModal, setPrefsModal] = useState(null); // null | "lang" | "theme"
   const navigate = useNavigate();
   const [menuOpen, setMenuOpen] = useState(false);
+  // Header menu shows the same short System ID as the Users list.
+  const [myNo, setMyNo] = useState(null);
+  const myNoKey = user?.email || user?.id || "";
+  useEffect(() => {
+    if (!menuOpen || myNo != null || !supabase || !myNoKey) return undefined;
+    let alive = true;
+    (async () => {
+      let { data, error } = await supabase
+        .from("users")
+        .select("id,email,user_no,created_at");
+      if (error) {
+        // `user_no` column not created yet — fall back to sign-up order.
+        ({ data } = await supabase.from("users").select("id,email,created_at"));
+      }
+      if (!alive || !data) return;
+      const nums = userNumberMap(data);
+      const me = data.find(
+        (r) =>
+          (r.email &&
+            user?.email &&
+            r.email.toLowerCase() === user.email.toLowerCase()) ||
+          (user?.id && r.id === user.id),
+      );
+      if (me) setMyNo(nums.get(me) ?? null);
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [menuOpen, myNoKey]);
   const [showAccount, setShowAccount] = useState(false);
   const [showChangePw, setShowChangePw] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -19143,7 +19466,33 @@ function Topbar({ title, onMenuClick }) {
               className="cbx-menu absolute right-0 mt-2 w-64 py-1.5 z-50 cb-fade-in"
             >
               <div className="cbx-menu-head">
+                <div
+                  className="text-[11px] font-semibold uppercase tracking-[0.12em] mb-1.5"
+                  style={{ color: "#94a3b8" }}
+                >
+                  {t("Authorized session")}
+                </div>
                 <div className="cbx-menu-name truncate">{displayName}</div>
+                {myNo != null && (
+                  <button
+                    type="button"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      const ok = await cnCopyText(String(myNo));
+                      if (ok) emitCBToast("ok", "Copied", `System ID: ${myNo}`);
+                    }}
+                    title="Copy System ID"
+                    className="mt-1.5 mb-1 inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold hover:brightness-95 transition"
+                    style={{
+                      background: "#eaf1ff",
+                      border: "1px solid #cfe0ff",
+                      color: "#1d4ed8",
+                    }}
+                  >
+                    System ID: {myNo}
+                    <Icons.Copy size={12} className="opacity-60" />
+                  </button>
+                )}
                 <div className="cbx-menu-mail truncate">{user?.email}</div>
                 <div className="cbx-menu-mail truncate">
                   {t(user?.role || "Admin")}
@@ -19170,18 +19519,6 @@ function Topbar({ title, onMenuClick }) {
               >
                 <Icons.KeyRound size={15} />
                 Change Password
-              </button>
-              <button
-                onClick={() => {
-                  setMenuOpen(false);
-                  setPrefsModal("lang");
-                }}
-                role="menuitem"
-                className="cbx-menu-item"
-              >
-                <Icons.Languages size={15} />
-                <span className="flex-1">{t("Language")}</span>
-                <span className="cbx-menu-meta">{adminLangName(lang)}</span>
               </button>
               <button
                 onClick={() => {
@@ -22527,7 +22864,13 @@ function ListPage({
   // outbound status, not whatever status happens to be first among
   // whatever's already in the registry.
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  // Users opens on "Active" (DRSB default); every other list starts unfiltered.
+  const [statusFilter, setStatusFilter] = useState(
+    path === "/users" ? "Active" : "",
+  );
+  const [usersField, setUsersField] = useState("name");
+  const [usersRole, setUsersRole] = useState("");
+  const [usersWh, setUsersWh] = useState("");
   const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(15);
@@ -22704,13 +23047,21 @@ function ListPage({
             rows: isLinkedTk ? linkedRows : tableRows,
           }),
   }));
+  // Users get a short, easy-to-remember number (DRSB-style "System ID: 12").
+  // A real `users.user_no` column wins; until it exists we number by sign-up
+  // order (oldest = 1), which is stable unless an account is deleted.
+  const numberedUserRows = useMemo(() => {
+    if (!isUsersModule) return tableRows;
+    const nums = userNumberMap(tableRows);
+    return tableRows.map((r) => ({ ...r, user_no: nums.get(r) ?? "" }));
+  }, [isUsersModule, tableRows]);
   const displayRows = pkgServerMode
     ? pkgRows
     : isLinkedTk
       ? linkedRows
       : isExceptionsModule
         ? exceptionRows
-        : tableRows;
+        : numberedUserRows;
   const statusSeedRows = isLinkedTk
     ? stageForThisPage
       ? [{ status: stageForThisPage }]
@@ -22732,7 +23083,13 @@ function ListPage({
       !search ||
       (isLinkedTk
         ? [row.tk, row.customer, row.order_no, row.container_no, row.container]
-        : columns.map((c) => row[c.key])
+        : isUsersModule
+          ? usersField === "email"
+            ? [row.email, row.username]
+            : usersField === "id"
+              ? [row.user_no, row.id]
+              : [row.name]
+          : columns.map((c) => row[c.key])
       ).some((v) =>
         String(v ?? "")
           .toLowerCase()
@@ -22746,7 +23103,12 @@ function ListPage({
         dateCol.dateValue ? dateCol.dateValue(row) : row[dateCol.key],
         dateRange,
       );
-    if (!isLinkedTk) return matchesSearch && matchesStatus && matchesDate;
+    const matchesUsers =
+      !isUsersModule ||
+      ((!usersRole || row.role === usersRole) &&
+        (!usersWh || row.warehouse_code === usersWh));
+    if (!isLinkedTk)
+      return matchesSearch && matchesStatus && matchesDate && matchesUsers;
     // Local calendar day (slice(0, 10) of an ISO string is UTC, which put scans
     // made 12am-7am in Cambodia on the previous day).
     const day = localDayKey(row.inbound_at || row.created_at);
@@ -22800,10 +23162,17 @@ function ListPage({
           }
     : null;
   const hasActiveFilters = Boolean(
-    search || statusFilter || advCount > 0 || dateRangeLabel(dateRange),
+    search ||
+    statusFilter ||
+    usersRole ||
+    usersWh ||
+    advCount > 0 ||
+    dateRangeLabel(dateRange),
   );
   function clearAllFilters() {
     setSearch("");
+    setUsersRole("");
+    setUsersWh("");
     setStatusFilter("");
     setAdv(EMPTY_ADV);
     setDateRange(EMPTY_DATE_RANGE);
@@ -22828,7 +23197,7 @@ function ListPage({
             <p className="text-sm text-ink-600/55 mt-0.5">{subtitle}</p>
           )}
         </div>
-        {primaryAction && canCreate && (
+        {primaryAction && canCreate && !isUsersModule && (
           <button
             onClick={() =>
               path === "/outbound-origin" || path === "/inbound-origin"
@@ -22921,6 +23290,21 @@ function ListPage({
         </div>
       )}
 
+      {isUsersModule && (
+        <div
+          role="tablist"
+          className="flex items-center gap-1 border-b border-mist-200"
+        >
+          <ListTab label="Users" active onClick={() => {}} />
+          {hasPermission(user, "role.view") && (
+            <ListTab
+              label="User Role Management"
+              onClick={() => navigateTo("/roles")}
+            />
+          )}
+        </div>
+      )}
+
       <div className="cb-surface cb-card">
         {path === "/customers" && dateCol && (
           <div className="flex items-center gap-1 px-3 lg:px-4 border-b border-mist-200 overflow-x-auto">
@@ -22948,119 +23332,153 @@ function ListPage({
             />
           </div>
         )}
-        <div className="flex items-center gap-3 px-4 lg:px-5 py-4 border-b border-mist-200 flex-wrap">
-          <div className="cbx-searchbox">
-            <Search size={15} className="text-ink-600/40" aria-hidden="true" />
-            <input
-              type="search"
-              aria-label="Search"
-              placeholder="Search…"
-              value={search}
-              onChange={resetToFirstPage((e) => setSearch(e.target.value))}
-              className="bg-transparent outline-none text-sm w-full placeholder:text-ink-600/40"
-            />
-          </div>
+        {isUsersModule ? (
+          <UsersFilterBar
+            field={usersField}
+            setField={setUsersField}
+            search={search}
+            setSearch={resetToFirstPage(setSearch)}
+            role={usersRole}
+            setRole={resetToFirstPage(setUsersRole)}
+            roles={[
+              ...new Set(displayRows.map((r) => r.role).filter(Boolean)),
+            ].sort()}
+            status={statusFilter}
+            setStatus={resetToFirstPage(setStatusFilter)}
+            statuses={statusOptions}
+            wh={usersWh}
+            setWh={resetToFirstPage(setUsersWh)}
+            whs={[
+              ...new Set(
+                displayRows.map((r) => r.warehouse_code).filter(Boolean),
+              ),
+            ].sort()}
+            hasFilters={hasActiveFilters}
+            onClear={clearAllFilters}
+            canCreate={!!primaryAction && canCreate}
+            onCreate={() => setShowCreate(true)}
+            onRefresh={() => refetch()}
+          />
+        ) : (
+          <div className="flex items-center gap-3 px-4 lg:px-5 py-4 border-b border-mist-200 flex-wrap">
+            <div className="cbx-searchbox">
+              <Search
+                size={15}
+                className="text-ink-600/40"
+                aria-hidden="true"
+              />
+              <input
+                type="search"
+                aria-label="Search"
+                placeholder="Search…"
+                value={search}
+                onChange={resetToFirstPage((e) => setSearch(e.target.value))}
+                className="bg-transparent outline-none text-sm w-full placeholder:text-ink-600/40"
+              />
+            </div>
 
-          <div className="relative" ref={filterRef}>
-            <button
-              type="button"
-              aria-haspopup="menu"
-              aria-expanded={showFilterMenu}
-              onClick={() => setShowFilterMenu((v) => !v)}
-              disabled={!statusColumn}
-              className={`cbx-chip${statusFilter ? " is-active" : ""}`}
-            >
-              <Filter size={16} />
-              {statusFilter || t("Filter")}
-              <Icons.ChevronDown size={15} />
-            </button>
-            {showFilterMenu && statusColumn && (
-              <div
-                role="menu"
-                className="absolute left-0 mt-1 w-44 bg-white border border-mist-200 rounded-md shadow-lg py-1 z-20"
+            <div className="relative" ref={filterRef}>
+              <button
+                type="button"
+                aria-haspopup="menu"
+                aria-expanded={showFilterMenu}
+                onClick={() => setShowFilterMenu((v) => !v)}
+                disabled={!statusColumn}
+                className={`cbx-chip${statusFilter ? " is-active" : ""}`}
               >
-                <button
-                  onClick={resetToFirstPage(() => {
-                    setStatusFilter("");
-                    setShowFilterMenu(false);
-                  })}
-                  className="w-full text-left px-3 py-1.5 text-sm hover:bg-mist-50 text-ink-600/60"
+                <Filter size={16} />
+                {statusFilter || t("Filter")}
+                <Icons.ChevronDown size={15} />
+              </button>
+              {showFilterMenu && statusColumn && (
+                <div
+                  role="menu"
+                  className="absolute left-0 mt-1 w-44 bg-white border border-mist-200 rounded-md shadow-lg py-1 z-20"
                 >
-                  All
-                </button>
-                {statusOptions.map((opt) => (
                   <button
-                    key={opt}
                     onClick={resetToFirstPage(() => {
-                      setStatusFilter(opt);
+                      setStatusFilter("");
                       setShowFilterMenu(false);
                     })}
-                    className="w-full text-left px-3 py-1.5 text-sm hover:bg-mist-50 text-ink-800"
+                    className="w-full text-left px-3 py-1.5 text-sm hover:bg-mist-50 text-ink-600/60"
                   >
-                    {opt}
+                    All
                   </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {dateCol && (
-            <DateRangeFilter
-              label={dateCol.dateLabel || "Created At"}
-              value={dateRange}
-              onChange={resetToFirstPage(setDateRange)}
-            />
-          )}
-
-          {isLinkedTk && (
-            <button
-              onClick={() => setShowAdv((v) => !v)}
-              className={`cbx-chip is-dashed${advCount > 0 ? " is-active" : ""}`}
-            >
-              <Icons.SlidersHorizontal size={16} />
-              {t("Advanced filters")}
-              {advCount > 0 && (
-                <span className="bg-signal-blue text-white text-[11px] px-1.5 rounded-sm">
-                  {advCount}
-                </span>
+                  {statusOptions.map((opt) => (
+                    <button
+                      key={opt}
+                      onClick={resetToFirstPage(() => {
+                        setStatusFilter(opt);
+                        setShowFilterMenu(false);
+                      })}
+                      className="w-full text-left px-3 py-1.5 text-sm hover:bg-mist-50 text-ink-800"
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
               )}
+            </div>
+
+            {dateCol && (
+              <DateRangeFilter
+                label={dateCol.dateLabel || "Created At"}
+                value={dateRange}
+                onChange={resetToFirstPage(setDateRange)}
+              />
+            )}
+
+            {isLinkedTk && (
+              <button
+                onClick={() => setShowAdv((v) => !v)}
+                className={`cbx-chip is-dashed${advCount > 0 ? " is-active" : ""}`}
+              >
+                <Icons.SlidersHorizontal size={16} />
+                {t("Advanced filters")}
+                {advCount > 0 && (
+                  <span className="bg-signal-blue text-white text-[11px] px-1.5 rounded-sm">
+                    {advCount}
+                  </span>
+                )}
+              </button>
+            )}
+            <div className="flex-1" />
+            <button
+              onClick={async () => {
+                if (!pkgServerMode) {
+                  exportRowsToCSV(`${title}.csv`, columns, filteredRows);
+                  return;
+                }
+                // Only one page is in memory: fetch every package for the file.
+                const all = await fetchAllRows(
+                  ({ count, stable }) => {
+                    let qb = supabase
+                      .from("packages")
+                      .select("*", count ? { count: "exact" } : undefined);
+                    if (stageForThisPage)
+                      qb = qb.eq("status", stageForThisPage);
+                    qb = qb.order("created_at", { ascending: false });
+                    return stable ? qb.order("id", { ascending: false }) : qb;
+                  },
+                  { cap: FETCH_ALL_CAP },
+                );
+                if (all.error) {
+                  emitCBToast("err", "Export failed", all.error.message || "");
+                  return;
+                }
+                exportRowsToCSV(
+                  `${title}.csv`,
+                  columns,
+                  (all.data || []).map(decoratePackageRow),
+                );
+              }}
+              className="cbx-chip"
+            >
+              <Download size={16} />
+              {t("Export")}
             </button>
-          )}
-          <div className="flex-1" />
-          <button
-            onClick={async () => {
-              if (!pkgServerMode) {
-                exportRowsToCSV(`${title}.csv`, columns, filteredRows);
-                return;
-              }
-              // Only one page is in memory: fetch every package for the file.
-              const all = await fetchAllRows(
-                ({ count, stable }) => {
-                  let qb = supabase
-                    .from("packages")
-                    .select("*", count ? { count: "exact" } : undefined);
-                  if (stageForThisPage) qb = qb.eq("status", stageForThisPage);
-                  qb = qb.order("created_at", { ascending: false });
-                  return stable ? qb.order("id", { ascending: false }) : qb;
-                },
-                { cap: FETCH_ALL_CAP },
-              );
-              if (all.error) {
-                emitCBToast("err", "Export failed", all.error.message || "");
-                return;
-              }
-              exportRowsToCSV(
-                `${title}.csv`,
-                columns,
-                (all.data || []).map(decoratePackageRow),
-              );
-            }}
-            className="cbx-chip"
-          >
-            <Download size={16} />
-            {t("Export")}
-          </button>
-        </div>
+          </div>
+        )}
         {isLinkedTk && showAdv && (
           <AdvancedTkFilters
             adv={adv}
@@ -23287,7 +23705,7 @@ function ListPage({
             emitCBToast(
               "ok",
               "Customer created",
-              `${row?.customer_code || ""} ${row?.name || ""} អាចចូលប្រើដោយ Phone + Password បានភ្លាម។`,
+              `${fmtCustomerId(row?.customer_code) || ""} ${row?.name || ""} អាចចូលប្រើដោយ Phone + Password បានភ្លាម។`,
             );
             return refetch();
           }}
@@ -26435,7 +26853,7 @@ const LOOKUP_FIELDS = [
 // Only used for old links like /shipment-lookup?q=... that carry no field.
 function inferLookupField(q) {
   const v = String(q || "").trim();
-  if (/^KH-/i.test(v)) return "customer_id";
+  if (/^KH-/i.test(v) || /^\d{1,6}$/.test(v)) return "customer_id";
   if (/^(THN|CN|JZE|AIR)/i.test(v)) return "order_id";
   return "tk";
 }
@@ -28660,7 +29078,7 @@ function labelPageHtml(d, codes, brand = {}) {
   </div>
   <div class="top">
     <div class="lf">
-      <div><div class="cap">ID:</div><div class="uid">${e(d.customerId)}</div>
+      <div><div class="cap">ID:</div><div class="uid">${e(fmtCustomerId(d.customerId))}</div>
         <div class="oid"><div class="cap">Order ID</div><div class="ov">${e(d.orderNo)}</div></div></div>
       <div>${brand.showBarcode !== false ? `<div class="bar">${codes.barcode}</div>` : ""}<div class="tk">TK: ${e(d.tk)}</div></div>
     </div>
@@ -29070,7 +29488,7 @@ function CustomerDetailsCard({ customerId }) {
             {info.name || "—"}
           </div>
           <div className="text-xs text-ink-600/50">
-            {info.customer_code || "—"}
+            {fmtCustomerId(info.customer_code) || "—"}
           </div>
         </div>
         <span className="ml-auto shrink-0 bg-mist-100 text-ink-700 text-[11px] font-medium px-2 py-1 rounded-md whitespace-nowrap">
@@ -29837,10 +30255,12 @@ function DetailCustomerChip({ name, code, linkable = true, onCopyCode }) {
               title="Open customer detail"
               className="shrink-0 font-semibold text-blue-600 hover:underline"
             >
-              {code}
+              {fmtCustomerId(code)}
             </Link>
           ) : (
-            <span className="shrink-0 font-semibold text-blue-600">{code}</span>
+            <span className="shrink-0 font-semibold text-blue-600">
+              {fmtCustomerId(code)}
+            </span>
           )}
           {onCopyCode && (
             <button
@@ -31199,11 +31619,13 @@ function PackageDetail() {
             code={custId}
             linkable={!isCustomerRole}
             onCopyCode={async () => {
-              const ok = await cnCopyText(custId);
+              const ok = await cnCopyText(fmtCustomerId(custId));
               emitCBToast(
                 ok ? "ok" : "err",
                 ok ? "Customer ID copied" : "Copy failed",
-                ok ? custId : "Please select and copy the text manually.",
+                ok
+                  ? fmtCustomerId(custId)
+                  : "Please select and copy the text manually.",
               );
             }}
           />
@@ -31486,7 +31908,7 @@ function PackageDetail() {
                           k="Customer"
                           v={
                             custId && custId !== "—"
-                              ? `${custName} (${custId})`
+                              ? `${custName} (${fmtCustomerId(custId)})`
                               : custName
                           }
                         />
@@ -31898,7 +32320,7 @@ function OrderDetail() {
               {data.id}
             </h1>
             <p className="text-sm text-ink-600/55 mt-0.5">
-              UID: {data.uid} · {customerId} · {customerName}
+              UID: {data.uid} · {fmtCustomerId(customerId)} · {customerName}
             </p>
           </div>
         </div>
@@ -32318,6 +32740,18 @@ const tkKey = (tk) =>
     .toLowerCase();
 
 // Customer ID + name of a TK, from the existing TK → Order → Customer data.
+// Customer IDs are shown as plain numbers (DRSB-style): KH-000030 -> 30.
+// Display only — the stored value (and every lookup key) stays untouched.
+const CUSTOMER_CODE_RE = /\bKH-0*(\d+)\b/gi;
+function fmtCustomerText(v) {
+  return typeof v === "string" && v.includes("-")
+    ? v.replace(CUSTOMER_CODE_RE, "$1")
+    : v;
+}
+function fmtCustomerId(v) {
+  return fmtCustomerText(v == null ? v : String(v));
+}
+
 function tkCustomerParts(p) {
   const raw = String(p.customer || "");
   const parts = raw.split(" · ");
@@ -34120,7 +34554,7 @@ function AddTkModal({ open, container, store, packages, onClose, onDone }) {
                         <span className="font-medium text-ink-900">{p.tk}</span>
                         <span className="text-ink-600/60">
                           {" "}
-                          · {p.order_no} · {cu.id} · {cu.name}
+                          · {p.order_no} · {fmtCustomerId(cu.id)} · {cu.name}
                         </span>
                       </div>
                       <button
@@ -34183,7 +34617,8 @@ function AddTkModal({ open, container, store, packages, onClose, onDone }) {
                       {x.pkg && (
                         <span className="text-ink-600/65">
                           {" "}
-                          · Order {x.pkg.order_no || "—"} · {cu.id} · {cu.name}
+                          · Order {x.pkg.order_no || "—"} ·{" "}
+                          {fmtCustomerId(cu.id)} · {cu.name}
                         </span>
                       )}
                     </div>
@@ -39113,7 +39548,7 @@ const CustomerApp = (() => {
       {children}
     </div>
   );
-  const Top = ({ title, back, right }) => {
+  const Top = ({ title, back, right, left }) => {
     const nav = useNavigate();
     return (
       <header
@@ -39129,6 +39564,7 @@ const CustomerApp = (() => {
             <ArrowLeft size={20} />
           </button>
         )}
+        {left}
         <h1 className="font-bold text-lg flex-1">{title}</h1>
         {right}
       </header>
@@ -42563,9 +42999,9 @@ const CustomerApp = (() => {
       ["City", wh.city],
       ["District", wh.district],
       ["Detailed Address", wh.address],
-      ["Customer Code", wh.customer_code],
+      ["Customer Code", fmtCustomerId(wh.customer_code)],
     ];
-    const text = `${wh.recipient_name}\n${wh.phone}\n${wh.province} ${wh.city} ${wh.district}\n${wh.address}\nCustomer Code: ${wh.customer_code}`;
+    const text = `${wh.recipient_name}\n${wh.phone}\n${wh.province} ${wh.city} ${wh.district}\n${wh.address}\nCustomer Code: ${fmtCustomerId(wh.customer_code)}`;
     return (
       <>
         <Top title={tr("My China Warehouse", "ឃ្លាំងចិនរបស់ខ្ញុំ")} back />
@@ -42607,7 +43043,7 @@ const CustomerApp = (() => {
           <Btn
             ghost
             onClick={() => {
-              copy(wh.customer_code);
+              copy(fmtCustomerId(wh.customer_code));
               say(tr("Customer code copied", "បានចម្លងកូដអតិថិជន"));
             }}
           >
@@ -42617,8 +43053,8 @@ const CustomerApp = (() => {
           <p className="flex gap-2 text-xs text-slate-600 bg-blue-50 rounded-xl p-3">
             <Info size={16} className="shrink-0 text-blue-500" />
             {tr(
-              `Copy this address and send it to your Chinese supplier so they can ship your goods to our China warehouse. Please use your Customer Code (${wh.customer_code}) when shipping.`,
-              `ចម្លងអាសយដ្ឋាននេះ ហើយផ្ញើទៅអ្នកផ្គត់ផ្គង់ចិនរបស់អ្នក ដើម្បីឱ្យគេដឹកទំនិញមកឃ្លាំងចិនរបស់យើង។ សូមប្រើកូដអតិថិជន (${wh.customer_code}) ពេលបញ្ជូនទំនិញ។`,
+              `Copy this address and send it to your Chinese supplier so they can ship your goods to our China warehouse. Please use your Customer Code (${fmtCustomerId(wh.customer_code)}) when shipping.`,
+              `ចម្លងអាសយដ្ឋាននេះ ហើយផ្ញើទៅអ្នកផ្គត់ផ្គង់ចិនរបស់អ្នក ដើម្បីឱ្យគេដឹកទំនិញមកឃ្លាំងចិនរបស់យើង។ សូមប្រើកូដអតិថិជន (${fmtCustomerId(wh.customer_code)}) ពេលបញ្ជូនទំនិញ។`,
             )}
           </p>
         </div>
@@ -43238,6 +43674,249 @@ const CustomerApp = (() => {
     );
   }
 
+  // ---------- My QR (company name + Customer ID, DRSB-style) ----------
+  // Full-screen dark overlay → white card with a rounded-dot QR of the
+  // Customer ID, the company name (Admin → Settings → Company Profile) in the
+  // centre, "@name" and "UID · <id>" underneath. Tap the ID to copy it.
+  function MyQrSheet({ onClose }) {
+    const { me, tr } = useApp();
+    const brand = useSystemSettings()?.company;
+    const brandName = (brand?.name || "Cargo Bridge").trim();
+    const id = String(fmtCustomerId(me.customer_code) || "").trim();
+    const [qr, setQr] = useState(null);
+
+    useEffect(() => {
+      let alive = true;
+      if (!id) return undefined;
+      import("qrcode")
+        .then(({ default: QRCode }) => {
+          let q;
+          try {
+            // Fixed small version keeps the dots big enough for the centre label.
+            q = QRCode.create(id, { errorCorrectionLevel: "H", version: 3 });
+          } catch {
+            q = QRCode.create(id, { errorCorrectionLevel: "H" });
+          }
+          const n = q.modules.size;
+          const cells = [];
+          for (let r = 0; r < n; r++)
+            for (let c = 0; c < n; c++)
+              if (q.modules.get(r, c)) cells.push([r, c]);
+          if (alive) setQr({ n, cells });
+        })
+        .catch(() => alive && setQr({ n: 0, cells: [] }));
+      return () => {
+        alive = false;
+      };
+    }, [id]);
+
+    useEffect(() => {
+      const onKey = (e) => e.key === "Escape" && onClose();
+      window.addEventListener("keydown", onKey);
+      return () => window.removeEventListener("keydown", onKey);
+    }, [onClose]);
+
+    // The app's normal toast sits under this full-screen overlay, so the
+    // "copied" confirmation is drawn here instead.
+    const [copied, setCopied] = useState(false);
+    useEffect(() => {
+      if (!copied) return undefined;
+      const t = setTimeout(() => setCopied(false), 1800);
+      return () => clearTimeout(t);
+    }, [copied]);
+    // Lock page scroll behind the overlay.
+    useEffect(() => {
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      return () => {
+        document.body.style.overflow = prev;
+      };
+    }, []);
+    const copyId = async () => {
+      let ok = true;
+      try {
+        await navigator.clipboard.writeText(id);
+      } catch {
+        ok = await cnCopyText(id);
+      }
+      if (ok) setCopied(true);
+    };
+
+    const n = qr?.n || 0;
+    const halfW = Math.round(n * 0.2); // centre label box (modules)
+    const halfH = Math.round(n * 0.1);
+    const inFinder = (r, c) =>
+      (r < 8 && c < 8) || (r < 8 && c >= n - 8) || (r >= n - 8 && c < 8);
+    const inLabel = (r, c) =>
+      Math.abs(c + 0.5 - n / 2) <= halfW && Math.abs(r + 0.5 - n / 2) <= halfH;
+    const fs = Math.min(
+      halfH * 1.3,
+      (halfW * 2 * 0.86) / (Math.max(brandName.length, 1) * 0.6),
+    );
+
+    // Portal to <body>: a transformed ancestor (pull-to-refresh) would offset a
+    // fixed overlay and leave a white strip at the top, and the customer theme
+    // would recolour the white card in dark mode.
+    return createPortal(
+      <div
+        role="dialog"
+        aria-modal="true"
+        onClick={onClose}
+        className="fixed inset-x-0 top-0 z-[300] flex h-[100dvh] items-center justify-center px-6 text-white"
+        style={{
+          ...FONT,
+          background:
+            "radial-gradient(circle at 50% 46%, rgba(244,124,32,.28), rgba(244,124,32,0) 58%), #0b0b0d",
+        }}
+      >
+        {copied && (
+          <div
+            role="status"
+            className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold text-slate-900 shadow-lg"
+            style={{
+              backgroundColor: "#fff",
+              top: "calc(max(1.25rem, env(safe-area-inset-top)) + 6px)",
+            }}
+          >
+            <Icons.CheckCircle2 size={18} className="text-emerald-600" />
+            {tr("Customer ID copied", "បានចម្លង Customer ID")}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose();
+          }}
+          aria-label={tr("Close", "បិទ")}
+          className="absolute left-5 w-11 h-11 rounded-full bg-white/25 active:bg-white/40 grid place-items-center"
+          style={{ top: "max(1.25rem, env(safe-area-inset-top))" }}
+        >
+          <Icons.X size={22} />
+        </button>
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="rounded-[32px] px-7 pt-7 pb-6 w-full max-w-[340px] text-center text-slate-900"
+          style={{
+            background: "linear-gradient(180deg,#ffffff 0%,#fff6ec 100%)",
+            border: "1px solid rgba(244,124,32,.28)",
+            boxShadow:
+              "0 30px 80px -20px rgba(244,124,32,.55), 0 0 0 6px rgba(255,255,255,.04)",
+          }}
+        >
+          <div className="aspect-square w-full">
+            {n > 0 ? (
+              <svg
+                viewBox={`0 0 ${n} ${n}`}
+                className="w-full h-full block"
+                role="img"
+                aria-label={`${brandName} · ${id}`}
+              >
+                <defs>
+                  <linearGradient
+                    id="jzQrGrad"
+                    gradientUnits="userSpaceOnUse"
+                    x1="0"
+                    y1="0"
+                    x2={n}
+                    y2={n}
+                  >
+                    <stop offset="0" stopColor="#ff8a2b" />
+                    <stop offset="0.55" stopColor="#f47c20" />
+                    <stop offset="1" stopColor="#d4560a" />
+                  </linearGradient>
+                </defs>
+                {[
+                  [0, 0],
+                  [0, n - 7],
+                  [n - 7, 0],
+                ].map(([r0, c0]) => (
+                  <g key={`${r0}-${c0}`}>
+                    <rect
+                      x={c0 + 0.5}
+                      y={r0 + 0.5}
+                      width={6}
+                      height={6}
+                      rx={1.9}
+                      fill="none"
+                      stroke="url(#jzQrGrad)"
+                      strokeWidth={1}
+                    />
+                    <rect
+                      x={c0 + 2}
+                      y={r0 + 2}
+                      width={3}
+                      height={3}
+                      rx={0.95}
+                      fill="url(#jzQrGrad)"
+                    />
+                  </g>
+                ))}
+                {qr.cells
+                  .filter(([r, c]) => !inFinder(r, c) && !inLabel(r, c))
+                  .map(([r, c]) => (
+                    <rect
+                      key={`${r}-${c}`}
+                      x={c}
+                      y={r}
+                      width={1}
+                      height={1}
+                      rx={0.32}
+                      fill="url(#jzQrGrad)"
+                    />
+                  ))}
+                <rect
+                  x={n / 2 - halfW + 0.3}
+                  y={n / 2 - halfH + 0.3}
+                  width={2 * halfW - 0.6}
+                  height={2 * halfH - 0.6}
+                  rx={halfH - 0.3}
+                  fill="url(#jzQrGrad)"
+                />
+                <text
+                  x={n / 2}
+                  y={n / 2}
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  fontSize={fs}
+                  fontWeight={900}
+                  fill="#fff"
+                >
+                  {brandName}
+                </text>
+              </svg>
+            ) : (
+              <div className="w-full h-full grid place-items-center text-slate-400 text-sm">
+                {id ? <AuthSpinner size={22} /> : "—"}
+              </div>
+            )}
+          </div>
+          <p className="mt-5 font-bold text-base truncate">@{me.name}</p>
+          {id && (
+            <button
+              type="button"
+              onClick={copyId}
+              aria-label={tr("Copy Customer ID", "ចម្លង Customer ID")}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-full px-4 py-1.5 text-base font-bold active:opacity-60"
+              style={{
+                color: "#d4560a",
+                backgroundColor: "rgba(244,124,32,.12)",
+              }}
+            >
+              {tr("Customer ID", "លេខសម្គាល់អតិថិជន")} · {id}
+              {copied ? (
+                <Icons.Check size={15} className="text-emerald-600" />
+              ) : (
+                <Icons.Copy size={15} />
+              )}
+            </button>
+          )}
+        </div>
+      </div>,
+      document.body,
+    );
+  }
+
   // ---------- Edit profile sheet (name + email) ----------
   function EditProfileSheet({ onClose }) {
     const { me, tr, say, saveProfile } = useApp();
@@ -43689,6 +44368,7 @@ const CustomerApp = (() => {
     const fileRef = useRef(null);
     const [editOpen, setEditOpen] = useState(false);
     const [photoOpen, setPhotoOpen] = useState(false);
+    const [qrOpen, setQrOpen] = useState(false);
     const [avatarBusy, setAvatarBusy] = useState(false);
     const [imgBroken, setImgBroken] = useState(false);
     useEffect(() => setImgBroken(false), [me.avatar_url]);
@@ -43793,6 +44473,16 @@ const CustomerApp = (() => {
       <>
         <Top
           title={tr("Profile", "គណនី")}
+          left={
+            <button
+              type="button"
+              onClick={() => setQrOpen(true)}
+              aria-label={tr("My QR code", "QR របស់ខ្ញុំ")}
+              className="w-11 h-11 -ml-1 grid place-items-center rounded-full bg-white/15 active:bg-white/30 transition-colors"
+            >
+              <Icons.QrCode size={20} />
+            </button>
+          }
           right={
             <button
               type="button"
@@ -43853,7 +44543,7 @@ const CustomerApp = (() => {
             <p className="font-bold text-xl mt-3">{me.name}</p>
             <p className="text-xs text-slate-500 mt-0.5">
               {tr("Customer ID", "លេខសម្គាល់អតិថិជន")}:{" "}
-              {me.customer_code || "—"}
+              {fmtCustomerId(me.customer_code) || "—"}
             </p>
           </div>
           <Btn ghost onClick={() => setEditOpen(true)}>
@@ -43861,6 +44551,7 @@ const CustomerApp = (() => {
             {tr("Edit Profile", "កែប្រែប្រវត្តិរូប")}
           </Btn>
           {editOpen && <EditProfileSheet onClose={() => setEditOpen(false)} />}
+          {qrOpen && <MyQrSheet onClose={() => setQrOpen(false)} />}
           <Card className="divide-y divide-slate-100">
             {info.map(([k, v]) => (
               <div
@@ -49286,7 +49977,7 @@ function CustomerRoleRow({ cust, canEdit, onSaved }) {
     emitCBToast(
       "ok",
       "Customer Role updated",
-      `${cust.customer_code} → ${next}`,
+      `${fmtCustomerId(cust.customer_code)} → ${next}`,
     );
   }
   return (
@@ -52240,7 +52931,7 @@ function airOrderLocalWrite(rows) {
   lsWrite(AIR_ORDER_LS_KEY, rows);
 }
 function airOrderCustomerLabel(c) {
-  return c ? `${c.customer_code || c.id} · ${c.name || ""}` : "";
+  return c ? `${fmtCustomerId(c.customer_code || c.id)} · ${c.name || ""}` : "";
 }
 function AirStatusBadge({ status }) {
   const label = canonicalAirStatus(status);
@@ -53701,7 +54392,7 @@ function AirOrderCreateModal({ open, onClose, onSaved }) {
             {customer ? (
               <div className="flex items-center justify-between rounded-xl border border-blue-200 bg-blue-50/60 px-3 py-2.5 text-sm">
                 <span className="min-w-0">
-                  <b>{customer.customer_code}</b>
+                  <b>{fmtCustomerId(customer.customer_code)}</b>
                   <span className="text-slate-500"> · {customer.name}</span>
                   {customer.phone && (
                     <span className="block text-xs text-slate-400 mt-0.5">
@@ -53750,7 +54441,7 @@ function AirOrderCreateModal({ open, onClose, onSaved }) {
                         >
                           <div className="flex items-center justify-between gap-3">
                             <b className="text-sm text-slate-900">
-                              {c.customer_code}
+                              {fmtCustomerId(c.customer_code)}
                             </b>
                             {c.phone && (
                               <span className="text-xs text-slate-400">
@@ -56896,7 +57587,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
         {customer ? (
           <div className="flex items-center justify-between rounded-xl border border-blue-200 bg-blue-50/60 px-3 py-2.5 text-sm">
             <span className="min-w-0">
-              <b>{customer.customer_code}</b>
+              <b>{fmtCustomerId(customer.customer_code)}</b>
               <span className="text-slate-500"> · {customer.name}</span>
               {customer.phone && (
                 <span className="block text-xs text-slate-400 mt-0.5">
@@ -56944,7 +57635,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
                     >
                       <div className="flex items-center justify-between gap-3">
                         <b className="text-sm text-slate-900">
-                          {c.customer_code}
+                          {fmtCustomerId(c.customer_code)}
                         </b>
                         {c.phone && (
                           <span className="text-xs text-slate-400">
@@ -61637,7 +62328,7 @@ function CnPrintLabelModalLoader({ row, tk, onClose }) {
     };
   }, [tk, row?.order_id]);
   const m = String(row?.customer || "").match(
-    /^([A-Za-z]{1,8}-\d+)\s*·\s*(.+)$/,
+    /^((?:[A-Za-z]{1,8}-)?\d+)\s*·\s*(.+)$/,
   );
   return (
     <PrintLabelModal
@@ -62609,7 +63300,7 @@ function CnOrderDetailPage() {
   }
   const customerMatch = String(row.customer || "")
     .trim()
-    .match(/^([A-Za-z]{1,8}-\d+)\s*·\s*(.+)$/);
+    .match(/^((?:[A-Za-z]{1,8}-)?\d+)\s*·\s*(.+)$/);
   const customerName = customerMatch ? customerMatch[2] : row.customer || "—";
   const customerCode = customerMatch ? customerMatch[1] : "";
   const purchaserInitials = String(row.purchased_by || "")
@@ -62981,7 +63672,9 @@ function CnOrderDetailPage() {
             <DetailCustomerChip
               name={customerName}
               code={customerCode}
-              onCopyCode={() => copyDetailText(customerCode, "Customer ID")}
+              onCopyCode={() =>
+                copyDetailText(fmtCustomerId(customerCode), "Customer ID")
+              }
             />
           </div>
           <div className="cn-detail-actions">
@@ -63496,7 +64189,7 @@ function CnOrderDetailPage() {
                           to={`/customers/${encodeURIComponent(customerCode)}`}
                           className="mt-1 block text-xs text-blue-600 hover:underline"
                         >
-                          {customerCode}
+                          {fmtCustomerId(customerCode)}
                         </Link>
                       )}
                     </div>
@@ -69868,7 +70561,7 @@ function TopUpModal({ customer, onClose, onDone }) {
             <div className="min-w-0">
               <div className="truncate text-[15px] font-bold text-slate-900">
                 {customer.customer_code
-                  ? `${customer.customer_code} · ${customer.name}`
+                  ? `${fmtCustomerId(customer.customer_code)} · ${customer.name}`
                   : customer.name}
               </div>
               {customer.phone && (
@@ -70113,7 +70806,7 @@ function shipmentInvoiceHtml({ company, customer, rows, issuedBy, when }) {
 .top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;margin-bottom:22px}.logo img{max-height:60px;max-width:200px;object-fit:contain}.logo b{font-size:20px}.top h1{font-size:22px;font-weight:600;margin:0;text-align:center}.meta{text-align:right;line-height:1.55}.cust{line-height:1.8;margin-bottom:16px;font-size:15px}
 table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:12px}th,td{border:1px solid #9aa3b5;padding:8px 5px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f1f3f6;font-weight:700}.total{text-align:right;font-weight:700;padding-right:14px}.sum{font-weight:700}.sign{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;margin-top:34px;font-size:14px;font-weight:600}.sign div{padding-bottom:48px}.line{border-top:1px solid #d5d9e0;margin-top:18px}
 </style></head><body><div class="top"><div class="logo">${logo ? `<img src="${e(logo)}" alt="">` : `<b>${e(company?.name || "")}</b>`}</div><h1>Shipment Invoice</h1><div class="meta"><div><b>Date:</b> ${e(when)}</div><div><b>Issued By:</b> ${e(issuedBy)}</div></div></div>
-<div class="cust"><div><b>Customer ID:</b> ${e(customer.code)}</div><div><b>Customer Name:</b> ${e(customer.name)}</div><div><b>Phone Number:</b> ${e(customer.phone)}</div><div><b>Total Order:</b> ${rows.length}</div></div>
+<div class="cust"><div><b>Customer ID:</b> ${e(fmtCustomerId(customer.code))}</div><div><b>Customer Name:</b> ${e(customer.name)}</div><div><b>Phone Number:</b> ${e(customer.phone)}</div><div><b>Total Order:</b> ${rows.length}</div></div>
 <table><colgroup><col style="width:6%"><col style="width:20%"><col style="width:26%"><col style="width:10%"><col style="width:19%"><col style="width:19%"></colgroup><tr><th>#</th><th>Order ID</th><th>Tracking</th><th>Qty</th><th>Shipping Fee (USD)</th><th>Total (USD)</th></tr>
 ${body}<tr><td colspan="5" class="total">Total Amount</td><td class="sum">${usd(grand)}</td></tr></table><div class="sign"><div>Customer Signature</div><div>Employee Signature</div><div>Authorized Signature</div></div><div class="line"></div></body></html>`;
 }
@@ -70285,7 +70978,7 @@ function airInvoiceHtml({ company, customer, rows, issuedBy, when }) {
   <div class="meta"><div><b>Date:</b> ${e(when)}</div><div><b>Issued By:</b> ${e(issuedBy)}</div></div>
 </div>
 <div class="cust">
-  <div><b>Customer ID:</b> ${e(customer.code)}</div>
+  <div><b>Customer ID:</b> ${e(fmtCustomerId(customer.code))}</div>
   <div><b>Customer Name:</b> ${e(customer.name)}</div>
   <div><b>Phone Number:</b> ${e(customer.phone)}</div>
   <div><b>Total Order:</b> ${rows.length}</div>
@@ -70727,7 +71420,7 @@ function cnInvoiceHtml({
 .top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;margin-bottom:22px}.logo img{max-height:60px;max-width:200px;object-fit:contain}.logo b{font-size:20px}.top h1{font-size:22px;font-weight:600;margin:0;text-align:center}.meta{text-align:right;line-height:1.55}.cust{line-height:1.8;margin-bottom:16px;font-size:15px}
 table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:12px}th,td{border:1px solid #9aa3b5;padding:8px 5px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f1f3f6;font-weight:700}.left{text-align:left}.total{text-align:right;font-weight:700;padding-right:14px}.sum{font-weight:700}.sign{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;margin-top:34px;font-size:14px;font-weight:600}.sign div{padding-bottom:48px}.line{border-top:1px solid #d5d9e0;margin-top:18px}
 </style></head><body><div class="top"><div class="logo">${logo ? `<img src="${e(logo)}" alt="">` : `<b>${e(company?.name || "")}</b>`}</div><h1>CN Order Invoice</h1><div class="meta"><div><b>Date:</b> ${e(when)}</div><div><b>Issued By:</b> ${e(issuedBy)}</div></div></div>
-<div class="cust"><div><b>Customer ID:</b> ${e(customer.code)}</div><div><b>Customer Name:</b> ${e(customer.name)}</div><div><b>Phone Number:</b> ${e(customer.phone)}</div><div><b>Total Order:</b> ${orders.length}</div></div>
+<div class="cust"><div><b>Customer ID:</b> ${e(fmtCustomerId(customer.code))}</div><div><b>Customer Name:</b> ${e(customer.name)}</div><div><b>Phone Number:</b> ${e(customer.phone)}</div><div><b>Total Order:</b> ${orders.length}</div></div>
 <table><colgroup>${widths.map((w) => `<col style="width:${w}%">`).join("")}</colgroup><tr>${head}</tr>
 ${rowsHtml}<tr><td colspan="${widths.length - 1}" class="total">Total Amount</td><td class="sum">${usd(grand)}</td></tr></table><div class="sign"><div>Customer Signature</div><div>Employee Signature</div><div>Authorized Signature</div></div><div class="line"></div></body></html>`;
 }
@@ -71107,7 +71800,9 @@ function RequestShipPayModal({
           cust ? (
             <>
               {cust.name}{" "}
-              <span className="text-signal-blue">({cust.customer_code})</span>
+              <span className="text-signal-blue">
+                ({fmtCustomerId(cust.customer_code)})
+              </span>
             </>
           ) : (
             pkg.customer || "—"
@@ -71951,7 +72646,7 @@ function CustomerAddressCreateModal({ customer, warehouses, onClose, onDone }) {
   return (
     <AppModal
       title="Create Customer Location"
-      subtitle={`${customer.customer_code} · ${customer.name}`}
+      subtitle={`${fmtCustomerId(customer.customer_code)} · ${customer.name}`}
       maxW="max-w-2xl"
       onClose={onClose}
       onSubmit={submit}
@@ -72166,7 +72861,7 @@ function CustomerAddressEditModal({
   return (
     <AppModal
       title="Edit Customer Location"
-      subtitle={`${customer.customer_code} · ${customer.name}`}
+      subtitle={`${fmtCustomerId(customer.customer_code)} · ${customer.name}`}
       maxW="max-w-2xl"
       onClose={onClose}
       onSubmit={submit}
@@ -72338,7 +73033,7 @@ function CustomerWarehouseRouteModal({
               Edit Warehouse Route
             </div>
             <div className="text-xs text-slate-500 mt-0.5">
-              {customer.customer_code} · {customer.name}
+              {fmtCustomerId(customer.customer_code)} · {customer.name}
             </div>
           </div>
           <button
@@ -73139,7 +73834,11 @@ function CustomerQuickView({ row, onClose }) {
             onClick={() => {
               try {
                 navigator.clipboard?.writeText(String(row.id));
-                emitCBToast("ok", "Customer ID copied", String(row.id));
+                emitCBToast(
+                  "ok",
+                  "Customer ID copied",
+                  fmtCustomerId(String(row.id)),
+                );
               } catch (_e) {
                 /* clipboard blocked */
               }
@@ -74041,7 +74740,7 @@ function CustomerDetailPage() {
                       images={[
                         {
                           url: cust.avatar_url,
-                          name: `${cust.name || cust.customer_code} (${cust.customer_code})`,
+                          name: `${cust.name || fmtCustomerId(cust.customer_code)} (${fmtCustomerId(cust.customer_code)})`,
                         },
                       ]}
                       onClose={() => setAvatarViewer(false)}
@@ -74058,7 +74757,7 @@ function CustomerDetailPage() {
               )}
               <div className="min-w-0">
                 <div className="text-xs font-medium text-slate-500">
-                  {cust.customer_code}
+                  {fmtCustomerId(cust.customer_code)}
                 </div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-2">
                   <span className="truncate text-lg font-bold text-slate-900">
@@ -74184,7 +74883,7 @@ function CustomerDetailPage() {
               <CdRow
                 label="Customer ID"
                 icon="Hash"
-                value={cust.customer_code}
+                value={fmtCustomerId(cust.customer_code)}
               />
               <CdRow
                 label="Registered"
@@ -74446,7 +75145,7 @@ function WalletTopUpCreateModal({ onClose, onDone, initialCustomer = null }) {
     emitCBToast(
       "ok",
       "Top up successful",
-      `${money(amt)} added to ${customer.name} (${customer.customer_code}).${proof?.ok ? ` ${proof.ok} reference image${proof.ok > 1 ? "s" : ""} attached.` : ""}`,
+      `${money(amt)} added to ${customer.name} (${fmtCustomerId(customer.customer_code)}).${proof?.ok ? ` ${proof.ok} reference image${proof.ok > 1 ? "s" : ""} attached.` : ""}`,
     );
     if (proof && proof.error)
       emitCBToast("err", "Reference images not saved", proof.error);
@@ -74485,7 +75184,7 @@ function WalletTopUpCreateModal({ onClose, onDone, initialCustomer = null }) {
               <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-bold text-slate-900">
-                    {customer.customer_code} · {customer.name}
+                    {fmtCustomerId(customer.customer_code)} · {customer.name}
                   </div>
                   <div className="text-xs font-medium text-slate-500">
                     {customer.phone || "No phone"} · Balance{" "}
@@ -74574,7 +75273,7 @@ function WalletTopUpCreateModal({ onClose, onDone, initialCustomer = null }) {
                       >
                         <span className="min-w-0">
                           <span className="block truncate text-sm font-bold text-slate-900">
-                            {c.customer_code} · {c.name}
+                            {fmtCustomerId(c.customer_code)} · {c.name}
                           </span>
                           <span className="block text-xs font-medium text-slate-400">
                             {c.phone || "No phone"}
@@ -74772,7 +75471,7 @@ function ReverseTopUpModal({ row, onClose, onDone }) {
       <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-slate-700">
         <b>{amtOk ? money(amt) : "—"}</b> will be deducted from{" "}
         <b>
-          {row._c?.customer_code} · {row._c?.name}
+          {fmtCustomerId(row._c?.customer_code)} · {row._c?.name}
         </b>
         . The original top up of <b>{money(total)}</b>
         {already > 0 && <> (already reversed {money(already)})</>} stays in the
@@ -74919,7 +75618,7 @@ function LoyaltyCustomerCell({ c }) {
         to={`/customers/${encodeURIComponent(c.customer_code)}`}
         className="font-semibold text-blue-700 hover:underline"
       >
-        {c.customer_code}
+        {fmtCustomerId(c.customer_code)}
       </Link>
       <div className="truncate text-xs text-slate-500">{c.name}</div>
     </div>
@@ -75426,7 +76125,7 @@ function LoyaltyAdjustModal({ initialCustomer = null, onClose, onDone }) {
     emitCBToast(
       "ok",
       "Points updated",
-      `${customer.name} (${customer.customer_code}): ${n > 0 ? "+" : ""}${fmtPts(n)} points · balance ${fmtPts(data?.balance)}.`,
+      `${customer.name} (${fmtCustomerId(customer.customer_code)}): ${n > 0 ? "+" : ""}${fmtPts(n)} points · balance ${fmtPts(data?.balance)}.`,
     );
     onDone();
   }
@@ -75438,7 +76137,7 @@ function LoyaltyAdjustModal({ initialCustomer = null, onClose, onDone }) {
         {customer ? (
           <div className="mt-1 flex items-center justify-between rounded-xl border border-blue-200 bg-blue-50 px-3 py-2.5">
             <div className="min-w-0 text-sm font-bold normal-case text-slate-900">
-              {customer.customer_code} · {customer.name}
+              {fmtCustomerId(customer.customer_code)} · {customer.name}
             </div>
             {!initialCustomer && (
               <button
@@ -75490,7 +76189,7 @@ function LoyaltyAdjustModal({ initialCustomer = null, onClose, onDone }) {
                     className="block w-full px-3 py-2.5 text-left hover:bg-slate-50"
                   >
                     <span className="block truncate text-sm font-bold normal-case text-slate-900">
-                      {c.customer_code} · {c.name}
+                      {fmtCustomerId(c.customer_code)} · {c.name}
                     </span>
                     <span className="block text-xs font-medium normal-case text-slate-400">
                       {c.phone || "No phone"}
@@ -76358,7 +77057,7 @@ function ServiceChargePage() {
             onClick={(e) => e.stopPropagation()}
             className="font-semibold text-blue-700 hover:underline"
           >
-            {r._c.customer_code}
+            {fmtCustomerId(r._c.customer_code)}
           </Link>
         ) : (
           "—"
@@ -76595,7 +77294,7 @@ function ServiceChargeActionModal({ row, mode, onClose, onDone }) {
       "ok",
       approve ? "Service charge approved" : "Service charge rejected",
       approve
-        ? `${money(amt)} deducted from ${row._c?.name || "customer"} (${row._c?.customer_code || ""}).`
+        ? `${money(amt)} deducted from ${row._c?.name || "customer"} (${fmtCustomerId(row._c?.customer_code) || ""}).`
         : "The request was rejected. No money was deducted.",
     );
     onDone();
@@ -76608,7 +77307,7 @@ function ServiceChargeActionModal({ row, mode, onClose, onDone }) {
       <div className="space-y-3 text-sm text-slate-700">
         <div className="rounded-lg bg-slate-50 px-3 py-2.5">
           <div className="font-bold text-slate-900">
-            {row._c?.customer_code} · {row._c?.name}
+            {fmtCustomerId(row._c?.customer_code)} · {row._c?.name}
           </div>
           <div className="text-xs text-slate-500">
             {row.service_type || "—"} · {money(amt)}
@@ -76735,7 +77434,7 @@ function ServiceChargeRequestModal({ onClose, onDone }) {
     emitCBToast(
       "ok",
       "Service charge requested",
-      `${money(amt)} for ${customer.name} (${customer.customer_code}) is waiting for approval.`,
+      `${money(amt)} for ${customer.name} (${fmtCustomerId(customer.customer_code)}) is waiting for approval.`,
     );
     onDone();
   }
@@ -76770,7 +77469,7 @@ function ServiceChargeRequestModal({ onClose, onDone }) {
             <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
               <div className="min-w-0">
                 <div className="truncate text-sm font-bold text-slate-900">
-                  {customer.customer_code} · {customer.name}
+                  {fmtCustomerId(customer.customer_code)} · {customer.name}
                 </div>
                 <div className="text-xs font-medium text-slate-500">
                   {customer.phone || "No phone"} · Balance{" "}
@@ -76859,7 +77558,7 @@ function ServiceChargeRequestModal({ onClose, onDone }) {
                     >
                       <span className="min-w-0">
                         <span className="block truncate text-sm font-bold text-slate-900">
-                          {c.customer_code} · {c.name}
+                          {fmtCustomerId(c.customer_code)} · {c.name}
                         </span>
                         <span className="block text-xs font-medium text-slate-400">
                           {c.phone || "No phone"}
@@ -77052,14 +77751,14 @@ function ServiceChargeDetailPage({ byTx = false }) {
           <div className="mb-5 flex flex-wrap items-center gap-4">
             <div>
               <div className="text-xs font-semibold text-slate-500">
-                UID: {row._c?.customer_code || "—"}
+                UID: {fmtCustomerId(row._c?.customer_code) || "—"}
               </div>
               {row._c?.customer_code ? (
                 <Link
                   to={`/customers/${encodeURIComponent(row._c.customer_code)}`}
                   className="text-lg font-bold text-blue-700 hover:underline"
                 >
-                  {row._c?.name || row._c.customer_code}
+                  {row._c?.name || fmtCustomerId(row._c.customer_code)}
                 </Link>
               ) : (
                 <div className="text-lg font-bold">—</div>
@@ -77251,7 +77950,7 @@ function WalletTopUpPage() {
             to={`/customers/${encodeURIComponent(r._c.customer_code)}`}
             className="font-semibold text-blue-700 hover:underline"
           >
-            {r._c.customer_code}
+            {fmtCustomerId(r._c.customer_code)}
           </Link>
         ) : (
           "—"
@@ -77363,7 +78062,7 @@ function WalletTopUpPage() {
                   to={`/customers/${encodeURIComponent(c.customer_code)}`}
                   className="font-bold text-blue-700 hover:underline"
                 >
-                  {c.customer_code}
+                  {fmtCustomerId(c.customer_code)}
                 </Link>
                 <span className="min-w-0 flex-1 truncate text-slate-700">
                   {c.name}
@@ -77927,7 +78626,7 @@ function WalletTopUpDetailPage() {
             </div>
             <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-xs text-slate-500">
               <span className="font-mono">
-                ID {cust?.customer_code || tx.customer_id}
+                ID {fmtCustomerId(cust?.customer_code) || tx.customer_id}
               </span>
               {cust?.phone && <span className="font-mono">{cust.phone}</span>}
             </div>
@@ -78616,7 +79315,12 @@ async function findCustomerForDelivery(raw) {
   let req = supabase.from("customers").select("id, customer_code, name, phone");
   if (isCode) req = req.ilike("customer_code", q);
   else if (digits.length >= 6) req = req.ilike("phone", `%${digits}%`);
-  else req = req.ilike("customer_code", `%${digits}`);
+  else {
+    const n = String(Number(digits));
+    req = req.or(
+      `customer_code.eq.${n},customer_code.eq.KH-${n.padStart(6, "0")}`,
+    );
+  }
   const { data, error } = await req.limit(1).maybeSingle();
   if (error || !data) return null;
   const { data: addrs } = await supabase
@@ -78800,7 +79504,7 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && search()}
-                placeholder="e.g. KH-000006 or 012345678"
+                placeholder="e.g. 6 or 012345678"
                 className={INPUT_CLS}
                 autoFocus
               />
@@ -78839,7 +79543,8 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
                   {found.customer.name}
                 </div>
                 <div className="text-xs text-ink-600/60">
-                  {found.customer.customer_code} · {found.customer.phone || "—"}
+                  {fmtCustomerId(found.customer.customer_code)} ·{" "}
+                  {found.customer.phone || "—"}
                 </div>
               </div>
 
@@ -79156,7 +79861,7 @@ function DeliveryDetailModal({ row, onClose }) {
         <div className="p-5 space-y-3 text-sm">
           <div>
             <span className="text-ink-600/60">Customer: </span>
-            {row.customer_name} ({row.customer_code})
+            {row.customer_name} ({fmtCustomerId(row.customer_code)})
           </div>
           <div>
             <span className="text-ink-600/60">Receiver: </span>
@@ -80285,7 +80990,9 @@ function DeliveryPage() {
       render: (r) => (
         <div className="leading-tight">
           <div className="font-medium">{r.customer_name}</div>
-          <div className="text-[11px] text-ink-600/55">{r.customer_code}</div>
+          <div className="text-[11px] text-ink-600/55">
+            {fmtCustomerId(r.customer_code)}
+          </div>
         </div>
       ),
     },
@@ -80849,7 +81556,9 @@ function CustomerRecoveryPage() {
                     <td className="px-4 py-3 font-semibold text-slate-800">
                       {r.name || "—"}
                     </td>
-                    <td className="px-4 py-3">{r.customer_code || "—"}</td>
+                    <td className="px-4 py-3">
+                      {fmtCustomerId(r.customer_code) || "—"}
+                    </td>
                     <td className="px-4 py-3">{r.phone || "—"}</td>
                     <td className="px-4 py-3">
                       <span
@@ -81037,7 +81746,9 @@ function CustomerRecoveryDetail({ row, user, onClose, onChanged }) {
         </div>
         <div className="space-y-4 px-5 py-4">
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Customer ID">{row.customer_code}</Field>
+            <Field label="Customer ID">
+              {fmtCustomerId(row.customer_code)}
+            </Field>
             <Field label="Status">{row.status}</Field>
             <Field label="Phone">{row.phone}</Field>
             <Field label="Email">{row.email}</Field>
@@ -81180,7 +81891,11 @@ function CustomerRestoreModal({ row, onClose, onDone }) {
         verification: v,
       });
       setResult(res);
-      emitCBToast("ok", "Restored", `${row.customer_code} was restored.`);
+      emitCBToast(
+        "ok",
+        "Restored",
+        `${fmtCustomerId(row.customer_code)} was restored.`,
+      );
     } catch (err) {
       setError(err.message || "Restore failed.");
     } finally {
@@ -81189,7 +81904,7 @@ function CustomerRestoreModal({ row, onClose, onDone }) {
   };
   return (
     <AppModal
-      title={`Restore ${row.customer_code}`}
+      title={`Restore ${fmtCustomerId(row.customer_code)}`}
       maxW="max-w-md"
       onClose={result ? onDone : onClose}
       busy={busy}
@@ -81281,7 +81996,11 @@ function CustomerPhoneChangeModal({ row, onClose, onDone, isSuper = false }) {
         new_number_check: nc,
       });
       setDone(true);
-      emitCBToast("ok", "Phone changed", `${row.customer_code} phone updated.`);
+      emitCBToast(
+        "ok",
+        "Phone changed",
+        `${fmtCustomerId(row.customer_code)} phone updated.`,
+      );
     });
   const request = () =>
     run(async () => {
@@ -81301,7 +82020,11 @@ function CustomerPhoneChangeModal({ row, onClose, onDone, isSuper = false }) {
         code: code.trim(),
       });
       setDone(true);
-      emitCBToast("ok", "Phone changed", `${row.customer_code} phone updated.`);
+      emitCBToast(
+        "ok",
+        "Phone changed",
+        `${fmtCustomerId(row.customer_code)} phone updated.`,
+      );
     });
   const primary = isSuper
     ? {
@@ -81325,7 +82048,7 @@ function CustomerPhoneChangeModal({ row, onClose, onDone, isSuper = false }) {
         };
   return (
     <AppModal
-      title={`Change phone · ${row.customer_code}`}
+      title={`Change phone · ${fmtCustomerId(row.customer_code)}`}
       maxW="max-w-md"
       onClose={done ? onDone : onClose}
       busy={busy}
@@ -84820,7 +85543,7 @@ function ShopOrdersPage() {
                     {o.customers?.name || "—"}
                   </div>
                   <div className="text-xs text-slate-400">
-                    {o.customers?.customer_code}
+                    {fmtCustomerId(o.customers?.customer_code)}
                   </div>
                 </td>
                 <td className="px-4 py-3">
@@ -84957,7 +85680,7 @@ function shopOrderInvoiceHtml({ company, order, items, issuedBy, when }) {
 .top{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;margin-bottom:22px}.logo img{max-height:60px;max-width:200px;object-fit:contain}.logo b{font-size:20px}.top h1{font-size:22px;font-weight:600;margin:0;text-align:center}.meta{text-align:right;line-height:1.55}.cust{line-height:1.8;margin-bottom:16px;font-size:15px}
 table{border-collapse:collapse;width:100%;table-layout:fixed;font-size:12px}th,td{border:1px solid #9aa3b5;padding:8px 5px;text-align:center;vertical-align:middle;overflow-wrap:anywhere}th{background:#f1f3f6;font-weight:700}.left{text-align:left}.total{text-align:right;font-weight:700;padding-right:14px}.sum{font-weight:700}.sign{display:grid;grid-template-columns:repeat(3,1fr);text-align:center;margin-top:34px;font-size:14px;font-weight:600}.sign div{padding-bottom:48px}.line{border-top:1px solid #d5d9e0;margin-top:18px}
 </style></head><body><div class="top"><div class="logo">${logo ? `<img src="${e(logo)}" alt="">` : `<b>${e(company?.name || "")}</b>`}</div><h1>Shop Order Invoice</h1><div class="meta"><div><b>Date:</b> ${e(when)}</div><div><b>Issued By:</b> ${e(issuedBy)}</div></div></div>
-<div class="cust"><div><b>Customer ID:</b> ${e(cust.customer_code || "—")}</div><div><b>Customer Name:</b> ${e(cust.name || "—")}</div><div><b>Phone Number:</b> ${e(cust.phone || "—")}</div><div><b>Total Order:</b> ${items.reduce((t, i) => t + (Number(i.quantity) || 0), 0)}</div></div>
+<div class="cust"><div><b>Customer ID:</b> ${e(fmtCustomerId(cust.customer_code) || "—")}</div><div><b>Customer Name:</b> ${e(cust.name || "—")}</div><div><b>Phone Number:</b> ${e(cust.phone || "—")}</div><div><b>Total Order:</b> ${items.reduce((t, i) => t + (Number(i.quantity) || 0), 0)}</div></div>
 <table><colgroup><col style="width:6%"><col style="width:16%"><col style="width:30%"><col style="width:8%"><col style="width:14%"><col style="width:13%"><col style="width:13%"></colgroup><tr><th>#</th><th>Order ID</th><th>Product / Variant</th><th>Qty</th><th>Unit Price (USD)</th><th>Amount (USD)</th><th>Total (USD)</th></tr>
 ${rows}${hasDisc || hasFee ? extra("Subtotal", order.subtotal) : ""}${hasDisc ? extra("Discount", order.discount_total, true) : ""}${hasFee ? extra("Delivery Fee", order.delivery_fee) : ""}<tr><td colspan="6" class="total">Total Amount</td><td class="sum">${usd(order.total_amount)}</td></tr></table><div class="sign"><div>Customer Signature</div><div>Employee Signature</div><div>Authorized Signature</div></div><div class="line"></div></body></html>`;
 }
@@ -85444,7 +86167,7 @@ function ShopOrderDetailPage() {
                       title="Open customer detail"
                       className="shrink-0 font-semibold text-blue-600 hover:underline"
                     >
-                      {o.customers.customer_code}
+                      {fmtCustomerId(o.customers.customer_code)}
                     </Link>
                     <button
                       type="button"
@@ -85612,7 +86335,7 @@ function ShopOrderDetailPage() {
                     {o.customers?.name || "—"}
                   </div>
                   <div className="text-xs text-slate-500">
-                    {o.customers?.customer_code}{" "}
+                    {fmtCustomerId(o.customers?.customer_code)}{" "}
                     {o.customers?.phone ? `· ${o.customers.phone}` : ""}
                   </div>
                   {o.customer_note && (
