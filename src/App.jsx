@@ -52001,41 +52001,65 @@ function GlobalToastItem({ t, y, onLeave, onDone, reg }) {
     return () => window.clearTimeout(timer);
   }, [t.leaving, t.id, onDone]);
 
-  const palette =
+  // Soft tinted card + filled round icon (DRSB-style): green for success,
+  // red for errors, amber for warnings.
+  const tone =
     t.type === "err"
       ? {
-          icon: "text-rose-500",
-          text: "text-rose-600",
-          iconNode: <Icons.XCircle size={20} />,
+          bg: "#fef2f2",
+          border: "#fecaca",
+          title: "#b91c1c",
+          text: "#dc2626",
+          dot: "#ef4444",
+          icon: <Icons.X size={13} strokeWidth={3} />,
         }
       : t.type === "warn"
         ? {
-            icon: "text-amber-500",
-            text: "text-amber-600",
-            iconNode: <Icons.AlertTriangle size={20} />,
+            bg: "#fffbeb",
+            border: "#fde68a",
+            title: "#b45309",
+            text: "#d97706",
+            dot: "#f59e0b",
+            icon: <Icons.Minus size={13} strokeWidth={3} />,
           }
         : {
-            icon: "text-emerald-500",
-            text: "text-emerald-600",
-            iconNode: <Icons.CheckCircle2 size={20} />,
+            bg: "#f0fdf4",
+            border: "#bbf7d0",
+            title: "#15803d",
+            text: "#16a34a",
+            dot: "#22c55e",
+            icon: <Icons.Check size={13} strokeWidth={3.5} />,
           };
 
   return (
     <div
       ref={(el) => reg(t.id, el)}
       role={t.type === "err" ? "alert" : "status"}
-      className={`cb-toast-card flex items-start gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3${t.leaving ? " is-leaving" : ""}`}
-      style={{ "--y": `${y}px` }}
+      className={`cb-toast-card flex items-start gap-3 rounded-2xl px-4 py-3.5${t.leaving ? " is-leaving" : ""}`}
+      style={{
+        "--y": `${y}px`,
+        background: tone.bg,
+        border: `1px solid ${tone.border}`,
+      }}
     >
-      <div className={`mt-0.5 shrink-0 ${palette.icon}`}>
-        {palette.iconNode}
-      </div>
+      <span
+        className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full text-white"
+        style={{ background: tone.dot }}
+      >
+        {tone.icon}
+      </span>
       <div className="min-w-0 flex-1">
-        <div className="text-[13px] font-semibold leading-5 text-slate-800">
+        <div
+          className="text-[15px] font-medium leading-6"
+          style={{ color: tone.title }}
+        >
           {t.title}
         </div>
         {t.text && (
-          <p className={`break-words text-[13px] leading-5 ${palette.text}`}>
+          <p
+            className="break-words text-[15px] leading-6"
+            style={{ color: tone.text }}
+          >
             {t.text}
           </p>
         )}
@@ -52044,7 +52068,8 @@ function GlobalToastItem({ t, y, onLeave, onDone, reg }) {
         type="button"
         aria-label="Dismiss notification"
         onClick={() => onLeave(t.id)}
-        className="grid h-6 w-6 shrink-0 place-items-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+        className="grid h-6 w-6 shrink-0 place-items-center rounded-md transition hover:bg-black/5"
+        style={{ color: tone.text, opacity: 0.7 }}
       >
         <Icons.X size={14} />
       </button>
@@ -52142,7 +52167,7 @@ function GlobalToastHost() {
           onDone={done}
         />
       ))}
-      <style>{`.cb-toast-card{position:absolute;top:0;left:0;right:0;pointer-events:auto;box-shadow:0 8px 24px rgba(15,23,42,.10);opacity:1;transform:translate3d(0,var(--y,0px),0);transition:transform 420ms cubic-bezier(.22,1,.36,1),opacity 300ms ease;animation:cb-toast-in 420ms cubic-bezier(.22,1,.36,1) backwards;will-change:transform,opacity;backface-visibility:hidden}.cb-toast-card.is-leaving{opacity:0;pointer-events:none;transform:translate3d(0,calc(var(--y,0px) - 10px),0) scale(.97);transition:transform 320ms cubic-bezier(.4,0,.2,1),opacity 260ms ease}@keyframes cb-toast-in{from{opacity:0;transform:translate3d(0,calc(var(--y,0px) - 16px),0) scale(.96)}to{opacity:1;transform:translate3d(0,var(--y,0px),0) scale(1)}}@media (prefers-reduced-motion:reduce){.cb-toast-card{transition:none;animation:none}}`}</style>
+      <style>{`.cb-toast-card{position:absolute;top:0;left:0;right:0;pointer-events:auto;box-shadow:0 10px 28px -8px rgba(15,23,42,.18),0 2px 6px rgba(15,23,42,.05);opacity:1;transform:translate3d(0,var(--y,0px),0);transition:transform 420ms cubic-bezier(.22,1,.36,1),opacity 300ms ease;animation:cb-toast-in 420ms cubic-bezier(.22,1,.36,1) backwards;will-change:transform,opacity;backface-visibility:hidden}.cb-toast-card.is-leaving{opacity:0;pointer-events:none;transform:translate3d(0,calc(var(--y,0px) - 10px),0) scale(.97);transition:transform 320ms cubic-bezier(.4,0,.2,1),opacity 260ms ease}@keyframes cb-toast-in{from{opacity:0;transform:translate3d(0,calc(var(--y,0px) - 16px),0) scale(.96)}to{opacity:1;transform:translate3d(0,var(--y,0px),0) scale(1)}}@media (prefers-reduced-motion:reduce){.cb-toast-card{transition:none;animation:none}}`}</style>
     </div>
   );
 }
