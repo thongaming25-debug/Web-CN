@@ -4145,8 +4145,9 @@ function tkTypeCol() {
   });
 }
 
-// Order cell: Order ID, then Shipping Method (Land / Sea / Air) and the
-// Direct / CN order chip — same as Packages / TK. `extra` adds a third line.
+// Order cell: Order ID, then Shipping Method (Land / Sea / Air). The Order ID
+// already identifies the order, so no Direct / CN order chip. `extra` adds a
+// third line.
 function orderMethodCol(extra) {
   return col("order_no", "Order", {
     render: (row) => (
@@ -4168,18 +4169,6 @@ function orderMethodCol(extra) {
             />
             {row.ship_method || "—"}
           </span>
-          {row.cn_order_id && row.cn_order_no ? (
-            <Link
-              to={`/cn-orders/${encodeURIComponent(row.cn_order_no)}`}
-              className="inline-flex items-center rounded-full border border-slate-200 bg-white text-slate-700 px-2 py-0.5 text-[11px] font-medium hover:underline"
-            >
-              {row.cn_order_no}
-            </Link>
-          ) : (
-            <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-600 px-2 py-0.5 text-[11px] font-semibold">
-              Direct
-            </span>
-          )}
         </div>
         {extra && extra(row)}
       </div>
@@ -4305,7 +4294,6 @@ const MODULES = {
       col("cargo", "Cargo"),
       col("weight", "Weight"),
       col("cbm", "CBM"),
-      col("freight", "Freight"),
       col("warehouse", "China WH"),
       col("dest_branch", "Receiving Branch"),
       col("inbound_status", "Inbound", { status: true }),
@@ -4364,18 +4352,6 @@ const MODULES = {
                 />
                 {row.ship_method || "—"}
               </span>
-              {row.cn_order_id && row.cn_order_no ? (
-                <Link
-                  to={`/cn-orders/${encodeURIComponent(row.cn_order_no)}`}
-                  className="inline-flex items-center rounded-full border border-slate-200 bg-white text-slate-700 px-2 py-0.5 text-[11px] font-medium hover:underline"
-                >
-                  {row.cn_order_no}
-                </Link>
-              ) : (
-                <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-600 px-2 py-0.5 text-[11px] font-semibold">
-                  Direct
-                </span>
-              )}
             </div>
           </div>
         ),
@@ -4397,7 +4373,6 @@ const MODULES = {
           );
         },
       }),
-      col("freight", "Freight"),
       col("route", "Route", {
         render: (row) => {
           return (
@@ -4413,11 +4388,6 @@ const MODULES = {
         render: (row) => (
           <div className="flex flex-col items-start gap-1">
             <StatusBadge label={pkgDisplayStatus(row) || "—"} />
-            {row.inbound_status && (
-              <span className="text-xs text-ink-600/60">
-                {row.inbound_status}
-              </span>
-            )}
           </div>
         ),
       }),
@@ -4441,18 +4411,6 @@ const MODULES = {
         metric: "receivedToday",
         tone: "blue",
       },
-      {
-        icon: "ScanLine",
-        label: "Awaiting QC",
-        metric: "awaitingQc",
-        tone: "amber",
-      },
-      {
-        icon: "UserX",
-        label: "Customer Not Found",
-        metric: "notFound",
-        tone: "red",
-      },
     ],
     columns: [
       col("tk", "TK Number", {
@@ -4464,7 +4422,6 @@ const MODULES = {
       col("cargo", "Cargo"),
       col("weight", "Weight"),
       col("cbm", "CBM"),
-      col("freight", "Freight"),
       col("created_by", "Received By"),
       scanInCol(),
       col("inbound_status", "Inbound Status", { status: true }),
@@ -4486,9 +4443,8 @@ const MODULES = {
           </div>
         ),
       }),
-      col("freight", "Freight"),
       col("created_by", "Received By"),
-      col("inbound_status", "Status", { status: true }),
+      col("status", "Status", { status: true }),
       col("shipping_fee", "Shipping Fee", {
         render: (row) => <ShippingFeeCell row={row} />,
       }),
@@ -4540,34 +4496,18 @@ const MODULES = {
       }),
       col("status", "Status", { status: true }),
     ],
+    // On-screen layout (DRSB-style): Outbound At → Order → TK → Customer →
+    // Status → Shipping Fee. Container / weight / CBM / Receiving Branch stay
+    // in `columns` above, so search, filters and CSV export still have them.
     tableColumns: [
+      scanOutCol(),
+      orderMethodCol(),
       tkTypeCol(),
       customerCellCol(),
-      orderMethodCol(),
-      col("method", "Shipment", {
-        render: (row) => (
-          <div className="leading-tight">
-            <div className="text-sm font-semibold text-ink-800">
-              {row.container_no && row.container_no !== "—" ? (
-                <HoverCopy value={row.container_no} label="Copy container no">
-                  <span>{`Container ${row.container_no}`}</span>
-                </HoverCopy>
-              ) : (
-                "Container —"
-              )}
-            </div>
-            <div className="text-xs text-ink-600/60 mt-1">
-              {weightCbmText(row)}
-            </div>
-          </div>
-        ),
-      }),
-      col("dest_branch", "Receiving Branch"),
       col("status", "Status", { status: true }),
       col("shipping_fee", "Shipping Fee", {
         render: (row) => <ShippingFeeCell row={row} />,
       }),
-      scanOutCol(),
     ],
     // Rows aren't listed here — this list is derived live from whichever
     // TKs in the shared registry have reached "Outbound Origin" status.
@@ -12204,6 +12144,825 @@ function TkScanField({
 }
 
 // ------------------------------------------------------------
+// pages/WHArrivedListing.jsx — DRSB-style Listing tab for
+// "W.H Arrived (Destination)": Arrivals chart → fee strip → filters → table.
+// ------------------------------------------------------------
+const arrivalAtOf = (p) =>
+  p.arrivedAt || p.arrived_at || p.updated_at || p.created_at;
+
+function isoWeekOf(d) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dn = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - dn);
+  const ys = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return {
+    year: t.getUTCFullYear(),
+    week: Math.ceil(((t - ys) / 86400000 + 1) / 7),
+  };
+}
+function weekStartOf(d) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+  return x;
+}
+
+function ArrivalsPanel({ rows }) {
+  const [open, setOpen] = useState(true);
+  const [view, setView] = useState("chart");
+  const [range, setRange] = useState({ preset: "last7", from: "", to: "" });
+  const [hover, setHover] = useState(null);
+  const [lastHover, setLastHover] = useState(0);
+  const [grown, setGrown] = useState(false);
+  useEffect(() => {
+    // Bars grow from 0 on first paint (and when the chart is re-opened).
+    setGrown(false);
+    const id = requestAnimationFrame(() =>
+      requestAnimationFrame(() => setGrown(true)),
+    );
+    return () => cancelAnimationFrame(id);
+  }, [open, view]);
+  useEffect(() => {
+    if (hover !== null) setLastHover(hover);
+  }, [hover]);
+
+  const counts = useMemo(() => {
+    const m = {};
+    rows.forEach((r) => {
+      const k = localDayKey(arrivalAtOf(r));
+      if (k) m[k] = (m[k] || 0) + 1;
+    });
+    return m;
+  }, [rows]);
+
+  // Effective range (falls back to the last 7 days when cleared); capped at
+  // 90 days so the chart stays readable.
+  const parseKey = (k) => {
+    const [y, m, d] = k.split("-").map(Number);
+    return new Date(y, m - 1, d);
+  };
+  const eff = (() => {
+    const r = resolveDateRange(range);
+    if (r.from && r.to) return r;
+    const now = new Date();
+    return {
+      from: localDayKey(
+        new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6),
+      ),
+      to: localDayKey(now),
+    };
+  })();
+  const startD = parseKey(eff.from <= eff.to ? eff.from : eff.to);
+  const endD = parseKey(eff.from <= eff.to ? eff.to : eff.from);
+  const spanDays = Math.min(Math.round((endD - startD) / 86400000) + 1, 90);
+  const dayAt = (offset) =>
+    new Date(
+      endD.getFullYear(),
+      endD.getMonth(),
+      endD.getDate() - (spanDays - 1) + offset,
+    );
+  const days = Array.from({ length: spanDays }, (_, i) => {
+    const key = localDayKey(dayAt(i));
+    return { key, n: counts[key] || 0 };
+  });
+  const nDays = days.length;
+  const total = days.reduce((s, d) => s + d.n, 0);
+  const peak = days.reduce((a, d) => (d.n > a.n ? d : a), days[0]);
+  const prevTotal = Array.from({ length: spanDays }, (_, i) =>
+    localDayKey(dayAt(i - spanDays)),
+  ).reduce((s, k) => s + (counts[k] || 0), 0);
+  const delta = prevTotal > 0 ? ((total - prevTotal) / prevTotal) * 100 : null;
+  const yMax = Math.max(peak.n, 1);
+  const ticks =
+    yMax <= 8
+      ? Array.from({ length: yMax + 1 }, (_, i) => i)
+      : [0, 1, 2, 3, 4].map((i) => Math.round((yMax * i) / 4));
+  const top = ticks[ticks.length - 1] || 1;
+  const first = dayAt(0);
+  const last = dayAt(spanDays - 1);
+  const fmt = (d) =>
+    d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const labelStep = Math.max(1, Math.ceil(nDays / 8));
+  const colsStyle = { gridTemplateColumns: `repeat(${nDays}, minmax(0, 1fr))` };
+
+  return (
+    <div className="cb-surface cb-card px-4 lg:px-5 py-4">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            className="flex items-center gap-2 text-ink-900"
+          >
+            <ChevronDown
+              size={16}
+              className={`text-ink-600/50 transition-transform ${open ? "" : "-rotate-90"}`}
+            />
+            <span className="font-semibold">Arrivals</span>
+            <span className="text-xs text-ink-600/55">
+              {fmt(first)} – {fmt(last)}, {last.getFullYear()}
+            </span>
+          </button>
+          {open && (
+            <div className="mt-3 flex items-end gap-8 pl-6">
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-ink-600/55">
+                  Total
+                </div>
+                <div className="text-2xl font-display font-bold text-ink-900 tabular-nums">
+                  {total}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-ink-600/55">
+                  Peak
+                </div>
+                <div className="text-2xl font-display font-bold text-ink-900 tabular-nums">
+                  {peak.n > 0 ? peak.key : "—"}
+                  {peak.n > 0 && (
+                    <span className="ml-1 text-sm font-medium text-ink-600/55">
+                      ({peak.n})
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] uppercase tracking-wide text-ink-600/55">
+                  vs Previous
+                </div>
+                <div
+                  className={`text-lg font-semibold tabular-nums ${
+                    delta === null
+                      ? "text-ink-600/45"
+                      : delta < 0
+                        ? "text-signal-red"
+                        : "text-signal-teal"
+                  }`}
+                >
+                  {delta === null
+                    ? "—"
+                    : `${delta < 0 ? "▼" : "▲"} ${Math.abs(Math.round(delta))}%`}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <div className="flex rounded-md border border-mist-200 overflow-hidden text-sm">
+            {["chart", "table"].map((v) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setView(v)}
+                className={`px-3 py-1.5 capitalize ${
+                  view === v
+                    ? "bg-signal-blue/10 text-signal-blue font-medium"
+                    : "text-ink-600/70 hover:bg-mist-50"
+                }`}
+              >
+                {v}
+              </button>
+            ))}
+          </div>
+          <DateRangeFilter
+            label="Arrived Date"
+            value={range}
+            onChange={setRange}
+          />
+        </div>
+      </div>
+
+      {open &&
+        (view === "chart" ? (
+          <div className="mt-4 flex">
+            <div className="relative h-[220px] w-6 shrink-0 text-[11px] text-ink-600/60 tabular-nums">
+              {ticks.map((t) => (
+                <span
+                  key={t}
+                  className="absolute right-1 -translate-y-1/2"
+                  style={{ bottom: `${(t / top) * 100}%`, top: "auto" }}
+                >
+                  {t}
+                </span>
+              ))}
+            </div>
+            <div className="relative h-[220px] flex-1">
+              {ticks.map((t) => (
+                <div
+                  key={t}
+                  className="absolute left-0 right-0 border-t border-dashed border-mist-200"
+                  style={{ bottom: `${(t / top) * 100}%` }}
+                />
+              ))}
+              <div
+                className="absolute inset-0 grid"
+                style={colsStyle}
+                onMouseLeave={() => setHover(null)}
+              >
+                {days.map((d, i) => (
+                  <div
+                    key={d.key}
+                    className="relative flex justify-center cursor-default"
+                    onMouseEnter={() => setHover(i)}
+                  >
+                    <div
+                      className="absolute inset-0 transition-opacity duration-200 ease-out"
+                      style={{
+                        background: "rgba(148,163,184,0.12)",
+                        opacity: hover === i ? 1 : 0,
+                      }}
+                    />
+                    <div
+                      className={`absolute bottom-0 rounded-t-sm transition-[height,background-color] duration-700 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                        hover === i ? "bg-blue-700" : "bg-blue-500"
+                      }`}
+                      style={{
+                        width: nDays <= 10 ? 36 : "60%",
+                        maxWidth: 36,
+                        height: grown ? `${(d.n / top) * 100}%` : "0%",
+                        transitionDelay: grown
+                          ? "0ms"
+                          : `${Math.min(i * 40, 400)}ms`,
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+              {(() => {
+                const hi = Math.min(hover ?? lastHover, nDays - 1);
+                const d = days[hi];
+                const barPct = (d.n / top) * 100;
+                return (
+                  <div
+                    className="pointer-events-none absolute z-10 transition-[left,bottom,opacity,transform] duration-200 ease-out"
+                    style={{
+                      left: `${((hi + 0.5) / nDays) * 100}%`,
+                      bottom: `calc(${Math.min(Math.max(barPct, 12), 70)}% + 6px)`,
+                      opacity: hover === null ? 0 : 1,
+                      transform: `translate(${hi >= nDays - 2 && nDays > 2 ? "-105%" : "12%"}, ${
+                        hover === null ? "6px" : "0"
+                      })`,
+                    }}
+                  >
+                    <div className="rounded-lg border border-mist-200 bg-white px-3 py-2 shadow-lg whitespace-nowrap text-sm">
+                      <div className="text-ink-600/70">{d.key}</div>
+                      <div className="mt-0.5 flex items-center gap-2 font-semibold text-ink-900">
+                        <i className="inline-block h-2.5 w-2.5 rounded-full bg-blue-600" />
+                        {d.n} order(s)
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+              <div
+                className="absolute left-0 right-0 -bottom-6 grid text-center text-xs text-ink-600/70"
+                style={colsStyle}
+              >
+                {days.map((d, i) => (
+                  <span
+                    key={d.key}
+                    className="whitespace-nowrap overflow-visible"
+                  >
+                    {i % labelStep === 0
+                      ? nDays > 10
+                        ? d.key.slice(5)
+                        : d.key
+                      : ""}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 max-w-md border border-mist-200 rounded-md divide-y divide-mist-100 text-sm">
+            {days.map((d) => (
+              <div key={d.key} className="flex justify-between px-3 py-2">
+                <span className="text-ink-800">{d.key}</span>
+                <span className="font-semibold tabular-nums">{d.n}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      {open && view === "chart" && <div className="h-6" />}
+    </div>
+  );
+}
+
+// Shipping fee / Orders / Customers split by Arrived vs To branch.
+function ArrivedSummaryStrip({ rows, arrivedStatus }) {
+  const isArr = (r) => r.status === arrivedStatus;
+  let fee = 0;
+  let feeArr = 0;
+  const orders = { all: new Set(), arr: new Set() };
+  const custs = { all: new Set(), arr: new Set() };
+  rows.forEach((r) => {
+    const f = shippingFeeOf(r);
+    if (f.state !== "none") {
+      fee += f.total;
+      if (isArr(r)) feeArr += f.total;
+    }
+    if (r.order_no && r.order_no !== "—") {
+      orders.all.add(r.order_no);
+      if (isArr(r)) orders.arr.add(r.order_no);
+    }
+    const cid = customerIdOf(r);
+    if (cid && cid !== "—") {
+      custs.all.add(cid);
+      if (isArr(r)) custs.arr.add(cid);
+    }
+  });
+  const feeBr = Math.max(Math.round((fee - feeArr) * 100) / 100, 0);
+  const pct = (a, t) => (t > 0 ? (a / t) * 100 : 0);
+  const usd = (n) =>
+    `$${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const GREEN = "#16a34a";
+  const BLUE = "#3b82f6";
+  const labelCls = "text-[13px] text-ink-600/65";
+  const valueCls =
+    "mt-1 font-display text-[28px] leading-tight font-bold text-ink-900 tabular-nums";
+  const Bar = ({ p }) => (
+    <div className="mt-2 flex items-center gap-3">
+      <div
+        className="h-1.5 flex-1 overflow-hidden rounded-full"
+        style={{ background: "#dbeafe" }}
+      >
+        <div
+          className="h-full rounded-full"
+          style={{
+            width: `${p}%`,
+            minWidth: p > 0 ? 6 : 0,
+            background: GREEN,
+          }}
+        />
+      </div>
+      <span className="text-xs font-semibold" style={{ color: "#15803d" }}>
+        {Math.round(p)}% Arrived
+      </span>
+    </div>
+  );
+  const Legend = ({ a, b }) => (
+    <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+      <span className="inline-flex items-center gap-1.5 text-ink-600/70">
+        <i
+          className="inline-block h-2 w-2 rounded-full"
+          style={{ background: GREEN }}
+        />
+        Arrived <b className="text-ink-900 tabular-nums">{a}</b>
+      </span>
+      <span
+        className="inline-flex items-center gap-1.5"
+        style={{ color: "#2563eb" }}
+      >
+        <i
+          className="inline-block h-2 w-2 rounded-full"
+          style={{ background: BLUE }}
+        />
+        To branch <b className="tabular-nums">{b}</b>
+      </span>
+    </div>
+  );
+  return (
+    <div className="cbx-kpi-strip">
+      <div className="cbx-kpi-cell">
+        <div className={labelCls}>Shipping fee</div>
+        <div className={valueCls}>{usd(fee)}</div>
+        <Bar p={pct(feeArr, fee)} />
+        <Legend a={usd(feeArr)} b={usd(feeBr)} />
+      </div>
+      <div className="cbx-kpi-cell">
+        <div className={labelCls}>Orders</div>
+        <div className={valueCls}>{orders.all.size}</div>
+        <Bar p={pct(orders.arr.size, orders.all.size)} />
+        <Legend a={orders.arr.size} b={orders.all.size - orders.arr.size} />
+      </div>
+      <div className="cbx-kpi-cell">
+        <div className={labelCls}>Customers</div>
+        <div className={valueCls}>{custs.all.size}</div>
+        <div className="mt-3">
+          <Legend a={custs.arr.size} b={custs.all.size - custs.arr.size} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ArrivedListingSkeleton() {
+  return (
+    <SkeletonRegion className="space-y-4" label="Loading arrivals...">
+      <div className="cb-surface cb-card px-4 lg:px-5 py-4">
+        <Skeleton className="h-4 w-48" />
+        <div className="mt-4 flex gap-8">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="space-y-2">
+              <Skeleton className="h-3 w-12" delay={i * 70} />
+              <Skeleton className="h-7 w-24" delay={i * 70} />
+            </div>
+          ))}
+        </div>
+        <div className="mt-5 flex items-end gap-6 h-[200px] pl-6">
+          {[60, 25, 8, 40, 14, 70, 32].map((h, i) => (
+            <div
+              key={i}
+              className="flex-1 flex justify-center items-end h-full"
+            >
+              <Skeleton
+                className="w-9 rounded-t-sm"
+                style={{ height: `${h}%` }}
+                delay={i * 80}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="cbx-kpi-strip">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="cbx-kpi-cell space-y-3">
+            <Skeleton className="h-3 w-20" delay={i * 70} />
+            <Skeleton className="h-8 w-28" delay={i * 70} />
+            <Skeleton className="h-1.5 w-full" delay={i * 70} />
+            <Skeleton className="h-3 w-3/4" delay={i * 70} />
+          </div>
+        ))}
+      </div>
+    </SkeletonRegion>
+  );
+}
+
+function WHArrivedListing({
+  loading = false,
+  rows,
+  arrivedStatus,
+  nextStatus,
+  nextStatusLabel,
+  updatingTk,
+  onAdvance,
+  rowError,
+  onRefresh,
+  onRowClick,
+}) {
+  const [field, setField] = useState("tk");
+  const [query, setQuery] = useState("");
+  const [range, setRange] = useState(EMPTY_DATE_RANGE);
+  const [wh, setWh] = useState("");
+  const [spin, setSpin] = useState(false);
+  const [menuRow, setMenuRow] = useState(null);
+  const [labelRow, setLabelRow] = useState(null);
+  const navigate = useNavigate();
+
+  const warehouses = useMemo(
+    () => [...new Set(rows.map((r) => r.warehouse).filter(Boolean))].sort(),
+    [rows],
+  );
+  const filtered = rows.filter((r) => {
+    if (wh && r.warehouse !== wh) return false;
+    if (!dateInRange(arrivalAtOf(r), range)) return false;
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    const hay =
+      field === "order"
+        ? r.order_no
+        : field === "customer"
+          ? `${r.customer || ""} ${r.customer_phone || r.phone || ""}`
+          : r.tk;
+    return String(hay || "")
+      .toLowerCase()
+      .includes(q);
+  });
+
+  const selCls =
+    "h-10 rounded-md border border-mist-200 bg-white px-3 text-sm text-ink-800 outline-none focus:border-signal-blue";
+  const columns = [
+    {
+      key: "arrived_at",
+      label: "Arrived At",
+      render: (r) => <CreatedAtCell iso={arrivalAtOf(r)} />,
+    },
+    {
+      key: "shelf",
+      label: "Shelf Number",
+      render: (r) => r.shelf_number || r.shelf_no || r.shelf || "NA",
+    },
+    orderMethodCol(),
+    {
+      key: "tk",
+      label: "Tracking Number",
+      render: (r) => (
+        <Link
+          to={pkgRowHref(r)}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          className="font-semibold text-signal-blue hover:underline"
+        >
+          {r.tk}
+        </Link>
+      ),
+    },
+    {
+      key: "customer",
+      label: "Customer",
+      render: (r) => {
+        const c = tkCustomerParts(r);
+        const phone = r.customer_phone || r.phone;
+        return (
+          <div className="leading-tight">
+            <div className="font-medium text-ink-900">
+              {c.name}
+              <span className="ml-2 text-xs text-ink-600/55">{c.id}</span>
+            </div>
+            {phone && (
+              <div className="text-xs text-ink-600/55 mt-0.5">{phone}</div>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      key: "parcels",
+      label: "Parcels",
+      render: (r) => r.parcels || 1,
+    },
+    SHIPPING_FEE_COL,
+    { key: "type", label: "Type", render: (r) => pkgType(r) },
+    { key: "status", label: "Status", status: true },
+    {
+      key: "actions",
+      label: "···",
+      render: (r) => (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setMenuRow(r);
+          }}
+          className="w-8 h-8 flex items-center justify-center rounded-md text-ink-600/70 hover:bg-mist-100"
+          aria-label="Actions"
+        >
+          <Icons.EllipsisVertical size={18} />
+        </button>
+      ),
+    },
+  ].filter(Boolean);
+
+  return (
+    <div className="space-y-4">
+      {loading ? (
+        <ArrivedListingSkeleton />
+      ) : (
+        <>
+          <ArrivalsPanel rows={rows} />
+          <ArrivedSummaryStrip rows={filtered} arrivedStatus={arrivedStatus} />
+        </>
+      )}
+      <div className="cb-surface cb-card">
+        <div className="flex items-center gap-3 flex-wrap px-4 lg:px-5 py-3 border-b border-mist-200">
+          <div className="flex items-center rounded-md border border-mist-200 focus-within:border-signal-blue">
+            <select
+              value={field}
+              onChange={(e) => setField(e.target.value)}
+              className="h-10 bg-transparent pl-3 pr-1 text-sm outline-none border-r border-mist-200"
+            >
+              <option value="tk">TK</option>
+              <option value="order">Order</option>
+              <option value="customer">Customer</option>
+            </select>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={`Search ${field === "tk" ? "TK" : field === "order" ? "Order" : "Customer"}`}
+              className="h-10 w-56 bg-transparent px-3 text-sm outline-none"
+            />
+            <Search size={15} className="mr-3 text-ink-600/40" />
+          </div>
+          <DateRangeFilter
+            label="Arrived At"
+            value={range}
+            onChange={setRange}
+          />
+          <select
+            value={wh}
+            onChange={(e) => setWh(e.target.value)}
+            className={selCls}
+          >
+            <option value="">Warehouse</option>
+            {warehouses.map((w) => (
+              <option key={w} value={w}>
+                {w}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={async () => {
+              setSpin(true);
+              try {
+                await onRefresh?.();
+              } finally {
+                setSpin(false);
+              }
+            }}
+            className="ml-auto h-10 w-10 flex items-center justify-center rounded-md border border-mist-200 hover:bg-mist-50"
+            aria-label="Refresh"
+          >
+            <Icons.RefreshCw size={16} className={spin ? "animate-spin" : ""} />
+          </button>
+        </div>
+        {rowError && (
+          <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2 m-4 mb-0">
+            <TriangleAlert size={14} className="shrink-0" />
+            {rowError}
+          </div>
+        )}
+        <DataTable
+          columns={columns}
+          rows={filtered}
+          loading={loading}
+          skeletonRows={6}
+          onRowClick={onRowClick}
+        />
+      </div>
+      <ArrivedRowMenu
+        row={menuRow}
+        canAdvance={!!nextStatus && menuRow?.status === arrivedStatus}
+        nextStatus={nextStatus}
+        nextStatusLabel={nextStatusLabel}
+        busy={!!menuRow && updatingTk === menuRow.tk}
+        onClose={() => setMenuRow(null)}
+        onPrint={() => {
+          setLabelRow(menuRow);
+          setMenuRow(null);
+        }}
+        onAdvance={async () => {
+          await onAdvance(menuRow.tk);
+          setMenuRow(null);
+        }}
+        onDetails={() => {
+          const r = menuRow;
+          setMenuRow(null);
+          // Order detail opens in a new browser tab (CN Order / Package).
+          window.open(pkgRowHref(r), "_blank", "noopener,noreferrer");
+        }}
+      />
+      {labelRow && (
+        <ArrivedPrintLabelLoader
+          row={labelRow}
+          onClose={() => setLabelRow(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Row action sheet (⋮): Print label, Update → next status, PO + Details.
+function ArrivedRowMenu({
+  row: rowProp,
+  canAdvance,
+  nextStatus,
+  nextStatusLabel,
+  busy,
+  onClose,
+  onPrint,
+  onAdvance,
+  onDetails,
+}) {
+  // Keep the last row mounted while the sheet plays its exit animation.
+  const [row, setRow] = useState(rowProp);
+  const closing = !rowProp && !!row;
+  const canAdvanceRef = useRef(canAdvance);
+  if (rowProp) canAdvanceRef.current = canAdvance;
+  useEffect(() => {
+    if (rowProp) {
+      setRow(rowProp);
+      return undefined;
+    }
+    const t = setTimeout(() => setRow(null), 180);
+    return () => clearTimeout(t);
+  }, [rowProp]);
+  useEffect(() => {
+    if (!row) return;
+    const h = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
+  }, [row, onClose]);
+  if (!row) return null;
+  const Item = ({ icon: Ic, label, onClick, disabled }) => (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="w-full flex items-center gap-4 rounded-lg border border-mist-200 bg-white px-4 py-3 text-left hover:bg-mist-50 disabled:opacity-60"
+    >
+      <span className="w-10 h-10 rounded-lg bg-mist-100 flex items-center justify-center text-ink-700">
+        <Ic size={20} />
+      </span>
+      <span className="font-semibold text-ink-900">{label}</span>
+    </button>
+  );
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[300] flex items-center justify-center p-4"
+      style={{
+        backgroundColor: "rgba(15,23,42,0.40)",
+        animation: closing
+          ? "arm-fade-out 170ms ease-in forwards"
+          : "arm-fade-in 200ms ease-out both",
+        pointerEvents: closing ? "none" : "auto",
+      }}
+      onClick={onClose}
+    >
+      <style>{`
+        @keyframes arm-fade-in{from{opacity:0}to{opacity:1}}
+        @keyframes arm-fade-out{from{opacity:1}to{opacity:0}}
+        @keyframes arm-pop-in{from{opacity:0;transform:translate3d(0,12px,0)}to{opacity:1;transform:translate3d(0,0,0)}}
+        @keyframes arm-pop-out{from{opacity:1;transform:translate3d(0,0,0)}to{opacity:0;transform:translate3d(0,8px,0)}}
+      `}</style>
+      <div
+        className="relative w-full max-w-sm"
+        style={{
+          willChange: "transform, opacity",
+          animation: closing
+            ? "arm-pop-out 170ms ease-in forwards"
+            : "arm-pop-in 240ms cubic-bezier(0.22,1,0.36,1) both",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute -top-3 -right-3 z-10 w-10 h-10 rounded-full bg-white shadow-lg border border-mist-200 flex items-center justify-center"
+          aria-label="Close"
+        >
+          <X size={18} />
+        </button>
+        <div className="rounded-2xl bg-white shadow-2xl overflow-hidden">
+          <div className="p-4 space-y-3">
+            <Item icon={Icons.Printer} label="Print Label" onClick={onPrint} />
+            {canAdvanceRef.current && (
+              <Item
+                icon={ArrowRight}
+                label={
+                  busy
+                    ? "កំពុង Update..."
+                    : nextStatusLabel || `Update → ${nextStatus}`
+                }
+                onClick={onAdvance}
+                disabled={busy}
+              />
+            )}
+          </div>
+          <div className="flex items-center justify-between gap-3 bg-mist-50 px-5 py-4 text-sm">
+            <span className="text-ink-800">
+              Order ID:{" "}
+              <span className="font-medium">{row.order_no || row.tk}</span>
+            </span>
+            <button
+              type="button"
+              onClick={onDetails}
+              className="font-semibold text-signal-blue hover:underline inline-flex items-center gap-1"
+            >
+              Details <ArrowRight size={14} />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// Loads the full package row, then opens the shared Print Label dialog.
+function ArrivedPrintLabelLoader({ row, onClose }) {
+  const [pkg, setPkg] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      let full = null;
+      if (supabase && row?.tk) {
+        const { data } = await supabase
+          .from("packages")
+          .select("*")
+          .eq("tk", row.tk)
+          .maybeSingle();
+        full = data;
+      }
+      if (alive) setPkg({ ...row, ...(full || {}) });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [row?.tk]);
+  const c = tkCustomerParts(row);
+  return (
+    <PrintLabelModal
+      open={!!pkg}
+      onClose={onClose}
+      pkg={pkg}
+      custId={c.id}
+      custName={c.name}
+    />
+  );
+}
+
+// ------------------------------------------------------------
 // pages/ScanConfirmPage.jsx
 // ------------------------------------------------------------
 // Generic "scan a TK that's already at `fromStatus` → Verify → Confirm
@@ -12228,10 +12987,40 @@ function ScanConfirmPage({
   nextStatus,
   nextStatusLabel,
   allowRemeasure = false,
+  // DRSB-style Listing tab (chart + summary strip + filters). Listing opens first.
+  drsbLayout = false,
 }) {
-  const { packages, findPackage, syncTimelineToStatus } = usePackageTracking();
+  const { packages, findPackage, syncTimelineToStatus, refetch } =
+    usePackageTracking();
   const { user } = useAuth();
-  const [tab, setTab] = useState("scan");
+  const [tab, setTab] = useState(drsbLayout ? "listing" : "scan");
+  // First visit: refetch from the server and show skeletons until it lands
+  // (same behaviour as Packages / TK, Inbound / Outbound Origin).
+  const { ready: pkgsReady, loading: pkgsLoading } = usePackageTracking();
+  const [enterLoading, setEnterLoading] = useState(drsbLayout);
+  const sawLoad = useRef(false);
+  useEffect(() => {
+    if (!drsbLayout) return undefined;
+    sawLoad.current = false;
+    setEnterLoading(true);
+    refetch?.();
+    const t = setTimeout(
+      () => setEnterLoading(false),
+      supabase && user ? 4000 : 300,
+    );
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (!enterLoading) return undefined;
+    if (pkgsLoading) {
+      sawLoad.current = true;
+      return undefined;
+    }
+    if (!sawLoad.current) return undefined;
+    const t = setTimeout(() => setEnterLoading(false), 250);
+    return () => clearTimeout(t);
+  }, [pkgsLoading, enterLoading]);
   const [tkInput, setTkInput] = useState("");
   const [queue, setQueue] = useState([]);
   const [verifyTk, setVerifyTk] = useState(null);
@@ -12251,6 +13040,15 @@ function ScanConfirmPage({
 
   const navigate = useNavigate();
   const doneRows = packages.filter((p) => p.status === toStatus);
+  // DRSB listing also keeps TKs that already moved on to the branch.
+  const listingRows = drsbLayout
+    ? packages
+        .filter((p) => p.status === toStatus || p.status === nextStatus)
+        .sort(
+          (a, b) =>
+            new Date(arrivalAtOf(b) || 0) - new Date(arrivalAtOf(a) || 0),
+        )
+    : doneRows;
   const queueRows = queue.map((tk) => findPackage(tk)).filter(Boolean);
 
   // "Update to <nextStatus>" button on a Listing row — skips Order Detail
@@ -12367,30 +13165,46 @@ function ScanConfirmPage({
       <div className="flex items-center gap-5 border-b border-mist-200">
         <button
           onClick={() => setTab("listing")}
-          className={`flex items-center gap-1.5 text-sm font-semibold pb-3 border-b-2 -mb-px ${
+          className={`flex items-center gap-1.5 text-sm font-semibold pb-3 border-b-2 -mb-px transition-colors duration-200 ${
             tab === "listing"
               ? "text-signal-blue border-signal-blue"
-              : "text-ink-600/50 border-transparent hover:text-ink-800"
+              : "text-ink-600/50 border-transparent hover:text-ink-900 hover:border-signal-blue/40 active:border-signal-blue"
           }`}
         >
           Listing
           <span className="bg-mist-100 text-ink-600/60 text-[11px] px-1.5 py-0.5 rounded-sm">
-            {doneRows.length}
+            {listingRows.length}
           </span>
         </button>
         <button
           onClick={() => setTab("scan")}
-          className={`text-sm font-semibold pb-3 border-b-2 -mb-px ${
+          className={`text-sm font-semibold pb-3 border-b-2 -mb-px transition-colors duration-200 ${
             tab === "scan"
               ? "text-signal-blue border-signal-blue"
-              : "text-ink-600/50 border-transparent hover:text-ink-800"
+              : "text-ink-600/50 border-transparent hover:text-ink-900 hover:border-signal-blue/40 active:border-signal-blue"
           }`}
         >
           {scanTabLabel}
         </button>
       </div>
 
-      {tab === "listing" ? (
+      {tab === "listing" && drsbLayout ? (
+        <WHArrivedListing
+          loading={enterLoading || !pkgsReady}
+          rows={listingRows}
+          arrivedStatus={toStatus}
+          nextStatus={nextStatus}
+          nextStatusLabel={nextStatusLabel}
+          updatingTk={updatingTk}
+          onAdvance={handleAdvanceFromListing}
+          rowError={rowError}
+          onRefresh={refetch}
+          // Row click opens the order detail in a new browser tab.
+          onRowClick={(row) =>
+            window.open(pkgRowHref(row), "_blank", "noopener,noreferrer")
+          }
+        />
+      ) : tab === "listing" ? (
         <div className="cb-surface cb-card">
           {rowError && (
             <div className="flex items-center gap-2 text-sm text-signal-red bg-signal-red/10 rounded-md px-3 py-2 m-4 mb-0">
@@ -14257,6 +15071,7 @@ function WHArrivedPage() {
       nextStatus="Shipping To Branch"
       nextStatusLabel="Update → Shipping To Branch"
       allowRemeasure
+      drsbLayout
     />
   );
 }
@@ -20264,22 +21079,24 @@ function QuickOutboundScan({ addRow, initialTk = "", focusKey = 0 }) {
     const pkg = packages.find((p) => tkKey(p.tk) === key);
 
     // Validation (same rules as before, minus everything about containers)
-    if (!pkg) return scan.fail(`TK not found "${trimmed}" ក្នុងប្រព័ន្ធទេ`);
+    if (!pkg) return scan.fail(`TK not found "${trimmed}" in the system`);
     if (pkg.status === "Outbound Origin")
-      return scan.fail(`TK ${pkg.tk} បាន Outbound Origin រួចហើយ`);
+      return scan.fail(`TK ${pkg.tk} is already Outbound Origin`);
     if (tkCustomerParts(pkg).id === "—")
-      return scan.fail(`TK ${pkg.tk} មិនមាន Customer ID ត្រឹមត្រូវ`);
+      return scan.fail(`TK ${pkg.tk} has no valid Customer ID`);
     if (!String(pkg.order_no || "").trim())
-      return scan.fail(`TK ${pkg.tk} មិនមាន Order ID`);
+      return scan.fail(`TK ${pkg.tk} has no Order ID`);
     if (pkg.inbound_status && pkg.inbound_status !== "Ready for Shipment")
       return scan.fail(
-        `TK ${pkg.tk} មិនទាន់ Ready for Shipment ទេ (Inbound Status: ${pkg.inbound_status})`,
+        `TK ${pkg.tk} is not Ready for Shipment yet (Inbound Status: ${pkg.inbound_status})`,
       );
     if (pkg.exception)
-      return scan.fail(`TK ${pkg.tk} មាន Exception ត្រូវដោះស្រាយមុន`);
+      return scan.fail(
+        `TK ${pkg.tk} has an Exception that must be resolved first`,
+      );
     if (pkg.status && pkg.status !== "Inbound Origin")
       return scan.fail(
-        `TK ${pkg.tk} មិនអាចផ្ញើបានទេ (Status បច្ចុប្បន្ន: ${pkg.status})`,
+        `TK ${pkg.tk} cannot be sent (current Status: ${pkg.status})`,
       );
 
     busyRef.current = true;
@@ -20298,7 +21115,7 @@ function QuickOutboundScan({ addRow, initialTk = "", focusKey = 0 }) {
       scan.succeed(`TK "${pkg.tk}" → Outbound Origin`);
       scan.focusInput(false);
     } catch (e) {
-      scan.fail(e?.message || "មិនអាច Outbound បានទេ");
+      scan.fail(e?.message || "Unable to Outbound");
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -20322,7 +21139,7 @@ function QuickOutboundScan({ addRow, initialTk = "", focusKey = 0 }) {
           Scan &amp; Outbound
         </h2>
         <p className="text-xs text-ink-600/55">
-          Scan TK → Outbound Origin ស្វ័យប្រវត្តិ
+          Scan TK → Outbound Origin automatically
         </p>
       </div>
       <div className="p-4 sm:p-5 grid gap-4 sm:gap-5 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)] items-start">
@@ -20342,12 +21159,12 @@ function QuickOutboundScan({ addRow, initialTk = "", focusKey = 0 }) {
             }}
             scan={scan}
           />
-          {busy && <p className="text-xs text-ink-600/55">កំពុង Outbound…</p>}
+          {busy && <p className="text-xs text-ink-600/55">Outbounding…</p>}
         </form>
         {last ? (
           <div className="cb-ob-in rounded-md border border-signal-teal/25 bg-signal-teal/10 px-4 py-3 text-xs space-y-1">
             <p className="font-semibold text-signal-teal flex items-center gap-1.5">
-              <Check size={13} /> Outbound Origin បានជោគជ័យ
+              <Check size={13} /> Outbound Origin successful
             </p>
             <p className="text-ink-900 font-medium">TK {last.tk}</p>
             <p className="text-ink-600/70">
@@ -20357,7 +21174,7 @@ function QuickOutboundScan({ addRow, initialTk = "", focusKey = 0 }) {
           </div>
         ) : (
           <div className="hidden lg:flex items-center justify-center min-h-[6rem] rounded-md border border-dashed border-mist-200 text-xs text-ink-600/45 text-center px-6">
-            Scan TK ណាមួយ → វានឹងក្លាយជា Outbound Origin ភ្លាមៗ
+            Scan any TK → it becomes Outbound Origin immediately
           </div>
         )}
       </div>
@@ -20985,6 +21802,107 @@ function RowDeleteModal({
       )}
       {notice && <div className="cbx-alert is-warn">{notice}</div>}
     </AppModal>
+  );
+}
+
+// Outbound Origin summary (DRSB-style): total shipping fee with a paid /
+// outstanding bar, the amount customers have already paid (Collected), and
+// the number of customers. Computed from the TKs currently at this stage.
+function OutboundFeeStrip({ rows, lead }) {
+  let total = 0;
+  let collected = 0;
+  let feeTks = 0;
+  let paidTks = 0;
+  const customers = new Set();
+  (rows || []).forEach((p) => {
+    const f = shippingFeeOf(p);
+    if (f.state !== "none") {
+      total += f.total;
+      collected += Math.min(f.paid, f.total);
+      feeTks += 1;
+      if (f.state === "paid") paidTks += 1;
+    }
+    const cid = customerIdOf(p);
+    if (cid && cid !== "—") customers.add(cid);
+  });
+  const outstanding = Math.max(Math.round((total - collected) * 100) / 100, 0);
+  const pct = total > 0 ? Math.min((collected / total) * 100, 100) : 0;
+  const avg = customers.size ? total / customers.size : 0;
+  const fmt = (n) =>
+    `$${Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const GREEN = "#16a34a";
+  const AMBER = "#f59e0b";
+  const labelCls = "text-[13px] text-ink-600/65";
+  const valueCls =
+    "mt-1 font-display text-[28px] leading-tight font-bold text-ink-900 tabular-nums";
+  return (
+    <div className="cbx-kpi-strip">
+      {lead && (
+        <div className="cbx-kpi-cell">
+          <div className={labelCls}>{lead.label}</div>
+          <div className={valueCls}>{lead.value}</div>
+        </div>
+      )}
+      <div className="cbx-kpi-cell">
+        <div className={labelCls}>Shipping fee</div>
+        <div className={valueCls}>{fmt(total)}</div>
+        <div className="mt-2 flex items-center gap-3">
+          <div
+            className="h-1.5 flex-1 overflow-hidden rounded-full"
+            style={{ background: "#fef3c7" }}
+          >
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: `${pct}%`,
+                minWidth: pct > 0 ? 6 : 0,
+                background: GREEN,
+              }}
+            />
+          </div>
+          <span className="text-xs font-semibold" style={{ color: "#15803d" }}>
+            {pct.toFixed(1)}% Paid
+          </span>
+        </div>
+        <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+          <span className="inline-flex items-center gap-1.5 text-ink-600/70">
+            <i
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ background: GREEN }}
+            />
+            Paid <b className="text-ink-900 tabular-nums">{fmt(collected)}</b>
+          </span>
+          <span
+            className="inline-flex items-center gap-1.5"
+            style={{ color: "#b45309" }}
+          >
+            <i
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ background: AMBER }}
+            />
+            Outstanding <b className="tabular-nums">{fmt(outstanding)}</b>
+          </span>
+        </div>
+      </div>
+      <div className="cbx-kpi-cell">
+        <div className={labelCls}>Collected</div>
+        <div className={valueCls}>{fmt(collected)}</div>
+        <div className="mt-3 text-xs text-ink-600/70">
+          Paid TKs{" "}
+          <b className="text-ink-900 tabular-nums">
+            {paidTks} / {feeTks}
+          </b>
+        </div>
+      </div>
+      <div className="cbx-kpi-cell">
+        <div className={labelCls}>Customers</div>
+        <div className={valueCls}>{customers.size.toLocaleString("en-US")}</div>
+        <div className="mt-3 text-xs text-ink-600/70">
+          Avg fee per customer{" "}
+          <b className="text-ink-900 tabular-nums">{fmt(avg)}</b>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -21928,8 +22846,30 @@ function ListPage({
       {liveStats.length > 0 &&
         (listLoading || (pkgServerMode && !packagesReady) ? (
           <StatCardsSkeleton
-            count={liveStats.length}
+            count={
+              path === "/outbound-origin"
+                ? 3
+                : path === "/inbound-origin" || path === "/packages"
+                  ? 4
+                  : liveStats.length
+            }
             className="grid grid-cols-2 lg:grid-cols-4 gap-3"
+          />
+        ) : path === "/outbound-origin" ||
+          path === "/inbound-origin" ||
+          path === "/packages" ? (
+          <OutboundFeeStrip
+            rows={
+              stageForThisPage
+                ? visiblePackages.filter((p) => p.status === stageForThisPage)
+                : visiblePackages
+            }
+            lead={
+              (path === "/inbound-origin" || path === "/packages") &&
+              liveStats[0]
+                ? { label: liveStats[0].label, value: liveStats[0].value }
+                : undefined
+            }
           />
         ) : (
           <StatStrip items={liveStats.map(({ metric, ...s }) => s)} />
@@ -28194,8 +29134,6 @@ function PhotoGallery({ tk }) {
     };
   }, [tk]);
 
-  const active = activeIdx != null && photos ? photos[activeIdx] : null;
-
   return (
     <div className="bg-white border border-mist-200 rounded-md shadow-panel p-5">
       <div className="flex items-center justify-between mb-4">
@@ -28229,79 +29167,34 @@ function PhotoGallery({ tk }) {
           )}
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-3">
+        <div className="flex flex-wrap gap-3">
           {photos.map((p, i) => (
-            <button
-              key={p.id}
-              type="button"
-              onClick={() => setActiveIdx(i)}
-              className="text-left border border-mist-200 rounded-md overflow-hidden hover:border-signal-blue"
-            >
-              <img
+            <div key={p.id} className="w-24">
+              <AirImg
                 src={p.dataUrl}
                 alt={p.category}
-                className="w-full aspect-square object-cover"
+                onClick={() => setActiveIdx(i)}
+                className="h-24 w-24 rounded-xl border border-slate-200"
+                FallbackIcon={Icons.Image}
               />
-              <div className="px-2 py-1 text-[10px] text-ink-700 bg-mist-50 truncate">
+              <div className="mt-1 truncate text-[11px] text-slate-500">
                 {p.category}
               </div>
-            </button>
+            </div>
           ))}
         </div>
       )}
 
-      {active && (
-        <div
-          className="fixed inset-0 bg-ink-900/80 z-50 flex items-center justify-center p-4"
-          onClick={() => setActiveIdx(null)}
-        >
-          <div
-            className="bg-white rounded-md shadow-lg max-w-3xl w-full max-h-[92vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-mist-200">
-              <div className="text-sm font-medium text-ink-900">
-                {active.category}
-                <span className="text-ink-600/45 font-normal">
-                  {" "}
-                  — {activeIdx + 1} / {photos.length}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveIdx(null)}
-                className="text-ink-600/40 hover:text-ink-900"
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <div className="flex-1 min-h-0 bg-ink-900/5 flex items-center justify-center">
-              <img
-                src={active.dataUrl}
-                alt={active.category}
-                className="max-h-[72vh] max-w-full object-contain"
-              />
-            </div>
-            <div className="flex items-center justify-between px-4 py-3 border-t border-mist-200">
-              <button
-                type="button"
-                disabled={activeIdx === 0}
-                onClick={() => setActiveIdx((i) => i - 1)}
-                className="px-3 py-1.5 text-sm rounded-md border border-mist-200 hover:bg-mist-50 disabled:opacity-40"
-              >
-                Previous
-              </button>
-              <button
-                type="button"
-                disabled={activeIdx >= photos.length - 1}
-                onClick={() => setActiveIdx((i) => i + 1)}
-                className="px-3 py-1.5 text-sm rounded-md border border-mist-200 hover:bg-mist-50 disabled:opacity-40"
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        </div>
+      {activeIdx != null && photos && photos[activeIdx] && (
+        <AirImageViewer
+          images={photos.map((p) => ({
+            id: p.id,
+            url: p.dataUrl,
+            name: p.category,
+          }))}
+          start={activeIdx}
+          onClose={() => setActiveIdx(null)}
+        />
       )}
     </div>
   );
@@ -29457,12 +30350,14 @@ function DetailPackageTab({ rows, shippingMethod, onCopy }) {
               panelId="pkg-group-panel"
               active={activeId}
               onChange={setSel}
-              tabs={groups.map((g) => ({
-                id: g.id,
-                label: g.label,
-                icon: g.icon,
-                count: g.rows.length,
-              }))}
+              tabs={groups
+                .filter((g) => g.rows.length)
+                .map((g) => ({
+                  id: g.id,
+                  label: g.label,
+                  icon: g.icon,
+                  count: g.rows.length,
+                }))}
             />
           </div>
           <div
@@ -29541,7 +30436,7 @@ function DetailPackageTab({ rows, shippingMethod, onCopy }) {
                     </td>
                     <td className="border-t border-slate-100 px-3 py-3">
                       <span className="inline-flex items-center gap-1.5">
-                        <span className="font-mono text-xs text-slate-800 break-all">
+                        <span className="text-xs font-medium text-slate-800 break-all">
                           {r.tracking || "—"}
                         </span>
                         {r.tracking && onCopy && (
@@ -29566,12 +30461,19 @@ function DetailPackageTab({ rows, shippingMethod, onCopy }) {
                         <span className="text-slate-300">—</span>
                       )}
                     </td>
-                    <td className="border-t border-slate-100 px-3 py-3 text-slate-700">
-                      {r.dims || <span className="text-slate-300">—</span>}
+                    <td className="border-t border-slate-100 px-3 py-3 text-xs text-slate-700">
+                      {r.dims ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <Icons.Ruler size={13} className="text-slate-400" />
+                          {r.dims}
+                        </span>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
                     </td>
                     <td className="border-t border-slate-100 px-3 py-3">
                       {r.costing ? (
-                        <span className="rounded-md border border-blue-100 bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
+                        <span className="text-xs text-slate-600">
                           {r.costing}
                         </span>
                       ) : (
@@ -29612,6 +30514,7 @@ const SHIPMENT_DETAIL_LAYOUT_CSS = `
 .shipment-detail-page .shipment-order-number{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;margin-top:8px;font-size:18px;font-weight:650;overflow-wrap:anywhere}
 .shipment-detail-page .shipment-customer-chip{display:inline-flex;align-items:center;gap:8px;padding:4px 12px 4px 6px;margin-top:16px;background:var(--cn-soft);border:1px solid var(--cn-border);border-radius:999px;font-size:13px;font-weight:600;max-width:100%;overflow-wrap:anywhere}
 .shipment-detail-page .shipment-tabs{overflow-x:auto}
+.shipment-detail-page .shipment-tabs .cn-detail-tab{margin-bottom:0}
 .shipment-detail-page .shipment-tabs button{flex-shrink:0}
 .shipment-detail-page .shipment-sidebar>div{border-radius:12px;min-width:0;overflow-wrap:anywhere}
 .shipment-detail-page .shipment-package-info>div>div{border-bottom:1px solid var(--cn-border);padding:11px 0}
@@ -30037,6 +30940,31 @@ function PackageDetail() {
     </div>
   );
 
+  // Summary + Payment (shipping fee) — shown on both tabs so staff see it
+  // right under the parcel table as well as on the overview.
+  const shipFinance = (cls = "") =>
+    completeShipFee.state !== "none" && completeShipFee.total > 0 ? (
+      <div className={`cn-detail-finance ${cls}`.trim()}>
+        <DetailFinanceSummaryCard
+          rows={[
+            { label: "Total Quantity", value: packageCountValue },
+            {
+              label: "Total Shipping Fee",
+              value: money(completeShipFee.total),
+            },
+          ]}
+          totals={[
+            {
+              label: "Grand Total",
+              value: money(completeShipFee.total),
+              tone: "blue",
+            },
+          ]}
+        />
+        <PayShippingCard pkg={data} stage={currentStage} />
+      </div>
+    ) : null;
+
   return (
     <div className="cn-detail-page shipment-detail-page space-y-4">
       <style>{CN_DETAIL_LAYOUT_CSS + SHIPMENT_DETAIL_LAYOUT_CSS}</style>
@@ -30330,6 +31258,7 @@ function PackageDetail() {
           onChange={setDetailTab}
           tabs={[
             { id: "overview", label: "Order Details" },
+            { id: "info", label: "Order Information" },
             { id: "details", label: "Package", count: 1 },
           ]}
         />
@@ -30536,55 +31465,14 @@ function PackageDetail() {
                     </div>
                   </div>
                 )}
+                {shipFinance()}
               </>
             )}
 
-            {detailTab === "details" && (
+            {detailTab === "info" && (
               <>
-                <DetailPackageTab
-                  rows={[
-                    detailPackageRow(data, {
-                      index: 1,
-                      tracking: data.tk,
-                      status: currentStage,
-                      qty: packageCountValue,
-                      actions: [
-                        ...(canPrintLabel
-                          ? [
-                              {
-                                key: "print",
-                                label: "Print",
-                                icon: Icons.Printer,
-                                onClick: () => setShowLabel(true),
-                              },
-                            ]
-                          : []),
-                        ...(canEditSize
-                          ? [
-                              {
-                                key: "update",
-                                label: "Update",
-                                icon: Icons.Pencil,
-                                tone: "blue",
-                                onClick: () => setShowUpdatePkg(true),
-                              },
-                            ]
-                          : []),
-                      ],
-                    }),
-                  ]}
-                  shippingMethod={pkgShippingMethod(data)}
-                  onCopy={async (v) => {
-                    const ok = await cnCopyText(v);
-                    emitCBToast(
-                      ok ? "ok" : "err",
-                      ok ? "Tracking number copied" : "Copy failed",
-                      ok ? v : "Please select and copy the text manually.",
-                    );
-                  }}
-                />
-                {/* Package information + product images */}
-                <div className="cn-detail-stack">
+                {/* Order Information tab: package info (left) + product images (right) */}
+                <div className="cn-detail-top">
                   <div className={`${CARD} cn-detail-block`}>
                     <h2 className="flex items-center gap-2 font-display font-bold text-sm text-signal-blue mb-3">
                       <Package size={16} />
@@ -30633,6 +31521,54 @@ function PackageDetail() {
                     <PhotoGallery tk={data.tk} />
                   </div>
                 </div>
+              </>
+            )}
+
+            {detailTab === "details" && (
+              <>
+                <DetailPackageTab
+                  rows={[
+                    detailPackageRow(data, {
+                      index: 1,
+                      tracking: data.tk,
+                      status: currentStage,
+                      qty: packageCountValue,
+                      actions: [
+                        ...(canPrintLabel
+                          ? [
+                              {
+                                key: "print",
+                                label: "Print",
+                                icon: Icons.Printer,
+                                onClick: () => setShowLabel(true),
+                              },
+                            ]
+                          : []),
+                        ...(canEditSize
+                          ? [
+                              {
+                                key: "update",
+                                label: "Update",
+                                icon: Icons.Pencil,
+                                tone: "blue",
+                                onClick: () => setShowUpdatePkg(true),
+                              },
+                            ]
+                          : []),
+                      ],
+                    }),
+                  ]}
+                  shippingMethod={pkgShippingMethod(data)}
+                  onCopy={async (v) => {
+                    const ok = await cnCopyText(v);
+                    emitCBToast(
+                      ok ? "ok" : "err",
+                      ok ? "Tracking number copied" : "Copy failed",
+                      ok ? v : "Please select and copy the text manually.",
+                    );
+                  }}
+                />
+                {shipFinance()}
               </>
             )}
           </div>
@@ -30745,29 +31681,6 @@ function PackageDetail() {
             </aside>
           )}
         </div>
-        {detailTab === "overview" &&
-          completeShipFee.state !== "none" &&
-          completeShipFee.total > 0 && (
-            <div className="cn-detail-finance mt-5">
-              <DetailFinanceSummaryCard
-                rows={[
-                  { label: "Total Quantity", value: packageCountValue },
-                  {
-                    label: "Total Shipping Fee",
-                    value: money(completeShipFee.total),
-                  },
-                ]}
-                totals={[
-                  {
-                    label: "Grand Total",
-                    value: money(completeShipFee.total),
-                    tone: "blue",
-                  },
-                ]}
-              />
-              <PayShippingCard pkg={data} stage={currentStage} />
-            </div>
-          )}
       </div>
 
       {canChangeInternalWarehouse && data.customer_id && (
@@ -42989,6 +43902,106 @@ const CustomerApp = (() => {
     );
   }
 
+  // Confirm dialog shown before signing out (Log out → "Sign Out" → OK).
+  function SignOutConfirm({ open, onCancel, onConfirm }) {
+    const { tr } = useApp();
+    const [row, setRow] = useState(open);
+    const closing = !open && row;
+    useEffect(() => {
+      if (open) {
+        setRow(true);
+        return undefined;
+      }
+      const t = setTimeout(() => setRow(false), 180);
+      return () => clearTimeout(t);
+    }, [open]);
+    useEffect(() => {
+      if (!open) return undefined;
+      const h = (e) => e.key === "Escape" && onCancel();
+      window.addEventListener("keydown", h);
+      return () => window.removeEventListener("keydown", h);
+    }, [open, onCancel]);
+    if (!row) return null;
+    const btn =
+      "flex-1 h-12 rounded-full text-base font-semibold active:scale-[0.97] transition-transform";
+    return createPortal(
+      <div
+        className="fixed inset-0 z-[400] flex items-center justify-center px-6"
+        style={{
+          backgroundColor: "rgba(15,23,42,0.45)",
+          animation: closing
+            ? "jzso-fade-out 170ms ease-in forwards"
+            : "jzso-fade-in 200ms ease-out both",
+          pointerEvents: closing ? "none" : "auto",
+        }}
+        onClick={onCancel}
+        role="presentation"
+      >
+        <style>{`
+          @keyframes jzso-fade-in{from{opacity:0}to{opacity:1}}
+          @keyframes jzso-fade-out{from{opacity:1}to{opacity:0}}
+          @keyframes jzso-pop-in{from{opacity:0;transform:translate3d(0,12px,0)}to{opacity:1;transform:translate3d(0,0,0)}}
+          @keyframes jzso-pop-out{from{opacity:1;transform:translate3d(0,0,0)}to{opacity:0;transform:translate3d(0,8px,0)}}
+        `}</style>
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="jzso-title"
+          aria-describedby="jzso-msg"
+          className="w-full max-w-sm rounded-[28px] p-5 shadow-2xl"
+          style={{
+            background: "var(--jz-c-card, #fff)",
+            color: "var(--jz-c-text, #14284b)",
+            willChange: "transform, opacity",
+            animation: closing
+              ? "jzso-pop-out 170ms ease-in forwards"
+              : "jzso-pop-in 240ms cubic-bezier(0.22,1,0.36,1) both",
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h2 id="jzso-title" className="text-xl font-bold">
+            {tr("Sign Out", "ចាកចេញ")}
+          </h2>
+          <p
+            id="jzso-msg"
+            className="mt-1.5 text-[15px]"
+            style={{ color: "var(--jz-c-muted, #64748b)" }}
+          >
+            {tr(
+              "Are you sure you want to sign out?",
+              "តើអ្នកប្រាកដថាចង់ចាកចេញមែនទេ?",
+            )}
+          </p>
+          <div className="mt-5 flex gap-3">
+            <button
+              type="button"
+              onClick={onCancel}
+              className={btn}
+              style={{
+                background: "var(--jz-c-border, #e2e8f0)",
+                color: "var(--jz-c-text, #14284b)",
+              }}
+            >
+              {tr("No", "ទេ")}
+            </button>
+            <button
+              type="button"
+              onClick={onConfirm}
+              className={`${btn} text-white`}
+              style={{
+                background:
+                  "linear-gradient(135deg, #ff4d4d 0%, #f23b26 55%, #e8300f 100%)",
+              }}
+            >
+              {tr("OK", "យល់ព្រម")}
+            </button>
+          </div>
+        </div>
+      </div>,
+      document.body,
+    );
+  }
+
   // ---------- Settings (Language · Appearance · Security · Log Out) ----------
   function CustomerSettings() {
     const { logout, tr, lang, theme } = useApp();
@@ -42996,6 +44009,7 @@ const CustomerApp = (() => {
     const feat = useCustomerFeatures();
     const [langOpen, setLangOpen] = useState(false);
     const [themeOpen, setThemeOpen] = useState(false);
+    const [signOutOpen, setSignOutOpen] = useState(false);
     return (
       <>
         <Top title={tr("Settings", "ការកំណត់")} back />
@@ -43045,7 +44059,7 @@ const CustomerApp = (() => {
           <div className="pt-2">
             <button
               type="button"
-              onClick={logout}
+              onClick={() => setSignOutOpen(true)}
               className="w-full h-14 rounded-3xl flex items-center justify-center gap-3 text-white text-base font-bold shadow-[0_10px_24px_-10px_rgba(232,48,15,.7)] active:scale-[0.98] transition-transform"
               style={{
                 background:
@@ -43062,6 +44076,14 @@ const CustomerApp = (() => {
               {tr("Proudly built in Cambodia", "ផលិតដោយមោទនភាពនៅកម្ពុជា")}
             </span>
           </div>
+          <SignOutConfirm
+            open={signOutOpen}
+            onCancel={() => setSignOutOpen(false)}
+            onConfirm={() => {
+              setSignOutOpen(false);
+              logout();
+            }}
+          />
         </div>
       </>
     );
@@ -60647,9 +61669,20 @@ function CnCardHead({ icon: Ic, title, pill, right }) {
   );
 }
 
+// Fonts for the CN Order detail page (Poppins + Khmer fallbacks). Loaded with
+// a <link> because an @import in the middle of CB_DESIGN_CSS is ignored.
+if (typeof document !== "undefined" && !document.getElementById("cb-cn-font")) {
+  const l = document.createElement("link");
+  l.id = "cb-cn-font";
+  l.rel = "stylesheet";
+  l.href =
+    "https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Kantumruy+Pro:wght@400;500;600;700&family=Noto+Sans+Khmer:wght@400;500;600;700&display=swap";
+  document.head.appendChild(l);
+}
+
 // Presentation is scoped to this page; it follows the existing admin theme.
 const CN_DETAIL_LAYOUT_CSS = `
-.cn-detail-page{--cn-surface:#fff;--cn-soft:#f8fafc;--cn-border:#e2e8f0;--cn-text:#0f172a;--cn-muted:#64748b;--cn-blue:#2563eb;--cn-tint:#eff6ff;color:var(--cn-text);font-family:Inter,"Noto Sans Khmer","Kantumruy Pro",system-ui,sans-serif;min-width:0}
+.cn-detail-page{--cn-surface:#fff;--cn-soft:#f8fafc;--cn-border:#e2e8f0;--cn-text:#0f172a;--cn-muted:#64748b;--cn-blue:#2563eb;--cn-tint:#eff6ff;color:var(--cn-text);font-family:var(--cn-font);min-width:0}
 html.cb-admin-dark .cn-detail-page{--cn-surface:#151c2c;--cn-soft:#101827;--cn-border:#263043;--cn-text:#f1f5f9;--cn-muted:#94a3b8;--cn-blue:#93c5fd;--cn-tint:#182b4a}
 .cn-detail-page{transition:opacity .2s ease}
 .cn-detail-page.is-busy{pointer-events:none}
@@ -60693,10 +61726,38 @@ html.cb-admin-dark .cn-detail-page{--cn-surface:#151c2c;--cn-soft:#101827;--cn-b
 .cn-detail-parcel{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;font-size:14px;flex-wrap:wrap}
 .cn-detail-parcel>div:first-child{flex:1 1 240px;overflow-wrap:anywhere}
 .cn-detail-finance{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;align-items:start}
+.cn-detail-finance-wrap{width:calc((100% - 20px) * 1.85 / 2.85);min-width:0}
+.cn-track-modal>section{border:0;box-shadow:none;background:transparent}
+.cn-track-modal>section>:first-child{display:none}
+.cn-track-modal>section>:nth-child(2){border-top:0;padding:0}
+@media(max-width:1023px){.cn-detail-finance-wrap{width:100%}}
+.cn-detail-page .cn-detail-finance{align-items:stretch}
+.cn-detail-page .cn-detail-finance>section{display:flex;flex-direction:column}
+.cn-detail-page .cn-detail-finance>section>dl+div{margin-top:auto}
 .cn-detail-costs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px;padding:20px}
 .cn-detail-costs dt{color:var(--cn-muted);font-size:12px;margin-bottom:8px}
 .cn-detail-costs dd{font-size:14px;font-weight:650;overflow-wrap:anywhere}
 .cn-detail-empty{padding:32px;text-align:center;color:var(--cn-muted);font-size:14px}
+/* Typography (DRSB-style): Poppins, only weights 400/500/600, comfortable sizes */
+.cn-detail-page{--cn-font:Poppins,"Kantumruy Pro","Noto Sans Khmer",system-ui,sans-serif;font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+.cn-detail-page :is(h1,h2,h3,h4){font-family:inherit;letter-spacing:0;font-weight:600}
+.cn-detail-page .cb-surface h2{font-size:16px;font-weight:600}
+.cn-detail-page .font-bold{font-weight:600}
+.cn-detail-page .font-semibold{font-weight:500}
+.cn-detail-page .font-extrabold{font-weight:700}
+.cn-detail-title{font-size:26px;font-weight:600;letter-spacing:0}
+.cn-detail-eyebrow,.cn-detail-block-title,.cn-detail-info>.cn-detail-group{font-weight:600;letter-spacing:.05em}
+.cn-detail-tab{font-weight:500}
+.cn-detail-tab[aria-selected="true"]{font-weight:600}
+.cn-detail-button{font-weight:500}
+.cn-detail-info dt{font-weight:400}
+.cn-detail-info dd{font-weight:500}
+.cn-detail-overview dd{font-weight:500}
+.cn-detail-costs dt{font-size:13px;font-weight:400}
+.cn-detail-costs dd{font-size:15px;font-weight:600}
+.cn-detail-page :is(th,[role="columnheader"]){font-size:12px;font-weight:600;letter-spacing:.05em}
+.cn-detail-page :is(td,[role="cell"]){font-size:14px}
+.cn-detail-page :is(table,dl,dd,.tabular-nums){font-variant-numeric:tabular-nums}
 .cn-detail-page input{max-width:100%}
 .cn-detail-page [role="tabpanel"]{min-width:0}
 .cn-detail-page [role="tabpanel"][hidden]{display:none}
@@ -60901,6 +61962,7 @@ function CnOrderDetailPage() {
   );
   const [payOpen, setPayOpen] = useState(false);
   const [cnInvoiceOpen, setCnInvoiceOpen] = useState(false);
+  const [cnTrackOpen, setCnTrackOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
   const [refundOpen, setRefundOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -61695,6 +62757,148 @@ function CnOrderDetailPage() {
       </div>
     </section>
   );
+  const financePanel = (
+    <>
+      {row.order_type !== "direct" && (
+        <div className="cn-detail-finance">
+          {row.order_type !== "direct" && (
+            <DetailFinanceSummaryCard
+              rows={[
+                ...(hasItems
+                  ? [
+                      {
+                        label: "Total Quantity",
+                        value: row.cn_order_items.reduce(
+                          (sum, item) => sum + (Number(item.quantity) || 0),
+                          0,
+                        ),
+                      },
+                    ]
+                  : []),
+                {
+                  label:
+                    row.pricing_mode === "usd" ? "Goods (USD)" : "Goods (CNY)",
+                  value:
+                    row.pricing_mode === "usd"
+                      ? money(
+                          (Number(row.total_due_usd) || 0) -
+                            (Number(row.domestic_shipping_usd) || 0) -
+                            (Number(row.service_fee_usd) || 0) -
+                            (Number(row.additional_services_total_usd) || 0),
+                        )
+                      : cnCny(row.product_total_cny),
+                },
+                {
+                  label: "China shipping",
+                  value:
+                    row.pricing_mode === "usd"
+                      ? money(row.domestic_shipping_usd || 0)
+                      : cnCny(row.domestic_shipping_cny),
+                },
+                ...(Number(row.cny_per_usd) > 0
+                  ? [{ label: "Rate (CNY/USD)", value: row.cny_per_usd }]
+                  : []),
+                {
+                  label: `Service fee ${row.service_fee_pct ?? 0}%`,
+                  value: money(row.service_fee_usd),
+                },
+                ...(Number(row.additional_services_total_usd) > 0
+                  ? [
+                      {
+                        label: "Additional services",
+                        value: money(row.additional_services_total_usd),
+                      },
+                    ]
+                  : []),
+                // Cambodia shipping fee set on the TK(s) at Inbound / Arrive.
+                ...(() => {
+                  const sf = cnShipFeeSummary(parcels);
+                  if (!sf.rows.length) return [];
+                  return [
+                    ...(sf.rows.length > 1
+                      ? sf.rows.map((x) => ({
+                          label: `Shipping fee · ${x.tk}`,
+                          value: money(x.fee.total),
+                        }))
+                      : []),
+                    {
+                      label: "Total Shipping Fee",
+                      value: money(sf.total),
+                    },
+                  ];
+                })(),
+              ]}
+              totals={[
+                { label: "Total due", value: money(due), tone: "blue" },
+                ...(cnShipFeeSummary(parcels).rows.length > 0
+                  ? [
+                      {
+                        label: "Grand Total",
+                        value: money(due + cnShipFeeSummary(parcels).total),
+                        tone: "slate",
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+          )}
+
+          {row.order_type !== "direct" && (
+            <DetailPaymentCard
+              badge={<CnPaymentBadge status={row.payment_status} />}
+              lines={
+                cnShipFeeSummary(parcels).rows.length > 0
+                  ? [
+                      ...cnShipFeeSummary(parcels).rows.map((r) => ({
+                        key: r.tk,
+                        title: "Shipping Fee",
+                        subtitle: r.tk,
+                        amount: r.fee.total,
+                        badge: (
+                          <DetailFeeBadge
+                            state={
+                              r.fee.state === "paid"
+                                ? "paid"
+                                : r.requested || r.atArrival
+                                  ? "requested"
+                                  : "pending"
+                            }
+                          />
+                        ),
+                      })),
+                      {
+                        key: "product-order",
+                        title: "Product Order",
+                        amount: due,
+                        badge: <CnPaymentBadge status={row.payment_status} />,
+                      },
+                    ]
+                  : []
+              }
+              info={[
+                { label: "Method", value: row.payment_method || "—" },
+                ...(row.paid_at
+                  ? [
+                      {
+                        label: "Paid at",
+                        value: formatDbTimestamp(row.paid_at),
+                      },
+                    ]
+                  : []),
+                ...(row.refunded_usd > 0
+                  ? [{ label: "Refunded", value: money(row.refunded_usd) }]
+                  : []),
+              ]}
+              paid={paid + cnShipFeeSummary(parcels).paid}
+              outstanding={
+                Math.max(0, due - paid) + cnShipFeeSummary(parcels).due
+              }
+            />
+          )}
+        </div>
+      )}
+    </>
+  );
   return (
     <div
       className={`cn-detail-page space-y-4${loading ? " is-busy" : ""}`}
@@ -61836,6 +63040,20 @@ function CnOrderDetailPage() {
                     role="menu"
                     className="absolute right-0 top-11 z-40 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-xl"
                   >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setCnMenuOpen(false);
+                        setCnTrackOpen(true);
+                      }}
+                      className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-3 text-left text-sm font-semibold text-slate-900 hover:bg-slate-50"
+                    >
+                      <Icons.Package size={18} /> China Tracking / Parcels
+                      <span className="ml-auto rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">
+                        {parcels.length}
+                      </span>
+                    </button>
                     <button
                       type="button"
                       role="menuitem"
@@ -62170,7 +63388,66 @@ function CnOrderDetailPage() {
                   />
                 </dl>
               </DetailBlock>
-              {detailTab === "details" && trackingPanel}
+              <section className="cb-surface overflow-hidden">
+                <CnCardHead
+                  icon={Icons.BarChart3}
+                  title="Purchase cost & profit"
+                  right={
+                    <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold uppercase text-slate-500">
+                      Internal
+                    </span>
+                  }
+                />
+                {purchaseFinance.totalCostUsd == null && (
+                  <div className="mx-5 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                    <Icons.Info size={16} className="shrink-0" />
+                    Record both actual costs to calculate profit.
+                  </div>
+                )}
+                <dl className="cn-detail-costs">
+                  <div>
+                    <dt>Actual goods cost</dt>
+                    <dd>
+                      {purchaseFinance.goodsUsd == null
+                        ? "Pending"
+                        : `${cnCny(row.actual_cost_cny)} (${money(purchaseFinance.goodsUsd)})`}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Actual China shipping cost</dt>
+                    <dd>
+                      {purchaseFinance.shippingUsd == null
+                        ? "Pending"
+                        : `${cnCny(row.actual_domestic_shipping_cny)} (${money(purchaseFinance.shippingUsd)})`}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Total actual cost</dt>
+                    <dd>
+                      {purchaseFinance.totalCostUsd == null
+                        ? "Pending"
+                        : money(purchaseFinance.totalCostUsd)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Pre-freight profit / loss</dt>
+                    <dd className={profitTone}>
+                      {purchaseFinance.totalCostUsd == null &&
+                      !purchaseFinance.refunded
+                        ? "—"
+                        : profitText}
+                    </dd>
+                  </div>
+                </dl>
+                {purchaseFinance.rate > 0 && (
+                  <div className="border-t border-slate-100 px-5 py-3 text-xs text-slate-500">
+                    Purchase FX rate (CNY/USD):{" "}
+                    <span className="font-semibold">
+                      {purchaseFinance.rate}
+                    </span>
+                  </div>
+                )}
+              </section>
             </div>
             <aside
               className="cn-detail-stack cn-detail-sidebar"
@@ -62370,150 +63647,10 @@ function CnOrderDetailPage() {
               </div>
             </section>
           )}
-
-          {row.order_type !== "direct" && (
-            <div className="cn-detail-finance">
-              {row.order_type !== "direct" && (
-                <DetailFinanceSummaryCard
-                  rows={[
-                    ...(hasItems
-                      ? [
-                          {
-                            label: "Total Quantity",
-                            value: row.cn_order_items.reduce(
-                              (sum, item) => sum + (Number(item.quantity) || 0),
-                              0,
-                            ),
-                          },
-                        ]
-                      : []),
-                    {
-                      label:
-                        row.pricing_mode === "usd"
-                          ? "Goods (USD)"
-                          : "Goods (CNY)",
-                      value:
-                        row.pricing_mode === "usd"
-                          ? money(
-                              (Number(row.total_due_usd) || 0) -
-                                (Number(row.domestic_shipping_usd) || 0) -
-                                (Number(row.service_fee_usd) || 0) -
-                                (Number(row.additional_services_total_usd) ||
-                                  0),
-                            )
-                          : cnCny(row.product_total_cny),
-                    },
-                    {
-                      label: "China shipping",
-                      value:
-                        row.pricing_mode === "usd"
-                          ? money(row.domestic_shipping_usd || 0)
-                          : cnCny(row.domestic_shipping_cny),
-                    },
-                    ...(Number(row.cny_per_usd) > 0
-                      ? [{ label: "Rate (CNY/USD)", value: row.cny_per_usd }]
-                      : []),
-                    {
-                      label: `Service fee ${row.service_fee_pct ?? 0}%`,
-                      value: money(row.service_fee_usd),
-                    },
-                    ...(Number(row.additional_services_total_usd) > 0
-                      ? [
-                          {
-                            label: "Additional services",
-                            value: money(row.additional_services_total_usd),
-                          },
-                        ]
-                      : []),
-                    // Cambodia shipping fee set on the TK(s) at Inbound / Arrive.
-                    ...(() => {
-                      const sf = cnShipFeeSummary(parcels);
-                      if (!sf.rows.length) return [];
-                      return [
-                        ...(sf.rows.length > 1
-                          ? sf.rows.map((x) => ({
-                              label: `Shipping fee · ${x.tk}`,
-                              value: money(x.fee.total),
-                            }))
-                          : []),
-                        {
-                          label: "Total Shipping Fee",
-                          value: money(sf.total),
-                        },
-                      ];
-                    })(),
-                  ]}
-                  totals={[
-                    { label: "Total due", value: money(due), tone: "blue" },
-                    ...(cnShipFeeSummary(parcels).rows.length > 0
-                      ? [
-                          {
-                            label: "Grand Total",
-                            value: money(due + cnShipFeeSummary(parcels).total),
-                            tone: "slate",
-                          },
-                        ]
-                      : []),
-                  ]}
-                />
-              )}
-
-              {row.order_type !== "direct" && (
-                <DetailPaymentCard
-                  badge={<CnPaymentBadge status={row.payment_status} />}
-                  lines={
-                    cnShipFeeSummary(parcels).rows.length > 0
-                      ? [
-                          ...cnShipFeeSummary(parcels).rows.map((r) => ({
-                            key: r.tk,
-                            title: "Shipping Fee",
-                            subtitle: r.tk,
-                            amount: r.fee.total,
-                            badge: (
-                              <DetailFeeBadge
-                                state={
-                                  r.fee.state === "paid"
-                                    ? "paid"
-                                    : r.requested || r.atArrival
-                                      ? "requested"
-                                      : "pending"
-                                }
-                              />
-                            ),
-                          })),
-                          {
-                            key: "product-order",
-                            title: "Product Order",
-                            amount: due,
-                            badge: (
-                              <CnPaymentBadge status={row.payment_status} />
-                            ),
-                          },
-                        ]
-                      : []
-                  }
-                  info={[
-                    { label: "Method", value: row.payment_method || "—" },
-                    ...(row.paid_at
-                      ? [
-                          {
-                            label: "Paid at",
-                            value: formatDbTimestamp(row.paid_at),
-                          },
-                        ]
-                      : []),
-                    ...(row.refunded_usd > 0
-                      ? [{ label: "Refunded", value: money(row.refunded_usd) }]
-                      : []),
-                  ]}
-                  paid={paid + cnShipFeeSummary(parcels).paid}
-                  outstanding={
-                    Math.max(0, due - paid) + cnShipFeeSummary(parcels).due
-                  }
-                />
-              )}
-            </div>
+          {detailTab === "details" && (
+            <div className="cn-detail-finance-wrap">{financePanel}</div>
           )}
+
           {reqModal && (
             <RequestShipPayModal
               pkg={{
@@ -62557,12 +63694,9 @@ function CnOrderDetailPage() {
                     key={r.tk}
                     className="py-2.5 flex flex-wrap items-center justify-between gap-3"
                   >
-                    <Link
-                      to={`/packages/${encodeURIComponent(r.tk)}`}
-                      className="font-mono font-semibold text-signal-blue hover:underline"
-                    >
+                    <span className="font-mono font-semibold text-ink-900">
                       {r.tk}
-                    </Link>
+                    </span>
                     <span className="flex items-center gap-2">
                       <b>{money(r.fee.total)}</b>
                       <span
@@ -62639,65 +63773,6 @@ function CnOrderDetailPage() {
               </div>
             </div>
           )}
-
-          <section className="cb-surface overflow-hidden">
-            <CnCardHead
-              icon={Icons.BarChart3}
-              title="Purchase cost & profit"
-              right={
-                <span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-bold uppercase text-slate-500">
-                  Internal
-                </span>
-              }
-            />
-            {purchaseFinance.totalCostUsd == null && (
-              <div className="mx-5 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                <Icons.Info size={16} className="shrink-0" />
-                Record both actual costs to calculate profit.
-              </div>
-            )}
-            <dl className="cn-detail-costs">
-              <div>
-                <dt>Actual goods cost</dt>
-                <dd>
-                  {purchaseFinance.goodsUsd == null
-                    ? "Pending"
-                    : `${cnCny(row.actual_cost_cny)} (${money(purchaseFinance.goodsUsd)})`}
-                </dd>
-              </div>
-              <div>
-                <dt>Actual China shipping cost</dt>
-                <dd>
-                  {purchaseFinance.shippingUsd == null
-                    ? "Pending"
-                    : `${cnCny(row.actual_domestic_shipping_cny)} (${money(purchaseFinance.shippingUsd)})`}
-                </dd>
-              </div>
-              <div>
-                <dt>Total actual cost</dt>
-                <dd>
-                  {purchaseFinance.totalCostUsd == null
-                    ? "Pending"
-                    : money(purchaseFinance.totalCostUsd)}
-                </dd>
-              </div>
-              <div>
-                <dt>Pre-freight profit / loss</dt>
-                <dd className={profitTone}>
-                  {purchaseFinance.totalCostUsd == null &&
-                  !purchaseFinance.refunded
-                    ? "—"
-                    : profitText}
-                </dd>
-              </div>
-            </dl>
-            {purchaseFinance.rate > 0 && (
-              <div className="border-t border-slate-100 px-5 py-3 text-xs text-slate-500">
-                Purchase FX rate (CNY/USD):{" "}
-                <span className="font-semibold">{purchaseFinance.rate}</span>
-              </div>
-            )}
-          </section>
         </div>
         <div
           id="cn-panel-package"
@@ -62753,99 +63828,7 @@ function CnOrderDetailPage() {
               onCopy={(v) => copyDetailText(v, "Tracking number")}
             />
           )}
-          {detailTab === "package" && trackingPanel}
-          {(cnImages.length > 0 || canEdit) && (
-            <section className="cb-surface">
-              {(cnImages.length > 0 || canEdit) && (
-                <div className="p-5">
-                  <div className="flex items-center justify-between mb-3">
-                    <h2 className="font-bold text-sm">
-                      Product / Package Images
-                      {cnImages.length > 0 ? ` (${cnImages.length})` : ""}
-                    </h2>
-                    {canEdit && (
-                      <button
-                        type="button"
-                        onClick={() => setCnImgOpen(true)}
-                        className="h-8 px-3 rounded-lg border border-slate-200 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-50 inline-flex items-center gap-1.5"
-                      >
-                        <Icons.Image size={13} />
-                        {cnImages.length ? "Manage" : "Add"}
-                      </button>
-                    )}
-                  </div>
-                  {cnImages.length > 0 ? (
-                    (() => {
-                      const its =
-                        Array.isArray(row.cn_order_items) &&
-                        row.cn_order_items.length
-                          ? row.cn_order_items
-                          : [{ product_name: row.product_name }];
-                      const g = groupCnImages(cnImages, its.length);
-                      const thumbs = (list) => (
-                        <div className="flex flex-wrap gap-3">
-                          {list.map((im) => (
-                            <AirImg
-                              key={im.id}
-                              src={im.url}
-                              onClick={() => setCnViewer(cnImages.indexOf(im))}
-                              className="w-24 h-24 rounded-xl border border-slate-200"
-                              FallbackIcon={Icons.ShoppingCart}
-                            />
-                          ))}
-                        </div>
-                      );
-                      return (
-                        <div className="space-y-4">
-                          {its.map((it, i) => (
-                            <div key={i}>
-                              <div className="mb-2 flex items-center gap-2 text-xs">
-                                <span className="h-5 min-w-5 px-1.5 rounded-full bg-slate-900 text-white font-bold grid place-items-center">
-                                  {i + 1}
-                                </span>
-                                <b className="text-slate-800 truncate">
-                                  {it.product_name || `Item ${i + 1}`}
-                                </b>
-                                {it.variant && (
-                                  <span className="text-slate-500 truncate">
-                                    · {it.variant}
-                                  </span>
-                                )}
-                              </div>
-                              {g.byItem[i].length ? (
-                                thumbs(g.byItem[i])
-                              ) : (
-                                <p className="text-xs text-slate-400">
-                                  No photo for this item.
-                                </p>
-                              )}
-                            </div>
-                          ))}
-                          {g.loose.length > 0 && (
-                            <div>
-                              <div className="mb-2 text-xs font-bold text-amber-700">
-                                Not assigned to an item ({g.loose.length}) —
-                                open Manage to assign
-                              </div>
-                              {thumbs(g.loose)}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()
-                  ) : (
-                    <p className="text-xs text-slate-400">No images yet.</p>
-                  )}
-                </div>
-              )}
-            </section>
-          )}
-
-          {cnImages.length === 0 && !canEdit && (
-            <div className="cb-surface cn-detail-empty">
-              No product or package images yet.
-            </div>
-          )}
+          {detailTab === "package" && financePanel}
         </div>
       </div>
       {cnViewer >= 0 && (
@@ -62867,6 +63850,24 @@ function CnOrderDetailPage() {
       )}
       {cnInvoiceOpen && (
         <CnInvoiceModal row={row} onClose={() => setCnInvoiceOpen(false)} />
+      )}
+      {cnTrackOpen && (
+        <AppModal
+          title="China tracking / Parcels"
+          maxW="max-w-2xl"
+          onClose={() => setCnTrackOpen(false)}
+          footer={
+            <button
+              type="button"
+              onClick={() => setCnTrackOpen(false)}
+              className="h-10 px-4 rounded-xl border border-slate-200 bg-white text-slate-700 text-sm font-semibold hover:bg-slate-50"
+            >
+              Close
+            </button>
+          }
+        >
+          <div className="cn-track-modal">{trackingPanel}</div>
+        </AppModal>
       )}
       {labelTk && (
         <CnPrintLabelModalLoader
