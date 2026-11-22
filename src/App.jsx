@@ -44360,6 +44360,158 @@ const CustomerApp = (() => {
     );
   }
 
+  // ---------- Push notifications (customer device) ----------
+  // Needs: customer_push.sql, the send-push Edge Function and the push handlers
+  // added to public/customer/sw.js. iPhone: the app must be on the Home Screen.
+  const pushSupported = () =>
+    typeof window !== "undefined" &&
+    "serviceWorker" in navigator &&
+    "PushManager" in window &&
+    "Notification" in window;
+  const pushKeyToBytes = (b64) => {
+    const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+    const raw = atob((b64 + pad).replace(/-/g, "+").replace(/_/g, "/"));
+    return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+  };
+  const pushRegistration = async () => {
+    const existing =
+      await navigator.serviceWorker.getRegistration("/customer/");
+    if (existing) return existing;
+    return Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise((_, rej) => setTimeout(() => rej(new Error("no-sw")), 5000)),
+    ]);
+  };
+
+  function PushMenuRow() {
+    const { tr } = useApp();
+    const [state, setState] = useState("checking"); // checking | off | on | denied | unsupported | ios
+    const [busy, setBusy] = useState(false);
+
+    useEffect(() => {
+      let alive = true;
+      (async () => {
+        if (!pushSupported())
+          return (
+            alive &&
+            setState(pwaIsIOS() && !pwaIsStandalone() ? "ios" : "unsupported")
+          );
+        if (Notification.permission === "denied")
+          return alive && setState("denied");
+        try {
+          const reg = await pushRegistration();
+          const sub = await reg.pushManager.getSubscription();
+          if (alive)
+            setState(
+              sub && Notification.permission === "granted" ? "on" : "off",
+            );
+        } catch {
+          if (alive) setState("off");
+        }
+      })();
+      return () => {
+        alive = false;
+      };
+    }, []);
+
+    const enable = async () => {
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted")
+        return setState(perm === "denied" ? "denied" : "off");
+      const { data: key, error: kErr } = await supabase.rpc(
+        "push_vapid_public_key",
+      );
+      if (kErr || !key) throw new Error("Push is not configured yet");
+      const reg = await pushRegistration();
+      const sub =
+        (await reg.pushManager.getSubscription()) ||
+        (await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: pushKeyToBytes(key),
+        }));
+      const j = sub.toJSON();
+      const { error } = await supabase.rpc("push_save_subscription", {
+        p_endpoint: j.endpoint,
+        p_p256dh: j.keys?.p256dh,
+        p_auth: j.keys?.auth,
+        p_ua: navigator.userAgent.slice(0, 200),
+      });
+      if (error) throw error;
+      setState("on");
+      emitCBToast("ok", tr("Notifications turned on", "បានបើកការជូនដំណឹង"));
+    };
+    const disable = async () => {
+      const reg = await pushRegistration();
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        await supabase.rpc("push_remove_subscription", {
+          p_endpoint: sub.endpoint,
+        });
+        await sub.unsubscribe();
+      }
+      setState("off");
+      emitCBToast("ok", tr("Notifications turned off", "បានបិទការជូនដំណឹង"));
+    };
+    const onClick = async () => {
+      if (busy) return;
+      if (state === "ios")
+        return emitCBToast(
+          "warn",
+          tr(
+            "Add the app to your Home Screen first, then turn on notifications.",
+            "សូមបន្ថែមកម្មវិធីទៅ Home Screen សិន រួចបើកការជូនដំណឹង។",
+          ),
+        );
+      if (state === "denied")
+        return emitCBToast(
+          "warn",
+          tr(
+            "Notifications are blocked. Allow them in your browser / phone settings.",
+            "ការជូនដំណឹងត្រូវបានហាមឃាត់។ សូមអនុញ្ញាតក្នុងការកំណត់ទូរស័ព្ទ។",
+          ),
+        );
+      if (state === "unsupported")
+        return emitCBToast(
+          "warn",
+          tr(
+            "This device does not support push notifications.",
+            "ឧបករណ៍នេះមិនគាំទ្រការជូនដំណឹងទេ។",
+          ),
+        );
+      setBusy(true);
+      try {
+        if (state === "on") await disable();
+        else await enable();
+      } catch (e) {
+        emitCBToast(
+          "err",
+          tr("Could not change notifications", "មិនអាចប្តូរការជូនដំណឹងបានទេ"),
+          e?.message || "",
+        );
+      } finally {
+        setBusy(false);
+      }
+    };
+    if (state === "checking") return null;
+    const value =
+      state === "on"
+        ? tr("On", "បើក")
+        : state === "denied"
+          ? tr("Blocked", "ត្រូវបានហាមឃាត់")
+          : state === "unsupported"
+            ? tr("Not supported", "មិនគាំទ្រ")
+            : tr("Off", "បិទ");
+    return (
+      <MenuRow
+        icon={Icons.BellRing || Icons.Bell}
+        tone="violet"
+        label={tr("Push notifications", "ការជូនដំណឹង Push")}
+        value={value}
+        onClick={onClick}
+      />
+    );
+  }
+
   // ---------- Profile ----------
   // Account overview only. Language / Appearance / Change Password / Log Out
   // live on the Settings page (gear icon, top right).
@@ -44728,6 +44880,7 @@ const CustomerApp = (() => {
               }
               onClick={() => setThemeOpen(true)}
             />
+            <PushMenuRow />
             <InstallMenuRow />
           </Card>
           {feat("profile_password") && (
@@ -68271,6 +68424,270 @@ function SlaNotificationSettingsPanel({ notify }) {
   );
 }
 
+// ---------------------------------------------------------------------
+// Customer Push settings (Admin → System Settings → Customer Push)
+// Needs customer_push.sql. Each event can be switched on/off and its message
+// edited (Khmer + English). {tk} {amount} {order} {count} are replaced per alert.
+// ---------------------------------------------------------------------
+function CustomerPushSettingsPanel({ notify }) {
+  const { user } = useAuth();
+  const [rows, setRows] = useState(null);
+  const [saved, setSaved] = useState({});
+  const [open, setOpen] = useState("");
+  const [busy, setBusy] = useState("");
+  const [stats, setStats] = useState(null);
+
+  const load = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("push_event_settings")
+        .select("*")
+        .order("sort_order");
+      if (error) throw error;
+      setRows(data || []);
+      setSaved(Object.fromEntries((data || []).map((r) => [r.event_key, r])));
+      const [{ count: devices }, { count: queued }, { count: failed }] =
+        await Promise.all([
+          supabase
+            .from("push_subscriptions")
+            .select("id", { count: "exact", head: true }),
+          supabase
+            .from("push_outbox")
+            .select("id", { count: "exact", head: true })
+            .is("sent_at", null)
+            .eq("skipped", false),
+          supabase
+            .from("push_outbox")
+            .select("id", { count: "exact", head: true })
+            .not("last_error", "is", null)
+            .is("sent_at", null)
+            .eq("skipped", false),
+        ]);
+      setStats({
+        devices: devices ?? 0,
+        queued: queued ?? 0,
+        failed: failed ?? 0,
+      });
+    } catch (e) {
+      setRows([]);
+      notify(
+        "Customer Push",
+        e?.message?.includes("push_event_settings")
+          ? "Run customer_push.sql in Supabase first."
+          : e?.message || "Unable to load.",
+        "err",
+      );
+    }
+  };
+  useEffect(() => {
+    if (supabase) load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const patch = (key, p) =>
+    setRows((rs) => rs.map((r) => (r.event_key === key ? { ...r, ...p } : r)));
+
+  const save = async (r) => {
+    setBusy(r.event_key);
+    try {
+      const { error } = await supabase
+        .from("push_event_settings")
+        .update({
+          enabled: r.enabled,
+          title_km: r.title_km,
+          body_km: r.body_km,
+          title_en: r.title_en,
+          body_en: r.body_en,
+          remind_hour: r.remind_hour,
+          updated_at: new Date().toISOString(),
+          updated_by: user?.id || null,
+        })
+        .eq("event_key", r.event_key);
+      if (error) throw error;
+      setSaved((m) => ({ ...m, [r.event_key]: r }));
+      notify("Saved", `${r.label} updated.`);
+    } catch (e) {
+      notify("Save failed", e?.message || "Unable to save.", "err");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const field =
+    "mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
+  const dirty = (r) => JSON.stringify(r) !== JSON.stringify(saved[r.event_key]);
+
+  if (!supabase)
+    return (
+      <div className="p-6 text-sm text-slate-500">
+        Supabase is not configured.
+      </div>
+    );
+  if (!rows) return <div className="p-6 text-sm text-slate-500">Loading…</div>;
+
+  return (
+    <div className="p-6 space-y-4">
+      <div>
+        <h2 className="text-lg font-bold text-slate-900">
+          Customer Push Notifications
+        </h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Choose which alerts are sent to the customer app. Customers turn push
+          on from Profile → Settings → Push notifications.
+        </p>
+        {stats && (
+          <div className="mt-3 flex flex-wrap gap-2 text-xs font-bold">
+            <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-700">
+              {stats.devices} device(s) subscribed
+            </span>
+            <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">
+              {stats.queued} waiting to send
+            </span>
+            {stats.failed > 0 && (
+              <span className="rounded-full bg-rose-50 px-3 py-1 text-rose-700">
+                {stats.failed} failing
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+
+      {rows.length === 0 && (
+        <p className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800">
+          No events found. Run <b>customer_push.sql</b> in Supabase.
+        </p>
+      )}
+
+      {rows.map((r) => (
+        <div
+          key={r.event_key}
+          className="rounded-2xl border border-slate-200 bg-white"
+        >
+          <div className="flex items-center gap-4 p-4">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={r.enabled}
+              aria-label={`${r.label} on/off`}
+              onClick={() => {
+                const next = { ...r, enabled: !r.enabled };
+                patch(r.event_key, { enabled: next.enabled });
+                save(next);
+              }}
+              className={`relative h-7 w-12 shrink-0 rounded-full transition-colors ${r.enabled ? "bg-emerald-500" : "bg-slate-300"}`}
+            >
+              <span
+                className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow transition-all ${r.enabled ? "left-[22px]" : "left-0.5"}`}
+              />
+            </button>
+            <div className="min-w-0 flex-1">
+              <p className="font-bold text-slate-900">{r.label}</p>
+              <p className="text-xs text-slate-500">{r.description}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setOpen(open === r.event_key ? "" : r.event_key)}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50"
+            >
+              {open === r.event_key ? "Close" : "Edit message"}
+            </button>
+          </div>
+          {open === r.event_key && (
+            <div className="grid gap-4 border-t border-slate-100 p-4 md:grid-cols-2">
+              <div>
+                <p className="text-xs font-bold uppercase text-slate-400">
+                  ភាសាខ្មែរ
+                </p>
+                <label className="mt-2 block text-xs font-semibold text-slate-600">
+                  Title
+                  <input
+                    className={field}
+                    value={r.title_km}
+                    onChange={(e) =>
+                      patch(r.event_key, { title_km: e.target.value })
+                    }
+                  />
+                </label>
+                <label className="mt-2 block text-xs font-semibold text-slate-600">
+                  Message
+                  <textarea
+                    rows={3}
+                    className={field}
+                    value={r.body_km}
+                    onChange={(e) =>
+                      patch(r.event_key, { body_km: e.target.value })
+                    }
+                  />
+                </label>
+              </div>
+              <div>
+                <p className="text-xs font-bold uppercase text-slate-400">
+                  English
+                </p>
+                <label className="mt-2 block text-xs font-semibold text-slate-600">
+                  Title
+                  <input
+                    className={field}
+                    value={r.title_en}
+                    onChange={(e) =>
+                      patch(r.event_key, { title_en: e.target.value })
+                    }
+                  />
+                </label>
+                <label className="mt-2 block text-xs font-semibold text-slate-600">
+                  Message
+                  <textarea
+                    rows={3}
+                    className={field}
+                    value={r.body_en}
+                    onChange={(e) =>
+                      patch(r.event_key, { body_en: e.target.value })
+                    }
+                  />
+                </label>
+              </div>
+              {r.event_key === "unpaid_reminder" && (
+                <label className="text-xs font-semibold text-slate-600">
+                  Send every day at (Phnom Penh time)
+                  <select
+                    className={field}
+                    value={r.remind_hour}
+                    onChange={(e) =>
+                      patch(r.event_key, {
+                        remind_hour: Number(e.target.value),
+                      })
+                    }
+                  >
+                    {Array.from({ length: 24 }, (_, h) => (
+                      <option key={h} value={h}>
+                        {String(h).padStart(2, "0")}:00
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <p className="text-xs text-slate-400 md:col-span-2">
+                Placeholders: <code>{"{tk}"}</code> <code>{"{amount}"}</code>{" "}
+                <code>{"{order}"}</code> <code>{"{count}"}</code>
+              </p>
+              <div className="flex justify-end md:col-span-2">
+                <button
+                  type="button"
+                  disabled={busy === r.event_key || !dirty(r)}
+                  onClick={() => save(r)}
+                  className="h-10 rounded-xl bg-blue-600 px-5 text-sm font-bold text-white disabled:opacity-40"
+                >
+                  {busy === r.event_key ? "Saving…" : "Save message"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function SettingsPage() {
   const { user } = useAuth();
   const [settings, setSettings] = useState(() => getSystemSettings());
@@ -68465,6 +68882,7 @@ function SettingsPage() {
     ["slaTransport", "Transport SLA", Icons.Truck],
     ["slaWarehouse", "Warehouse Update SLA", Icons.Warehouse],
     ["slaNotif", "Notifications", Icons.Bell],
+    ["pushCustomer", "Customer Push", Icons.BellRing || Icons.Bell],
     ["slaLog", "SLA Change Log", Icons.ClipboardList],
   ];
   const input =
@@ -69090,7 +69508,10 @@ function SettingsPage() {
             {tab === "slaNotif" && (
               <SlaNotificationSettingsPanel notify={notify} />
             )}
-            {!String(tab).startsWith("sla") && (
+            {tab === "pushCustomer" && (
+              <CustomerPushSettingsPanel notify={notify} />
+            )}
+            {!String(tab).startsWith("sla") && tab !== "pushCustomer" && (
               <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50">
                 <button
                   type="button"
