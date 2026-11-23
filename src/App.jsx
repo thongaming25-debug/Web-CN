@@ -39774,7 +39774,7 @@ const CustomerApp = (() => {
             type="button"
             aria-label={tr("Language", "ភាសា")}
             onClick={() => setOpen(true)}
-            className="h-10 pl-3 pr-2.5 flex items-center gap-1.5 rounded-full bg-[#eef2fa] text-[#14284b] font-semibold text-[15px] active:bg-[#e2e8f5]"
+            className="jz-lang-pill h-10 pl-3 pr-2.5 flex items-center gap-1.5 rounded-full font-semibold text-[15px]"
           >
             <LangFlag code={lang} size={22} />
             {lang === "km" ? "KH" : lang === "zh" ? "中文" : "EN"}
@@ -41033,6 +41033,7 @@ const CustomerApp = (() => {
             </div>
           )}
         </div>
+        {!hideNav && <div aria-hidden="true" className="jz-dock-mask" />}
         {!hideNav && (
           <nav
             ref={bottomNavRef}
@@ -44319,34 +44320,49 @@ const CustomerApp = (() => {
 
   // ---------- Colourful icon tile (shared by Profile + Settings) ----------
   // Rounded gradient square with a white glyph — the "app account" look.
+  // [light stop, deep stop, glow rgb] — deeper, more saturated stops plus a
+  // glossy top edge and a tinted glow give the tile a solid, premium feel.
   const TILE_TONES = {
-    blue: "from-sky-400 to-blue-600",
-    amber: "from-amber-300 to-orange-500",
-    rose: "from-rose-400 to-red-600",
-    violet: "from-violet-400 to-purple-600",
-    green: "from-emerald-400 to-green-600",
-    teal: "from-cyan-400 to-teal-600",
-    slate: "from-slate-400 to-slate-600",
+    blue: ["#38a8ff", "#1559e6", "21,89,230"],
+    amber: ["#ffc233", "#f26a0a", "242,106,10"],
+    rose: ["#ff5c7a", "#d4102f", "212,16,47"],
+    violet: ["#a46bff", "#6420d6", "100,32,214"],
+    green: ["#2fd98a", "#0a9a56", "10,154,86"],
+    teal: ["#22d3ee", "#0a8aa0", "10,138,160"],
+    slate: ["#8794ab", "#475569", "71,85,105"],
   };
-  const IconTile = ({ i: I, tone = "blue" }) => (
-    <span
-      className={`w-10 h-10 rounded-xl grid place-items-center shrink-0 text-white bg-gradient-to-br shadow-sm ${TILE_TONES[tone] || TILE_TONES.blue}`}
-    >
-      <I size={20} strokeWidth={2.2} />
-    </span>
-  );
+  const IconTile = ({ i: I, tone = "blue" }) => {
+    const [c1, c2, glow] = TILE_TONES[tone] || TILE_TONES.blue;
+    return (
+      <span
+        className="w-11 h-11 rounded-[14px] grid place-items-center shrink-0 text-white"
+        style={{
+          background: `linear-gradient(150deg, ${c1} 0%, ${c2} 100%)`,
+          boxShadow: `inset 0 1px 0 rgba(255,255,255,.5), inset 0 -2px 5px rgba(0,0,0,.2), 0 0 0 1px rgba(${glow},.35), 0 7px 14px -6px rgba(${glow},.6)`,
+        }}
+      >
+        <I
+          size={22}
+          strokeWidth={2.4}
+          style={{ filter: "drop-shadow(0 1px 1px rgba(0,0,0,.28))" }}
+        />
+      </span>
+    );
+  };
 
   // One tappable row: [tile] label ........ value  >
   const MenuRow = ({ icon, tone, label, value, onClick }) => (
     <button
       type="button"
       onClick={onClick}
-      className="w-full flex items-center gap-3 px-4 py-3 text-[15px] font-medium active:bg-slate-50"
+      className="w-full flex items-center gap-3.5 px-4 py-3 text-[15px] font-semibold active:bg-slate-50"
     >
       <IconTile i={icon} tone={tone} />
       <span className="flex-1 text-left">{label}</span>
-      {value && <span className="text-slate-400 text-[13px]">{value}</span>}
-      <ChevronRight size={16} className="text-slate-300" />
+      {value && (
+        <span className="text-slate-500 text-[13px] font-medium">{value}</span>
+      )}
+      <ChevronRight size={18} strokeWidth={2.4} className="text-slate-400" />
     </button>
   );
 
@@ -90700,6 +90716,9 @@ html.cb-admin-dark .cb-app main table td :is(.rounded-full,.rounded-md){border:1
    2) Profile header is transparent at the top and turns frosted on scroll. */
 .jz-customer .jz-bottom-nav{background:var(--jz-c-card)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;border:1px solid var(--jz-c-border);box-shadow:0 12px 28px -14px rgba(5,20,45,.30),0 2px 6px rgba(5,20,45,.06);}
 .jz-customer .jz-nav-pill{backdrop-filter:none;-webkit-backdrop-filter:none;}
+/* Solid strip behind the dock: scrolling content stops at the dock instead of
+   showing around / under it (DRSB keeps the menu "stuck" to the screen). */
+.jz-customer .jz-dock-mask{position:fixed;left:0;right:0;bottom:0;z-index:39;height:calc(var(--jz-nav-clearance, calc(92px + env(safe-area-inset-bottom))) - 2px);background:var(--jz-c-page);pointer-events:none;}
 .jz-customer .jz-prof-top{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:max(.75rem,env(safe-area-inset-top)) 1rem .5rem;background:transparent;box-shadow:none;transition:background-color .2s ease,box-shadow .2s ease;}
 .jz-customer .jz-prof-top.is-scrolled{background:rgba(243,246,251,.82);box-shadow:0 1px 0 var(--jz-c-border);backdrop-filter:blur(14px) saturate(160%);-webkit-backdrop-filter:blur(14px) saturate(160%);}
 .jz-customer.cb-cust-dark .jz-prof-top.is-scrolled{background:rgba(15,15,15,.82);}
@@ -90708,6 +90727,11 @@ html.cb-admin-dark .cb-app main table td :is(.rounded-full,.rounded-md){border:1
 .jz-customer .jz-prof-top.is-scrolled .jz-prof-title{opacity:1;transform:none;}
 .jz-customer .jz-prof-btn{width:44px;height:44px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--jz-c-card);color:var(--jz-c-text);box-shadow:0 1px 4px rgba(5,20,45,.10);}
 .jz-customer .jz-prof-btn:active{opacity:.7;}
+/* Language pill follows the colour theme (light / dark / device) */
+.jz-lang-pill{background:#eef2fa;color:#14284b;}
+.jz-lang-pill:active{background:#e2e8f5;}
+.cb-cust-dark .jz-lang-pill,.jz-customer.cb-cust-dark .jz-lang-pill{background:rgba(255,255,255,.1);color:#f5f5f5;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08);}
+.cb-cust-dark .jz-lang-pill:active,.jz-customer.cb-cust-dark .jz-lang-pill:active{background:rgba(255,255,255,.18);}
 @media(min-width:640px){.jz-customer .jz-prof-top{padding-inline:var(--jz-c-gutter);}}
 
 
