@@ -68938,29 +68938,108 @@ function SettingsPage() {
   const logoSrc =
     settings.company.logoUrl || settings.company.logoDataUrl || "";
 
+  // ---- Layout helpers (plain functions, NOT components, so inputs keep focus) ----
+  const showSave = !String(tab).startsWith("sla") && tab !== "pushCustomer";
+  const reload = async () => {
+    if (supabase) {
+      try {
+        const remote = await fetchSystemSettingsRemote();
+        if (remote) setSettings(remote);
+      } catch (e) {
+        notify("Reload failed", e.message, "err");
+      }
+    } else setSettings(getSystemSettings());
+  };
+  // Left: title + hint.  Right: the fields.  (DRSB-style settings row)
+  const section = (title, desc, children) => (
+    <div className="grid gap-4 border-b border-slate-100 px-6 py-7 last:border-b-0 lg:grid-cols-[260px_minmax(0,1fr)] lg:gap-10">
+      <div>
+        <h3 className="text-sm font-bold text-slate-900">{title}</h3>
+        {desc && (
+          <p className="mt-1 text-xs leading-relaxed text-slate-500">{desc}</p>
+        )}
+      </div>
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+  const field = (label, control, hint) => (
+    <label className="block text-sm font-semibold text-slate-700">
+      {label}
+      {control}
+      {hint && (
+        <span className="mt-1 block text-xs font-normal text-slate-400">
+          {hint}
+        </span>
+      )}
+    </label>
+  );
+  const cardHeader = (title, desc) => (
+    <div className="border-b border-slate-100 px-6 py-5">
+      <h2 className="text-lg font-bold text-slate-900">{title}</h2>
+      {desc && <p className="mt-1 text-sm text-slate-500">{desc}</p>}
+    </div>
+  );
+  const setShip = (patch) =>
+    setSettings((p) => ({ ...p, shipping: { ...p.shipping, ...patch } }));
+  const setCargo = (type, key, value) =>
+    setSettings((p) => ({
+      ...p,
+      shipping: {
+        ...p.shipping,
+        cargoPolicies: {
+          ...p.shipping.cargoPolicies,
+          [type]: { ...p.shipping.cargoPolicies[type], [key]: value },
+        },
+      },
+    }));
+  const cur = settings.shipping.currency;
+
   return (
     <div className="min-h-full bg-slate-50/70">
       <div className="p-5 md:p-7 max-w-[1400px] mx-auto">
-        <div className="mb-6 flex flex-col gap-1">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
-              System Settings
-            </h1>
-            <span
-              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ${supabase && !remoteError ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}
-            >
+        <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+          <div className="flex flex-col gap-1">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
+                System Settings
+              </h1>
               <span
-                className={`h-2 w-2 rounded-full ${supabase && !remoteError ? "bg-emerald-500" : "bg-amber-500"}`}
-              />
-              {supabase && !remoteError
-                ? "Supabase synced"
-                : "Local / offline mode"}
-            </span>
+                className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold ${supabase && !remoteError ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}
+              >
+                <span
+                  className={`h-2 w-2 rounded-full ${supabase && !remoteError ? "bg-emerald-500" : "bg-amber-500"}`}
+                />
+                {supabase && !remoteError
+                  ? "Supabase synced"
+                  : "Local / offline mode"}
+              </span>
+            </div>
+            <p className="text-sm text-slate-500">
+              Manage company identity, shipping policies and print label
+              configuration.
+            </p>
           </div>
-          <p className="text-sm text-slate-500">
-            Manage company identity, shipping policies and print label
-            configuration.
-          </p>
+          {showSave && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={reload}
+                disabled={saving || loading}
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={save}
+                disabled={saving || loading || !!remoteError}
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
+              >
+                <Icons.Save size={16} />
+                {saving ? "Saving..." : "Save"}
+              </button>
+            </div>
+          )}
         </div>
 
         {remoteError && supabase && (
@@ -68978,608 +69057,466 @@ function SettingsPage() {
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-[240px_minmax(0,1fr)] gap-5">
-          <div className="rounded-2xl border border-slate-200 bg-white p-2 h-fit shadow-sm">
+        {/* Horizontal tabs */}
+        <div className="mb-5 overflow-x-auto border-b border-slate-200">
+          <div className="flex min-w-max gap-1">
             {tabs.map(([id, label, I]) => (
               <button
                 key={id}
+                type="button"
                 onClick={() => setTab(id)}
-                className={`w-full flex items-center gap-3 rounded-xl px-3.5 py-3 text-sm font-semibold text-left transition ${tab === id ? "bg-blue-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"}`}
+                className={`-mb-px inline-flex items-center gap-2 whitespace-nowrap border-b-2 px-4 py-3 text-sm font-semibold transition ${tab === id ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800"}`}
               >
-                <I size={17} />
-                <span className="flex-1">{label}</span>
-                {tab === id && <Icons.ChevronRight size={15} />}
+                <I size={16} />
+                {label}
               </button>
             ))}
           </div>
-          <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            {tab === "company" && (
-              <>
-                <div className="p-6 border-b border-slate-100">
-                  <h2 className="text-lg font-bold text-slate-900">
-                    Company Profile
-                  </h2>
-                  <p className="text-sm text-slate-500 mt-1">
-                    This information is shared across browsers and used on
-                    printed labels.
-                  </p>
-                </div>
-                <div className="p-6 space-y-6">
-                  <div className="flex flex-col sm:flex-row items-start gap-5 rounded-2xl bg-slate-50 p-4 border border-slate-100">
-                    <div className="w-24 h-24 rounded-2xl bg-white border border-slate-200 grid place-items-center overflow-hidden shadow-sm">
-                      {logoSrc ? (
-                        <img
-                          src={logoSrc}
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-12 h-12 rounded-xl bg-blue-600 text-white grid place-items-center">
-                          <Icons.GitBranch size={24} />
-                        </div>
-                      )}
-                    </div>
-                    <div>
-                      <div className="font-bold text-slate-900">
-                        Company Logo
+        </div>
+
+        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          {tab === "company" && (
+            <>
+              {cardHeader(
+                "Company Profile",
+                "This information is shared across browsers and used on printed labels.",
+              )}
+              {section(
+                "Company Logo",
+                "PNG, JPG or SVG · Maximum 2 MB · stored in Supabase Storage",
+                <div className="flex items-center gap-5">
+                  <div className="grid h-24 w-24 shrink-0 place-items-center overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                    {logoSrc ? (
+                      <img
+                        src={logoSrc}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="grid h-12 w-12 place-items-center rounded-xl bg-blue-600 text-white">
+                        <Icons.GitBranch size={24} />
                       </div>
-                      <p className="text-xs text-slate-500 mt-1 mb-3">
-                        PNG, JPG or SVG · Maximum 2 MB · stored in Supabase
-                        Storage
-                      </p>
-                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">
-                        <Icons.Upload size={16} /> Upload Logo
-                        <input
-                          type="file"
-                          accept="image/*"
-                          className="hidden"
-                          onChange={onLogo}
-                          disabled={saving}
-                        />
-                      </label>
-                      {logoSrc && (
-                        <button
-                          type="button"
-                          onClick={removeLogo}
-                          disabled={saving}
-                          className="ml-2 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-                        >
-                          Remove
-                        </button>
-                      )}
-                    </div>
+                    )}
                   </div>
-                  <div className="grid md:grid-cols-2 gap-5">
-                    {[
-                      ["name", "Company Name", "Cargo Bridge"],
-                      ["shortName", "Short Name", "CB"],
-                      ["phone", "Phone", "+855 ..."],
-                      ["email", "Email", "company@example.com"],
-                      ["website", "Website", "https://..."],
-                    ].map(([k, l, p]) => (
-                      <label
-                        key={k}
-                        className="text-sm font-semibold text-slate-700"
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700">
+                      <Icons.Upload size={16} /> Upload Logo
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={onLogo}
+                        disabled={saving}
+                      />
+                    </label>
+                    {logoSrc && (
+                      <button
+                        type="button"
+                        onClick={removeLogo}
+                        disabled={saving}
+                        className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
                       >
-                        {l}
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </div>,
+              )}
+              {section(
+                "Company Information",
+                "Name shown in the app, on labels and on the browser tab.",
+                <div className="grid gap-5 md:grid-cols-2">
+                  {[
+                    ["name", "Company Name", "Cargo Bridge"],
+                    ["shortName", "Short Name", "CB"],
+                  ].map(([k, l, ph]) => (
+                    <div key={k}>
+                      {field(
+                        l,
                         <input
                           className={input}
+                          placeholder={ph}
                           value={settings.company[k] || ""}
                           onChange={(e) => update("company", k, e.target.value)}
-                        />
-                      </label>
-                    ))}
-                    <label className="text-sm font-semibold text-slate-700">
-                      Currency
-                      <select
-                        className={input}
-                        value={settings.company.currency}
-                        onChange={(e) =>
-                          update("company", "currency", e.target.value)
-                        }
-                      >
-                        <option>USD</option>
-                        <option>KHR</option>
-                        <option>THB</option>
-                        <option>CNY</option>
-                      </select>
-                    </label>
-                    <label className="text-sm font-semibold text-slate-700 md:col-span-2">
-                      Address
+                        />,
+                      )}
+                    </div>
+                  ))}
+                </div>,
+              )}
+              {section(
+                "Contact",
+                "Shown to customers and printed on labels when enabled.",
+                <div className="grid gap-5 md:grid-cols-2">
+                  {[
+                    ["phone", "Phone", "+855 ..."],
+                    ["email", "Email", "company@example.com"],
+                    ["website", "Website", "https://..."],
+                  ].map(([k, l, ph]) => (
+                    <div key={k}>
+                      {field(
+                        l,
+                        <input
+                          className={input}
+                          placeholder={ph}
+                          value={settings.company[k] || ""}
+                          onChange={(e) => update("company", k, e.target.value)}
+                        />,
+                      )}
+                    </div>
+                  ))}
+                </div>,
+              )}
+              {section(
+                "Currency & Address",
+                "Default currency and the company address.",
+                <div className="grid gap-5 md:grid-cols-2">
+                  {field(
+                    "Currency",
+                    <select
+                      className={input}
+                      value={settings.company.currency}
+                      onChange={(e) =>
+                        update("company", "currency", e.target.value)
+                      }
+                    >
+                      <option>USD</option>
+                      <option>KHR</option>
+                      <option>THB</option>
+                      <option>CNY</option>
+                    </select>,
+                  )}
+                  <div className="md:col-span-2">
+                    {field(
+                      "Address",
                       <textarea
-                        className="mt-1.5 w-full min-h-24 rounded-xl border border-slate-200 bg-white p-3.5 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                        className="mt-1.5 min-h-24 w-full rounded-xl border border-slate-200 bg-white p-3.5 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
                         value={settings.company.address || ""}
                         onChange={(e) =>
                           update("company", "address", e.target.value)
                         }
-                      />
-                    </label>
+                      />,
+                    )}
                   </div>
-                </div>
-              </>
-            )}
-            {tab === "shipping" && (
-              <>
-                <div className="p-6 border-b border-slate-100">
-                  <h2 className="text-lg font-bold text-slate-900">
-                    Shipping & Pricing Policy
-                  </h2>
-                  <p className="text-sm text-slate-500 mt-1">
-                    Small Package uses one shared S / M / L fixed-price table.
-                    Dimension Based uses actual CBM with separate Normal and
-                    Sensitive rates.
-                  </p>
-                </div>
-                <div className="p-6 space-y-6">
-                  <div className="grid md:grid-cols-2 gap-5">
-                    <label className="text-sm font-semibold text-slate-700">
-                      Policy Name
+                </div>,
+              )}
+            </>
+          )}
+          {tab === "shipping" && (
+            <>
+              {cardHeader(
+                "Shipping & Pricing Policy",
+                "Small Package uses one shared S / M / L fixed-price table. Dimension Based uses actual CBM with separate Normal and Sensitive rates.",
+              )}
+              {section(
+                "Policy",
+                "Name, effective date and currency of this pricing policy.",
+                <div className="space-y-4">
+                  <div className="grid gap-5 md:grid-cols-3">
+                    {field(
+                      "Policy Name",
                       <input
                         className={input}
                         value={settings.shipping.policyName}
                         onChange={(e) =>
-                          update("shipping", "policyName", e.target.value)
+                          setShip({ policyName: e.target.value })
                         }
-                      />
-                    </label>
-                    <label className="text-sm font-semibold text-slate-700">
-                      Effective Date
+                      />,
+                    )}
+                    {field(
+                      "Effective Date",
                       <input
                         type="date"
                         className={input}
                         value={settings.shipping.effectiveDate}
                         onChange={(e) =>
-                          update("shipping", "effectiveDate", e.target.value)
+                          setShip({ effectiveDate: e.target.value })
                         }
-                      />
-                    </label>
-                    <label className="text-sm font-semibold text-slate-700">
-                      Currency
+                      />,
+                    )}
+                    {field(
+                      "Currency",
                       <select
                         className={input}
                         value={settings.shipping.currency}
-                        onChange={(e) =>
-                          update("shipping", "currency", e.target.value)
-                        }
+                        onChange={(e) => setShip({ currency: e.target.value })}
                       >
                         <option>USD</option>
                         <option>KHR</option>
                         <option>THB</option>
                         <option>CNY</option>
-                      </select>
-                    </label>
-                    <div className="rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-xs text-blue-800 flex items-start gap-2">
-                      <Icons.Info size={16} className="shrink-0 mt-0.5" />
-                      <span>
-                        <b>Small Package:</b> select only S / M / L.{" "}
-                        <b>Dimension Based:</b> enter actual Length × Width ×
-                        Height and the system calculates CBM.
-                      </span>
-                    </div>
+                      </select>,
+                    )}
                   </div>
-
-                  <div className="rounded-2xl border border-slate-200 overflow-hidden">
-                    <div className="px-5 py-4 bg-slate-50/80 flex items-center justify-between">
-                      <div>
-                        <div className="font-bold text-slate-900">
-                          Small Package
-                        </div>
-                        <div className="text-xs text-slate-500 mt-0.5">
-                          S / M / L are shared fixed prices. They are not Normal
-                          or Sensitive.
-                        </div>
-                      </div>
-                      <span className="rounded-full px-2.5 py-1 text-[11px] font-bold bg-slate-100 text-slate-700">
-                        Fixed Price
-                      </span>
-                    </div>
-                    <div className="p-5">
-                      <div className="grid sm:grid-cols-3 gap-4">
-                        {["S", "M", "L"].map((size) => (
-                          <label
-                            key={size}
-                            className="rounded-xl border border-slate-200 p-4 text-sm font-semibold text-slate-700"
-                          >
-                            <span>Size {size}</span>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              className={input}
-                              value={settings.shipping.sizeRates?.[size] ?? 0}
-                              onChange={(e) =>
-                                setSettings((p) => ({
-                                  ...p,
-                                  shipping: {
-                                    ...p.shipping,
-                                    sizeRates: {
-                                      ...p.shipping.sizeRates,
-                                      [size]: Number(e.target.value || 0),
-                                    },
-                                  },
-                                }))
-                              }
-                            />
-                            <span className="text-xs text-slate-400">
-                              {settings.shipping.currency} · fixed price
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
+                  <div className="flex items-start gap-2 rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-xs text-blue-800">
+                    <Icons.Info size={16} className="mt-0.5 shrink-0" />
+                    <span>
+                      <b>Small Package:</b> select only S / M / L.{" "}
+                      <b>Dimension Based:</b> enter actual Length × Width ×
+                      Height and the system calculates CBM.
+                    </span>
                   </div>
-
-                  <div className="rounded-2xl border border-slate-200 overflow-hidden">
-                    <div className="px-5 py-4 bg-sky-50/70 flex items-center justify-between">
-                      <div>
-                        <div className="font-bold text-slate-900">
-                          Air — Weight Based
-                        </div>
-                        <div className="text-xs text-slate-500 mt-0.5">
-                          Air orders are charged by weight: KG × Air rate. Land
-                          and Sea use the Small Package / CBM rules.
-                        </div>
-                      </div>
-                      <span className="rounded-full px-2.5 py-1 text-[11px] font-bold bg-sky-100 text-sky-700">
-                        Per KG
-                      </span>
-                    </div>
-                    <div className="p-5">
-                      <label className="block max-w-xs text-sm font-semibold text-slate-700">
-                        <span>Air Rate</span>
+                </div>,
+              )}
+              {section(
+                "Small Package",
+                "S / M / L are shared fixed prices. They are not Normal or Sensitive.",
+                <div className="grid gap-5 sm:grid-cols-3">
+                  {["S", "M", "L"].map((size) => (
+                    <div key={size}>
+                      {field(
+                        `Size ${size}`,
                         <input
                           type="number"
                           min="0"
                           step="0.01"
                           className={input}
-                          value={settings.shipping.airRatePerKg ?? 0}
+                          value={settings.shipping.sizeRates?.[size] ?? 0}
                           onChange={(e) =>
-                            setSettings((p) => ({
-                              ...p,
-                              shipping: {
-                                ...p.shipping,
-                                airRatePerKg: Number(e.target.value || 0),
+                            setShip({
+                              sizeRates: {
+                                ...settings.shipping.sizeRates,
+                                [size]: Number(e.target.value || 0),
                               },
-                            }))
+                            })
                           }
-                        />
-                        <span className="text-xs text-slate-400">
-                          {settings.shipping.currency} / KG
-                        </span>
-                      </label>
-                    </div>
-                  </div>
-
-                  {["Normal", "Sensitive"].map((cargoType) => (
-                    <div
-                      key={cargoType}
-                      className="rounded-2xl border border-slate-200 overflow-hidden"
-                    >
-                      <div
-                        className={`px-5 py-4 flex items-center justify-between ${cargoType === "Sensitive" ? "bg-amber-50/70" : "bg-blue-50/70"}`}
-                      >
-                        <div>
-                          <div className="font-bold text-slate-900">
-                            {cargoType} — Dimension Based
-                          </div>
-                          <div className="text-xs text-slate-500 mt-0.5">
-                            Actual Length × Width × Height → CBM × {cargoType}{" "}
-                            rate. If the actual weight is heavier: KG ÷ KG per 1
-                            CBM × rate. Minimum is optional.
-                          </div>
-                        </div>
-                        <span
-                          className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${cargoType === "Sensitive" ? "bg-amber-100 text-amber-700" : "bg-blue-100 text-blue-700"}`}
-                        >
-                          {cargoType === "Sensitive"
-                            ? "Special Rate"
-                            : "Standard Rate"}
-                        </span>
-                      </div>
-                      <div className="p-5 space-y-5">
-                        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-                          {[
-                            [
-                              "CBM Rate",
-                              "cbmRate",
-                              `${settings.shipping.currency} / CBM`,
-                            ],
-                            [
-                              "KG per 1 CBM",
-                              "kgPerCbm",
-                              "KG = 1 CBM (0 = off)",
-                            ],
-                            [
-                              "Minimum Freight",
-                              "minimumFreight",
-                              settings.shipping.currency,
-                            ],
-                            [
-                              "Weight Rate",
-                              "weightRate",
-                              `${settings.shipping.currency} / KG`,
-                            ],
-                            [
-                              "Handling / Service Fee",
-                              "handlingFee",
-                              settings.shipping.currency,
-                            ],
-                          ].map(([label, key, unit]) => (
-                            <label
-                              key={key}
-                              className="text-sm font-semibold text-slate-700"
-                            >
-                              {label}
-                              {moneyInput(
-                                settings.shipping.cargoPolicies?.[cargoType]?.[
-                                  key
-                                ],
-                                (v) =>
-                                  setSettings((p) => ({
-                                    ...p,
-                                    shipping: {
-                                      ...p.shipping,
-                                      cargoPolicies: {
-                                        ...p.shipping.cargoPolicies,
-                                        [cargoType]: {
-                                          ...p.shipping.cargoPolicies[
-                                            cargoType
-                                          ],
-                                          [key]: v,
-                                        },
-                                      },
-                                    },
-                                  })),
-                              )}
-                              <span className="text-xs text-slate-400">
-                                {unit}
-                              </span>
-                            </label>
-                          ))}
-                        </div>
-                        <div className="rounded-xl border border-amber-200 bg-amber-50/50 px-4 py-3 flex items-start gap-3">
-                          <input
-                            type="checkbox"
-                            className="mt-1 h-4 w-4 accent-blue-600"
-                            checked={
-                              settings.shipping.cargoPolicies?.[cargoType]
-                                ?.applyMinimumFreight === true
-                            }
-                            onChange={(e) =>
-                              setSettings((p) => ({
-                                ...p,
-                                shipping: {
-                                  ...p.shipping,
-                                  cargoPolicies: {
-                                    ...p.shipping.cargoPolicies,
-                                    [cargoType]: {
-                                      ...p.shipping.cargoPolicies[cargoType],
-                                      applyMinimumFreight: e.target.checked,
-                                    },
-                                  },
-                                },
-                              }))
-                            }
-                          />
-                          <div>
-                            <div className="text-sm font-semibold text-amber-900">
-                              Apply Minimum Freight
-                            </div>
-                            <div className="text-xs text-amber-800/75 mt-0.5">
-                              Default OFF. Enable only for a special pricing
-                              case. Normal calculation is always Actual CBM ×
-                              Rate.
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="grid md:grid-cols-2 gap-4">
-                          {[
-                            ["Delivery Fee", "deliveryFee"],
-                            ["Branch Delivery Fee", "branchDeliveryFee"],
-                          ].map(([label, key]) => (
-                            <label
-                              key={key}
-                              className="text-sm font-semibold text-slate-700"
-                            >
-                              {label}
-                              {moneyInput(
-                                settings.shipping.cargoPolicies?.[cargoType]?.[
-                                  key
-                                ],
-                                (v) =>
-                                  setSettings((p) => ({
-                                    ...p,
-                                    shipping: {
-                                      ...p.shipping,
-                                      cargoPolicies: {
-                                        ...p.shipping.cargoPolicies,
-                                        [cargoType]: {
-                                          ...p.shipping.cargoPolicies[
-                                            cargoType
-                                          ],
-                                          [key]: v,
-                                        },
-                                      },
-                                    },
-                                  })),
-                              )}
-                              <span className="text-xs text-slate-400">
-                                {settings.shipping.currency}
-                              </span>
-                            </label>
-                          ))}
-                        </div>
-                      </div>
+                        />,
+                        `${cur} · fixed price`,
+                      )}
                     </div>
                   ))}
-
-                  <div className="rounded-xl bg-blue-50 border border-blue-100 p-4 text-sm text-blue-800 flex gap-3">
-                    <Icons.Info size={18} className="shrink-0 mt-0.5" />
-                    <span>
-                      Pricing is stored in Supabase. Existing packages keep
-                      their recorded freight. New packages read the current
-                      Normal/Sensitive policy at the time they are saved.
-                    </span>
-                  </div>
-                </div>
-              </>
-            )}
-            {tab === "history" && (
-              <>
-                <div className="p-6 border-b border-slate-100">
-                  <h2 className="text-lg font-bold text-slate-900">
-                    Shipping Policy History
-                  </h2>
-                  <p className="text-sm text-slate-500 mt-1">
-                    This history is shared across devices from Supabase.
-                  </p>
-                </div>
-                <div className="p-6">
-                  {loading ? (
-                    <div className="py-16 text-center text-slate-400">
-                      <Icons.Loader2
-                        className="mx-auto mb-3 animate-spin"
-                        size={28}
-                      />
-                      Loading policy history...
-                    </div>
-                  ) : policyHistory.length ? (
-                    <div className="space-y-3">
-                      {policyHistory.map((x) => (
-                        <div
-                          key={x.id}
-                          className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-xl border border-slate-200 p-4"
-                        >
-                          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 grid place-items-center">
-                            <Icons.History size={18} />
+                </div>,
+              )}
+              {section(
+                "Air — Weight Based",
+                "Air orders are charged by weight: KG × Air rate. Land and Sea use the Small Package / CBM rules.",
+                <div className="max-w-xs">
+                  {field(
+                    "Air Rate",
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      className={input}
+                      value={settings.shipping.airRatePerKg ?? 0}
+                      onChange={(e) =>
+                        setShip({ airRatePerKg: Number(e.target.value || 0) })
+                      }
+                    />,
+                    `${cur} / KG`,
+                  )}
+                </div>,
+              )}
+              {["Normal", "Sensitive"].map((cargoType) => (
+                <React.Fragment key={cargoType}>
+                  {section(
+                    `${cargoType} — Dimension Based`,
+                    `Actual Length × Width × Height → CBM × ${cargoType} rate. If the actual weight is heavier: KG ÷ KG per 1 CBM × rate. Minimum is optional.`,
+                    <div className="space-y-5">
+                      <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+                        {[
+                          ["CBM Rate", "cbmRate", `${cur} / CBM`],
+                          ["KG per 1 CBM", "kgPerCbm", "KG = 1 CBM (0 = off)"],
+                          ["Minimum Freight", "minimumFreight", cur],
+                          ["Weight Rate", "weightRate", `${cur} / KG`],
+                          ["Handling / Service Fee", "handlingFee", cur],
+                          ["Delivery Fee", "deliveryFee", cur],
+                          ["Branch Delivery Fee", "branchDeliveryFee", cur],
+                        ].map(([label, key, unit]) => (
+                          <div key={key}>
+                            {field(
+                              label,
+                              moneyInput(
+                                settings.shipping.cargoPolicies?.[cargoType]?.[
+                                  key
+                                ],
+                                (v) => setCargo(cargoType, key, v),
+                              ),
+                              unit,
+                            )}
                           </div>
-                          <div className="flex-1">
-                            <div className="font-bold text-slate-900">
-                              {x.name}
-                            </div>
-                            <div className="text-xs text-slate-500 mt-1">
-                              Effective {x.effectiveDate} · Saved{" "}
-                              {formatIso(x.savedAt)}
-                            </div>
+                        ))}
+                      </div>
+                      <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/50 px-4 py-3">
+                        <input
+                          type="checkbox"
+                          className="mt-1 h-4 w-4 accent-blue-600"
+                          checked={
+                            settings.shipping.cargoPolicies?.[cargoType]
+                              ?.applyMinimumFreight === true
+                          }
+                          onChange={(e) =>
+                            setCargo(
+                              cargoType,
+                              "applyMinimumFreight",
+                              e.target.checked,
+                            )
+                          }
+                        />
+                        <div>
+                          <div className="text-sm font-semibold text-amber-900">
+                            Apply Minimum Freight
                           </div>
-                          <div className="text-xs text-slate-600 text-right">
-                            <div>
-                              Normal: S {x.rates?.Normal?.sizeRates?.S ?? 0} · M{" "}
-                              {x.rates?.Normal?.sizeRates?.M ?? 0} · L{" "}
-                              {x.rates?.Normal?.sizeRates?.L ?? 0}
-                            </div>
-                            <div className="mt-1">
-                              Sensitive: S{" "}
-                              {x.rates?.Sensitive?.sizeRates?.S ?? 0} · M{" "}
-                              {x.rates?.Sensitive?.sizeRates?.M ?? 0} · L{" "}
-                              {x.rates?.Sensitive?.sizeRates?.L ?? 0}
-                            </div>
+                          <div className="mt-0.5 text-xs text-amber-800/75">
+                            Default OFF. Enable only for a special pricing case.
+                            Normal calculation is always Actual CBM × Rate.
                           </div>
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="py-16 text-center text-slate-400">
-                      <Icons.History
-                        size={30}
-                        className="mx-auto mb-3 opacity-50"
-                      />
-                      No policy changes recorded yet.
-                    </div>
+                      </label>
+                    </div>,
                   )}
-                </div>
-              </>
-            )}
-            {tab === "support" && (
-              <SupportSettingsPanel settings={settings} update={update} />
-            )}
-            {tab === "label" && (
-              <>
-                <div className="p-6 border-b border-slate-100">
-                  <h2 className="text-lg font-bold text-slate-900">
-                    Print Label Settings
-                  </h2>
-                  <p className="text-sm text-slate-500 mt-1">
-                    Control which company and package information appears on
-                    printed labels.
-                  </p>
-                </div>
-                <div className="p-6 space-y-3">
-                  {[
+                </React.Fragment>
+              ))}
+              <div className="flex gap-3 border-t border-blue-100 bg-blue-50 px-6 py-4 text-sm text-blue-800">
+                <Icons.Info size={18} className="mt-0.5 shrink-0" />
+                <span>
+                  Pricing is stored in Supabase. Existing packages keep their
+                  recorded freight. New packages read the current
+                  Normal/Sensitive policy at the time they are saved.
+                </span>
+              </div>
+            </>
+          )}
+          {tab === "history" && (
+            <>
+              <div className="p-6 border-b border-slate-100">
+                <h2 className="text-lg font-bold text-slate-900">
+                  Shipping Policy History
+                </h2>
+                <p className="text-sm text-slate-500 mt-1">
+                  This history is shared across devices from Supabase.
+                </p>
+              </div>
+              <div className="p-6">
+                {loading ? (
+                  <div className="py-16 text-center text-slate-400">
+                    <Icons.Loader2
+                      className="mx-auto mb-3 animate-spin"
+                      size={28}
+                    />
+                    Loading policy history...
+                  </div>
+                ) : policyHistory.length ? (
+                  <div className="space-y-3">
+                    {policyHistory.map((x) => (
+                      <div
+                        key={x.id}
+                        className="flex flex-col sm:flex-row sm:items-center gap-3 rounded-xl border border-slate-200 p-4"
+                      >
+                        <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 grid place-items-center">
+                          <Icons.History size={18} />
+                        </div>
+                        <div className="flex-1">
+                          <div className="font-bold text-slate-900">
+                            {x.name}
+                          </div>
+                          <div className="text-xs text-slate-500 mt-1">
+                            Effective {x.effectiveDate} · Saved{" "}
+                            {formatIso(x.savedAt)}
+                          </div>
+                        </div>
+                        <div className="text-xs text-slate-600 text-right">
+                          <div>
+                            Normal: S {x.rates?.Normal?.sizeRates?.S ?? 0} · M{" "}
+                            {x.rates?.Normal?.sizeRates?.M ?? 0} · L{" "}
+                            {x.rates?.Normal?.sizeRates?.L ?? 0}
+                          </div>
+                          <div className="mt-1">
+                            Sensitive: S {x.rates?.Sensitive?.sizeRates?.S ?? 0}{" "}
+                            · M {x.rates?.Sensitive?.sizeRates?.M ?? 0} · L{" "}
+                            {x.rates?.Sensitive?.sizeRates?.L ?? 0}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="py-16 text-center text-slate-400">
+                    <Icons.History
+                      size={30}
+                      className="mx-auto mb-3 opacity-50"
+                    />
+                    No policy changes recorded yet.
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+          {tab === "support" && (
+            <SupportSettingsPanel settings={settings} update={update} />
+          )}
+          {tab === "label" && (
+            <>
+              {cardHeader(
+                "Print Label Settings",
+                "Control which company and package information appears on printed labels.",
+              )}
+              {[
+                [
+                  "Company on Label",
+                  "Branding and contact details printed at the top of the label.",
+                  [
                     ["showLogo", "Company Logo"],
                     ["showCompanyName", "Company Name"],
                     ["showPhone", "Phone"],
                     ["showEmail", "Email"],
                     ["showAddress", "Address"],
+                  ],
+                ],
+                [
+                  "Package on Label",
+                  "Shipment details and codes printed for each TK.",
+                  [
                     ["showBarcode", "Barcode"],
                     ["showQr", "QR Code"],
                     ["showFreight", "Freight Fee"],
                     ["showContainer", "Container"],
                     ["showWeight", "Weight (kg)"],
                     ["showMethod", "Shipping Method"],
-                  ].map(([k, l]) => (
-                    <label
-                      key={k}
-                      className="flex items-center justify-between rounded-xl border border-slate-200 px-4 py-3.5 cursor-pointer hover:bg-slate-50"
-                    >
-                      <span className="font-semibold text-sm text-slate-800">
-                        {l}
-                      </span>
-                      <input
-                        type="checkbox"
-                        className="h-5 w-5 accent-blue-600"
-                        checked={!!settings.label[k]}
-                        onChange={(e) => update("label", k, e.target.checked)}
-                      />
-                    </label>
-                  ))}
-                </div>
-              </>
-            )}
-            {tab === "slaTransport" && (
-              <SlaRulesPanel kind="transport" notify={notify} />
-            )}
-            {tab === "slaWarehouse" && (
-              <SlaRulesPanel kind="warehouse" notify={notify} />
-            )}
-            {tab === "slaLog" && <SlaChangeLogPanel notify={notify} />}
-            {tab === "slaNotif" && (
-              <SlaNotificationSettingsPanel notify={notify} />
-            )}
-            {tab === "pushCustomer" && (
-              <CustomerPushSettingsPanel notify={notify} />
-            )}
-            {!String(tab).startsWith("sla") && tab !== "pushCustomer" && (
-              <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    if (supabase) {
-                      try {
-                        const remote = await fetchSystemSettingsRemote();
-                        if (remote) setSettings(remote);
-                      } catch (e) {
-                        notify("Reload failed", e.message, "err");
-                      }
-                    } else setSettings(getSystemSettings());
-                  }}
-                  disabled={saving || loading}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={save}
-                  disabled={saving || loading || !!remoteError}
-                  className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
-                >
-                  <Icons.Save size={16} />
-                  {saving ? "Saving..." : "Save Changes"}
-                </button>
-              </div>
-            )}
-          </div>
+                  ],
+                ],
+              ].map(([title, desc, items]) => (
+                <React.Fragment key={title}>
+                  {section(
+                    title,
+                    desc,
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {items.map(([k, l]) => (
+                        <label
+                          key={k}
+                          className="flex cursor-pointer items-center justify-between rounded-xl border border-slate-200 px-4 py-3 hover:bg-slate-50"
+                        >
+                          <span className="text-sm font-semibold text-slate-800">
+                            {l}
+                          </span>
+                          <input
+                            type="checkbox"
+                            className="h-5 w-5 accent-blue-600"
+                            checked={!!settings.label[k]}
+                            onChange={(e) =>
+                              update("label", k, e.target.checked)
+                            }
+                          />
+                        </label>
+                      ))}
+                    </div>,
+                  )}
+                </React.Fragment>
+              ))}
+            </>
+          )}
+          {tab === "slaTransport" && (
+            <SlaRulesPanel kind="transport" notify={notify} />
+          )}
+          {tab === "slaWarehouse" && (
+            <SlaRulesPanel kind="warehouse" notify={notify} />
+          )}
+          {tab === "slaLog" && <SlaChangeLogPanel notify={notify} />}
+          {tab === "slaNotif" && (
+            <SlaNotificationSettingsPanel notify={notify} />
+          )}
+          {tab === "pushCustomer" && (
+            <CustomerPushSettingsPanel notify={notify} />
+          )}
         </div>
       </div>
       {toast && (
