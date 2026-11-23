@@ -38463,6 +38463,21 @@ const CustomerApp = (() => {
         localStorage.setItem(LANG_KEY, l);
       } catch {}
     };
+    // Keep the customer's language on the server so push notifications
+    // (title/body) are sent in the same language the customer chose.
+    useEffect(() => {
+      if (!supabase) return;
+      const sync = () =>
+        supabase.rpc("push_set_language", { p_lang: langRef.current }).then(
+          () => {},
+          () => {},
+        );
+      sync();
+      const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => {
+        if (session) sync();
+      });
+      return () => sub?.subscription?.unsubscribe();
+    }, [lang]);
     // ---- Appearance (light / dark / follow device) ----
     const [theme, setThemeState] = useState(readTheme);
     const [sysDark, setSysDark] = useState(systemPrefersDark);
