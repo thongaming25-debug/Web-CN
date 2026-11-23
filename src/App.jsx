@@ -44355,7 +44355,7 @@ const CustomerApp = (() => {
     <button
       type="button"
       onClick={onClick}
-      className="w-full flex items-center gap-3.5 px-4 py-3 text-[15px] font-semibold active:bg-slate-50"
+      className="jz-menu-row w-full flex items-center gap-3.5 px-4 py-3 text-[15px] font-semibold"
     >
       <IconTile i={icon} tone={tone} />
       <span className="flex-1 text-left">{label}</span>
@@ -90727,6 +90727,12 @@ html.cb-admin-dark .cb-app main table td :is(.rounded-full,.rounded-md){border:1
 .jz-customer .jz-prof-top.is-scrolled .jz-prof-title{opacity:1;transform:none;}
 .jz-customer .jz-prof-btn{width:44px;height:44px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--jz-c-card);color:var(--jz-c-text);box-shadow:0 1px 4px rgba(5,20,45,.10);}
 .jz-customer .jz-prof-btn:active{opacity:.7;}
+/* Rows and header buttons stay put under the finger (no shrink / shift while
+   scrolling) — native-app feel. Only a subtle tint shows on a real press. */
+.jz-customer .jz-menu-row,.jz-customer .jz-menu-row:active,.jz-customer .jz-prof-btn,.jz-customer .jz-prof-btn:active,.jz-customer .jz-lang-pill,.jz-customer .jz-lang-pill:active{scale:1!important;transform:none!important;transition-property:background-color,color!important;}
+.jz-customer .jz-menu-row{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;}
+.jz-customer .jz-menu-row:active{background:rgba(100,116,139,.08);}
+.jz-customer.cb-cust-dark .jz-menu-row:active{background:rgba(255,255,255,.05);}
 /* Language pill follows the colour theme (light / dark / device) */
 .jz-lang-pill{background:#eef2fa;color:#14284b;}
 .jz-lang-pill:active{background:#e2e8f5;}
