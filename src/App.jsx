@@ -40498,14 +40498,16 @@ const CustomerApp = (() => {
   const __HX_SKIP = new WeakSet();
   const __HX_INNER =
     'a,button,select,textarea,input:not([data-jz-hx-in]),[role="button"],[role="tab"]';
+  // Haptics are limited to the ORDER TABS (rows marked data-haptic-tabs):
+  // My Shipments, AIR shipments, CN Purchase Orders and My Shop Orders.
   function hxSync(el) {
     const ov = el.querySelector(":scope > .jz-hx");
     if (__HX_SKIP.has(el)) return;
     let ok =
       !el.disabled &&
       el.getAttribute("aria-disabled") !== "true" &&
-      !el.hasAttribute("data-no-haptic");
-    if (ok) ok = !el.querySelector(__HX_INNER);
+      !el.hasAttribute("data-no-haptic") &&
+      !el.querySelector(__HX_INNER);
     if (ok) {
       const r = el.getBoundingClientRect();
       ok = r.width >= 20 && r.height >= 20;
@@ -40515,7 +40517,6 @@ const CustomerApp = (() => {
       return;
     }
     if (ov) return;
-    // Never break form submit, and never re-anchor absolutely-positioned children.
     if (el.closest("form")) return void __HX_SKIP.add(el);
     if (getComputedStyle(el).position === "static") {
       const abs = Array.from(el.querySelectorAll("*")).some(
@@ -40535,44 +40536,85 @@ const CustomerApp = (() => {
     label.appendChild(input);
     el.appendChild(label);
   }
+  // Everything that should tick: order tabs, plus anything tagged data-haptic
+  // (QR, +/- quantity, Pay-from-Wallet, tappable images), the promo slides and
+  // the promo detail controls.
+  const HX_TARGETS =
+    "[data-haptic-tabs] > button, [data-haptic], .jzb-slide, .jzb-nav, .jzb-close";
+  // Containers that swipe: overlays step aside while the finger is moving.
+  const HX_QUIET = "[data-haptic-tabs], .jzb-frame, .cb-shop-snap";
   function HapticLayer() {
     useEffect(() => {
-      const SEL =
-        'button,a[href],[role="tab"],[role="button"],[role="switch"],[role="menuitem"],summary';
+      // Android / non-overlay path: tick when an order tab is tapped.
       const onClick = (e) => {
         const t = e.target;
         if (!t || !t.closest) return;
-        // The iOS overlay already played the native tick on the real tap.
-        if (t.closest(".jz-hx")) return;
-        const el = t.closest(SEL);
-        if (!el || !el.closest(".jz-customer")) return;
-        if (el.disabled || el.getAttribute("aria-disabled") === "true") return;
-        if (el.closest("[data-no-haptic]")) return;
-        // Light tick for navigation (tabs, chips, dock); firmer for actions.
-        const light =
-          el.getAttribute("role") === "tab" ||
-          el.closest(".jz-bottom-nav, .jz-chip-row");
-        hapticPulse(light ? 15 : 25);
+        if (t.closest(".jz-hx")) return; // iOS overlay already ticked
+        const el = t.closest(HX_TARGETS);
+        if (!el || el.disabled || el.getAttribute("aria-disabled") === "true")
+          return;
+        hapticPulse(15);
       };
       document.addEventListener("click", onClick, true);
+
+      // While a tab row is being swiped / coasting, let touches pass straight
+      // through the invisible switches so scrolling stays smooth.
+      const timers = new WeakMap();
+      const quiet = (row) => {
+        if (!row) return;
+        row.classList.add("jz-hx-scrolling");
+        clearTimeout(timers.get(row));
+        timers.set(
+          row,
+          setTimeout(() => row.classList.remove("jz-hx-scrolling"), 220),
+        );
+      };
+      const rowOf = (n) => (n && n.closest ? n.closest(HX_QUIET) : null);
+      let sx = 0;
+      let sy = 0;
+      const onTS = (e) => {
+        const t = e.touches && e.touches[0];
+        if (t) {
+          sx = t.clientX;
+          sy = t.clientY;
+        }
+      };
+      const onTM = (e) => {
+        const row = rowOf(e.target);
+        const t = e.touches && e.touches[0];
+        if (!row || !t) return;
+        if (Math.abs(t.clientX - sx) > 4 || Math.abs(t.clientY - sy) > 4)
+          quiet(row);
+      };
+      const onScroll = (e) => {
+        const el = e.target;
+        if (el && el.matches && el.matches(HX_QUIET)) quiet(el);
+      };
+      document.addEventListener("touchstart", onTS, {
+        capture: true,
+        passive: true,
+      });
+      document.addEventListener("touchmove", onTM, {
+        capture: true,
+        passive: true,
+      });
+      document.addEventListener("scroll", onScroll, {
+        capture: true,
+        passive: true,
+      });
 
       let mo = null;
       let timer = 0;
       if (__isIOS && typeof navigator.vibrate !== "function") {
-        ensureHapticSwitch(); // fallback for iOS 17.4-26.4 on non-overlaid controls
         const scan = () => {
           timer = 0;
-          document
-            .querySelectorAll(
-              '.jz-customer button, .jz-customer [role="tab"], .jz-customer .jz-bottom-nav a',
-            )
-            .forEach((el) => {
-              try {
-                hxSync(el);
-              } catch {
-                /* never let a scan break the UI */
-              }
-            });
+          document.querySelectorAll(HX_TARGETS).forEach((el) => {
+            try {
+              hxSync(el);
+            } catch {
+              /* never let a scan break the UI */
+            }
+          });
         };
         const schedule = () => {
           if (!timer) timer = window.setTimeout(scan, 80);
@@ -40588,6 +40630,9 @@ const CustomerApp = (() => {
       }
       return () => {
         document.removeEventListener("click", onClick, true);
+        document.removeEventListener("touchstart", onTS, true);
+        document.removeEventListener("touchmove", onTM, true);
+        document.removeEventListener("scroll", onScroll, true);
         if (mo) mo.disconnect();
         if (timer) clearTimeout(timer);
       };
@@ -41616,7 +41661,10 @@ const CustomerApp = (() => {
       <>
         <Top title={tr("My Shipments", "ការដឹកជញ្ជូនរបស់ខ្ញុំ")} />
         <div className="px-4 pt-4 space-y-3">
-          <div className="jz-chip-row flex gap-2 overflow-x-auto pb-1">
+          <div
+            data-haptic-tabs
+            className="jz-chip-row flex gap-2 overflow-x-auto pb-1"
+          >
             {Object.keys(tabs).map((k) => (
               <button
                 key={k}
@@ -41745,7 +41793,10 @@ const CustomerApp = (() => {
               </div>
             </div>
           </div>
-          <div className="jz-chip-row flex gap-2 overflow-x-auto pb-1">
+          <div
+            data-haptic-tabs
+            className="jz-chip-row flex gap-2 overflow-x-auto pb-1"
+          >
             {Object.keys(tabs).map((k) => (
               <button
                 key={k}
@@ -42156,6 +42207,7 @@ const CustomerApp = (() => {
                                   {tr("Cancel", "បោះបង់")}
                                 </Btn>
                                 <Btn
+                                  data-haptic
                                   disabled={paying || !canPayShip}
                                   loading={paying}
                                   onClick={async () => {
@@ -42182,6 +42234,7 @@ const CustomerApp = (() => {
                             </div>
                           ) : (
                             <Btn
+                              data-haptic
                               className="mt-3"
                               disabled={!canPayShip}
                               onClick={() => {
@@ -44903,6 +44956,7 @@ const CustomerApp = (() => {
           title={tr("Profile", "គណនី")}
           left={
             <button
+              data-haptic
               type="button"
               onClick={() => setQrOpen(true)}
               aria-label={tr("My QR code", "QR របស់ខ្ញុំ")}
@@ -45553,6 +45607,7 @@ const CustomerApp = (() => {
           {
             <div
               ref={cnTabsScroller}
+              data-haptic-tabs
               className="jz-chip-row flex gap-2 overflow-x-auto overflow-y-hidden pb-1 scroll-smooth"
             >
               {CN_TABS.map(([k, en, km, names]) => {
@@ -46216,6 +46271,7 @@ const CustomerApp = (() => {
                                       {tr("Cancel", "បោះបង់")}
                                     </Btn>
                                     <Btn
+                                      data-haptic
                                       disabled={shipPayBusy || !canPay}
                                       loading={shipPayBusy}
                                       onClick={() => confirmShippingPayment(r)}
@@ -46228,6 +46284,7 @@ const CustomerApp = (() => {
                                 </div>
                               ) : (
                                 <Btn
+                                  data-haptic
                                   className="mt-3"
                                   disabled={!canPay}
                                   onClick={() => {
@@ -46418,6 +46475,7 @@ const CustomerApp = (() => {
                           {tr("Cancel", "បោះបង់")}
                         </Btn>
                         <Btn
+                          data-haptic
                           disabled={walletPayBusy || !walletCanPay}
                           loading={walletPayBusy}
                           onClick={async () => {
@@ -46442,6 +46500,7 @@ const CustomerApp = (() => {
                     </div>
                   ) : (
                     <Btn
+                      data-haptic
                       className="mt-3"
                       disabled={walletPayBusy || !walletCanPay}
                       onClick={() => {
@@ -48260,6 +48319,7 @@ const CustomerApp = (() => {
                                 aria-label={tr("Quantity", "ចំនួន")}
                               >
                                 <button
+                                  data-haptic
                                   type="button"
                                   aria-label="-"
                                   disabled={q <= 0}
@@ -48276,6 +48336,7 @@ const CustomerApp = (() => {
                                   {q}
                                 </span>
                                 <button
+                                  data-haptic
                                   type="button"
                                   aria-label="+"
                                   disabled={out || q >= v.available}
@@ -48493,6 +48554,7 @@ const CustomerApp = (() => {
                       <div className="mt-2 flex items-center justify-between">
                         <div className="flex items-center gap-1">
                           <button
+                            data-haptic
                             aria-label="-"
                             disabled={busy || i.quantity <= 1}
                             onClick={() => setQty(i.variant_id, i.quantity - 1)}
@@ -48507,6 +48569,7 @@ const CustomerApp = (() => {
                             {i.quantity}
                           </span>
                           <button
+                            data-haptic
                             aria-label="+"
                             disabled={busy || i.quantity >= i.available}
                             onClick={() => setQty(i.variant_id, i.quantity + 1)}
@@ -49016,7 +49079,10 @@ const CustomerApp = (() => {
       <>
         <Top title={tr("My Shop Orders", "ការបញ្ជាទិញក្នុងហាង")} back />
         <div className="px-4 pt-4 space-y-3 pb-6">
-          <div className="jz-chip-row cb-shop-hscroll flex gap-2 overflow-x-auto -mx-4 px-4 pb-1">
+          <div
+            data-haptic-tabs
+            className="jz-chip-row cb-shop-hscroll flex gap-2 overflow-x-auto -mx-4 px-4 pb-1"
+          >
             {SHOP_C_FILTERS.map((s) => (
               <button
                 key={s || "all"}
@@ -49494,6 +49560,7 @@ const CustomerApp = (() => {
             style={SHOP_C_BAR}
           >
             <Btn
+              data-haptic
               loading={busy}
               disabled={bal + 0.005 < o.total_amount}
               onClick={pay}
@@ -53749,6 +53816,7 @@ function AirImg({
   return (
     <div
       onClick={showFallback ? undefined : onClick}
+      data-haptic={onClick && !showFallback ? "" : undefined}
       className={`relative overflow-hidden bg-slate-100 shrink-0 ${onClick && !showFallback ? "cursor-pointer" : ""} ${className}`}
     >
       {state === "loading" && (
@@ -90386,8 +90454,9 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .jz-customer .jz-chip-row>button:active{scale:.94;}
 @media (prefers-reduced-motion:reduce){.jz-customer button:active,.jz-customer [role="tab"]:active{scale:1;}}
 /* iOS haptic overlay: a real finger tap must land on a native switch (iOS 26.5+). Kept near-transparent, full-cover, and scroll-friendly. */
-.jz-customer .jz-hx{position:absolute;inset:0;z-index:5;display:block;margin:0;padding:0;border-radius:inherit;opacity:.01;touch-action:pan-x pan-y;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;cursor:pointer;}
-.jz-customer .jz-hx>input{position:absolute;inset:0;width:100%;height:100%;margin:0;}
+.jz-hx{position:absolute;inset:0;z-index:5;display:block;margin:0;padding:0;border-radius:inherit;opacity:.01;touch-action:pan-x pan-y;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;cursor:pointer;}
+.jz-hx>input{position:absolute;inset:0;width:100%;height:100%;margin:0;}
+.jz-hx-scrolling .jz-hx,.jz-hx-scrolling .jz-hx>input{pointer-events:none;}
 @media print{.cb-app .cbx-sidebar,.cb-app .cbx-topbar,.jz-bottom-nav{display:none!important;}.cb-app main{padding:0;overflow:visible;}.cb-app{height:auto;overflow:visible;background:#fff;}}
 
 /* Comfortable admin scale: restore large, crisp type and icons. */
