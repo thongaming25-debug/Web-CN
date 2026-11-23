@@ -40450,6 +40450,22 @@ const CustomerApp = (() => {
   // covers every tab, chip, button and bottom-nav item inside .jz-customer.
   // Turn it off with: localStorage.setItem("jz_haptics", "0")
   let __hapticSwitch = null;
+  function ensureHapticSwitch() {
+    if (__hapticSwitch && document.body.contains(__hapticSwitch))
+      return __hapticSwitch;
+    const label = document.createElement("label");
+    label.setAttribute("aria-hidden", "true");
+    label.style.cssText =
+      "position:fixed;left:0;top:0;width:24px;height:24px;opacity:0;pointer-events:none;z-index:-1;";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.setAttribute("switch", "");
+    input.tabIndex = -1;
+    label.appendChild(input);
+    document.body.appendChild(label);
+    __hapticSwitch = label;
+    return label;
+  }
   function hapticPulse(ms) {
     try {
       if (localStorage.getItem("jz_haptics") === "0") return;
@@ -40457,24 +40473,14 @@ const CustomerApp = (() => {
       /* storage unavailable: keep haptics on */
     }
     try {
+      // Android (Chrome / installed PWA)
       if (typeof navigator.vibrate === "function") {
         navigator.vibrate(ms);
         return;
       }
-      if (!__hapticSwitch) {
-        const label = document.createElement("label");
-        label.setAttribute("aria-hidden", "true");
-        label.style.cssText =
-          "position:fixed;left:0;top:0;width:24px;height:24px;opacity:0;pointer-events:none;z-index:-1;";
-        const input = document.createElement("input");
-        input.type = "checkbox";
-        input.setAttribute("switch", "");
-        input.tabIndex = -1;
-        label.appendChild(input);
-        document.body.appendChild(label);
-        __hapticSwitch = label;
-      }
-      __hapticSwitch.click();
+      // iPhone (Safari / Home-Screen PWA): switch-toggle haptic. Must run
+      // synchronously inside the tap handler.
+      ensureHapticSwitch().click();
     } catch {
       /* haptics are a nicety, never block the tap */
     }
@@ -40496,6 +40502,7 @@ const CustomerApp = (() => {
           el.closest(".jz-bottom-nav, .jz-chip-row");
         hapticPulse(light ? 15 : 25);
       };
+      if (typeof navigator.vibrate !== "function") ensureHapticSwitch();
       document.addEventListener("click", onClick, true);
       return () => document.removeEventListener("click", onClick, true);
     }, []);
