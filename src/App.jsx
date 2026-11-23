@@ -44423,12 +44423,27 @@ const CustomerApp = (() => {
       );
       if (kErr || !key) throw new Error("Push is not configured yet");
       const reg = await pushRegistration();
-      const sub =
-        (await reg.pushManager.getSubscription()) ||
-        (await reg.pushManager.subscribe({
+      const keyBytes = pushKeyToBytes(key);
+      let sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        // A subscription made with another VAPID key can never receive our pushes.
+        const cur = sub.options?.applicationServerKey
+          ? new Uint8Array(sub.options.applicationServerKey)
+          : null;
+        const same =
+          cur &&
+          cur.length === keyBytes.length &&
+          cur.every((b, i) => b === keyBytes[i]);
+        if (!same) {
+          await sub.unsubscribe();
+          sub = null;
+        }
+      }
+      if (!sub)
+        sub = await reg.pushManager.subscribe({
           userVisibleOnly: true,
-          applicationServerKey: pushKeyToBytes(key),
-        }));
+          applicationServerKey: keyBytes,
+        });
       const j = sub.toJSON();
       const { error } = await supabase.rpc("push_save_subscription", {
         p_endpoint: j.endpoint,
@@ -44483,10 +44498,18 @@ const CustomerApp = (() => {
         if (state === "on") await disable();
         else await enable();
       } catch (e) {
+        const pushDown =
+          e?.name === "AbortError" ||
+          /push service|registration failed/i.test(e?.message || "");
         emitCBToast(
           "err",
           tr("Could not change notifications", "មិនអាចប្តូរការជូនដំណឹងបានទេ"),
-          e?.message || "",
+          pushDown
+            ? tr(
+                "This browser cannot reach the push service. Try another browser or your phone, and turn off VPN / ad-blocker.",
+                "Browser នេះមិនអាចភ្ជាប់ទៅ Push service បានទេ។ សូមសាកល្បង Browser ផ្សេង ឬទូរស័ព្ទ ហើយបិទ VPN / Ad-blocker។",
+              )
+            : e?.message || "",
         );
       } finally {
         setBusy(false);
