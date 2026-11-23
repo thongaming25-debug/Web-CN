@@ -17047,6 +17047,11 @@ function useStaffEmailOf() {
     return email ? [email, ...rest].join(" — ") : raw;
   };
 }
+// True once the users lookup has finished (or can't run). Until then a staff
+// NAME would flash and then swap to the email, so callers may hide it.
+function _staffEmailReady() {
+  return !!_staffEmailMap || !supabase;
+}
 
 function Timeline({ steps }) {
   const emailOf = useStaffEmailOf();
@@ -28996,11 +29001,8 @@ function TrackingDrawerShell({
   }, [onClose]);
   return createPortal(
     <div className="fixed inset-0 z-[120]" role="presentation">
-      <style>{`.cb-th-panel{font-family:Inter,"Noto Sans Khmer","Kantumruy Pro",system-ui,sans-serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}@media (prefers-reduced-motion:no-preference){.cb-th-panel{animation:cb-th-in .22s ease-out}}@keyframes cb-th-in{from{transform:translateX(28px);opacity:0}to{transform:none;opacity:1}}`}</style>
-      <div
-        className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]"
-        onClick={onClose}
-      />
+      <style>{`.cb-th-panel{font-family:Inter,"Noto Sans Khmer","Kantumruy Pro",system-ui,sans-serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}@media (prefers-reduced-motion:no-preference){.cb-th-panel{animation:cb-th-in .22s ease-out}}@keyframes cb-th-in{from{transform:translateX(28px)}to{transform:none}}`}</style>
+      <div className="absolute inset-0 bg-slate-900/40" onClick={onClose} />
       <div
         role="dialog"
         aria-modal="true"
@@ -60368,6 +60370,47 @@ function CnHistoryModal({ history, onClose, timeline = null, status = null }) {
 // ------------------------------------------------------------
 // Timeline
 // ------------------------------------------------------------
+// Scanner lookup cache per CN order, so re-opening Tracking History shows
+// everything instantly (it is refreshed in the background).
+const _tkScannerCache = {};
+const _tkScannerInflight = {};
+// Who scanned each TK stage of a CN order. Shared by the timeline and by the
+// detail page (which calls it early so the drawer opens with data ready).
+function fetchTkScanners(orderId) {
+  if (!supabase || !orderId) return Promise.resolve({});
+  if (_tkScannerInflight[orderId]) return _tkScannerInflight[orderId];
+  const job = (async () => {
+    const { data: pkgs } = await supabase
+      .from("packages")
+      .select("tk")
+      .eq("cn_order_id", orderId)
+      .limit(200);
+    const tks = (pkgs || []).map((p) => p.tk).filter(Boolean);
+    const map = {};
+    if (tks.length) {
+      const { data: hist } = await supabase
+        .from("status_history")
+        .select("tk,status,created_by,created_at")
+        .in("tk", tks)
+        .order("created_at", { ascending: true })
+        .limit(2000);
+      (hist || []).forEach((h) => {
+        const stage = TK_TO_CN_STATUS[String(h.status || "").trim()];
+        if (!stage || !h.created_by || /^system/i.test(h.created_by)) return;
+        // ascending order: the latest scan of a stage wins
+        map[stage] = { by: h.created_by, tk: h.tk };
+      });
+    }
+    _tkScannerCache[orderId] = map;
+    return map;
+  })()
+    .catch(() => _tkScannerCache[orderId] || {})
+    .finally(() => {
+      delete _tkScannerInflight[orderId];
+    });
+  _tkScannerInflight[orderId] = job;
+  return job;
+}
 function CnStatusTimeline({
   row: rowProp,
   status,
@@ -60383,33 +60426,19 @@ function CnStatusTimeline({
   const emailOf = useStaffEmailOf();
   // Staff view only: the real person who scanned each linked TK stage
   // (Inbound / Outbound / Arrived ...), so those steps no longer say "System".
-  const [tkScanners, setTkScanners] = useState({});
+  // null = still loading (so "System" is not flashed before the real scanner
+  // email arrives); {} = loaded, nobody found.
+  const [tkScanners, setTkScanners] = useState(
+    () => _tkScannerCache[rowProp?.id] ?? null,
+  );
+  const scannersLoading =
+    !customerView && !!supabase && !!row?.id && tkScanners === null;
   useEffect(() => {
     let alive = true;
     if (customerView || !supabase || !row?.id) return undefined;
-    (async () => {
-      const { data: pkgs } = await supabase
-        .from("packages")
-        .select("tk")
-        .eq("cn_order_id", row.id)
-        .limit(200);
-      const tks = (pkgs || []).map((p) => p.tk).filter(Boolean);
-      if (!tks.length) return;
-      const { data: hist } = await supabase
-        .from("status_history")
-        .select("tk,status,created_by,created_at")
-        .in("tk", tks)
-        .order("created_at", { ascending: true })
-        .limit(2000);
-      const map = {};
-      (hist || []).forEach((h) => {
-        const stage = TK_TO_CN_STATUS[String(h.status || "").trim()];
-        if (!stage || !h.created_by || /^system/i.test(h.created_by)) return;
-        // ascending order: the latest scan of a stage wins
-        map[stage] = { by: h.created_by, tk: h.tk };
-      });
+    fetchTkScanners(row.id).then((map) => {
       if (alive) setTkScanners(map);
-    })();
+    });
     return () => {
       alive = false;
     };
@@ -60477,10 +60506,13 @@ function CnStatusTimeline({
   const timeOf = (s) => historyEntryOf(s)?.created_at;
   const processorRaw = (s) => {
     const entry = historyEntryOf(s);
-    const scanned = tkScanners[s];
+    const scanned = tkScanners?.[s];
     // Automatic rows are written as "System — TK ...": show who scanned.
     if (scanned && (!entry?.created_by || /^system/i.test(entry.created_by)))
       return scanned.by;
+    // Scanner lookup still running: don't flash "System" for automatic rows.
+    if (scannersLoading && /^system/i.test(entry?.created_by || ""))
+      return null;
     if (entry?.created_by) return entry.created_by;
     if (s === normalizedStatus || s === timelineCurrent) {
       return row.updated_by || row.created_by || null;
@@ -60491,7 +60523,10 @@ function CnStatusTimeline({
   const processorOf = (s) => {
     // Drop any "— TK 123…" suffix; only the person is shown.
     const r = String(processorRaw(s) || "").replace(/\s+—\s+TK\s+\S+\s*$/i, "");
-    return r ? emailOf(r) : r;
+    if (!r) return r;
+    // Users table not loaded yet: hide the plain name instead of flashing it.
+    if (!r.includes("@") && !_staffEmailReady()) return "";
+    return emailOf(r);
   };
   const refundEntry = history.find(
     (h) => h.event === "status" && h.status === CN_ORDER_TERMINAL,
@@ -60510,6 +60545,24 @@ function CnStatusTimeline({
     });
 
   const cv = customerView;
+  // Staff view: hold the whole timeline until the scanner lookup AND the
+  // users->email lookup are done, so every step appears at once with its
+  // email (no "System"/blank that fills in later).
+  if (!customerView && (scannersLoading || !_staffEmailReady())) {
+    return (
+      <div className="animate-pulse space-y-5" aria-busy="true">
+        {[0, 1, 2, 3, 4].map((n) => (
+          <div key={n} className="flex gap-3">
+            <div className="h-6 w-6 shrink-0 rounded-full bg-slate-200" />
+            <div className="flex-1 space-y-2">
+              <div className="h-3.5 w-32 rounded bg-slate-200" />
+              <div className="h-3 w-56 rounded bg-slate-100" />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
   return (
     <div>
       {cv && (
@@ -63487,6 +63540,12 @@ function CnOrderDetailPage() {
   const [editParcelId, setEditParcelId] = useState(null);
   const [editParcelVal, setEditParcelVal] = useState("");
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Warm the caches now so Tracking History opens instantly, fully filled.
+  useEffect(() => {
+    if (!rowRaw?.id) return;
+    loadStaffEmailMap();
+    fetchTkScanners(rowRaw.id);
+  }, [rowRaw?.id, rowRaw?.status, rowRaw?.updated_at]);
   const [newTrack, setNewTrack] = useState("");
   const [cnImages, setCnImages] = useState([]);
   const [cnViewer, setCnViewer] = useState(-1);
@@ -64316,11 +64375,15 @@ function CnOrderDetailPage() {
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <DetailTypeBadge type={PKG_TYPE.PARSE_LINK} />
-              <CnStatusBadge
-                status={cnStaffTableStatus(row)}
-                partial={partial}
-                cancelled={cnIsCancelledUnpaid(row)}
-              />
+              {isPlaceholder ? (
+                <span className="inline-block h-6 w-28 animate-pulse rounded-full bg-slate-200" />
+              ) : (
+                <CnStatusBadge
+                  status={cnStaffTableStatus(row)}
+                  partial={partial}
+                  cancelled={cnIsCancelledUnpaid(row)}
+                />
+              )}
               <DetailIdChip
                 label="Supplier order"
                 value={row.supplier_order_no}
@@ -64730,11 +64793,15 @@ function CnOrderDetailPage() {
                   <div>
                     <dt>Status</dt>
                     <dd>
-                      <CnStatusBadge
-                        status={cnStaffTableStatus(row)}
-                        partial={partial}
-                        cancelled={cnIsCancelledUnpaid(row)}
-                      />
+                      {isPlaceholder ? (
+                        <span className="inline-block h-6 w-28 animate-pulse rounded-full bg-slate-200" />
+                      ) : (
+                        <CnStatusBadge
+                          status={cnStaffTableStatus(row)}
+                          partial={partial}
+                          cancelled={cnIsCancelledUnpaid(row)}
+                        />
+                      )}
                     </dd>
                   </div>
                   {!hasItems && (
