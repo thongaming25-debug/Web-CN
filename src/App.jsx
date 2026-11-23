@@ -5044,13 +5044,12 @@ function formatDbTimestamp(iso) {
   if (!iso) return null;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
-  const day = d.getDate();
-  const month = d.toLocaleString("en-US", { month: "short" });
+  const pad = (n) => String(n).padStart(2, "0");
   let hours = d.getHours();
-  const minutes = String(d.getMinutes()).padStart(2, "0");
   const ampm = hours >= 12 ? "PM" : "AM";
   hours = hours % 12 || 12;
-  return `${day} ${month}, ${hours}:${minutes} ${ampm}`;
+  // Numeric month, e.g. "2026-11-23 12:48 PM" (shown in the admin system).
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(hours)}:${pad(d.getMinutes())} ${ampm}`;
 }
 
 // formatNowTimestamp() stores "4 Oct, 1:29 AM" — NO year. new Date() on that
@@ -16910,14 +16909,71 @@ function InfoGrid({ items }) {
 // ------------------------------------------------------------
 // Same look as CnStatusTimeline (Order History): green ✓ done, blue dot active,
 // hollow grey circle pending. Text is English only.
+// ------------------------------------------------------------
+// Staff name -> email, so every tracking step shows WHO processed it by
+// email (e.g. "23 Nov, 12:48 PM · name@company.com"). History rows store the
+// staff NAME in created_by; we resolve it against the `users` table once and
+// cache it. Works for old rows too. Unknown actors ("System", etc.) are
+// shown unchanged, and so is anything while the lookup is still loading.
+// ------------------------------------------------------------
+let _staffEmailMap = null;
+let _staffEmailLoading = false;
+const _staffEmailSubs = new Set();
+function _finishStaffEmailLoad(map) {
+  _staffEmailMap = map;
+  _staffEmailLoading = false;
+  _staffEmailSubs.forEach((fn) => fn());
+}
+function loadStaffEmailMap() {
+  if (_staffEmailMap || _staffEmailLoading || !supabase) return;
+  _staffEmailLoading = true;
+  supabase
+    .from("users")
+    .select("name,email")
+    .then(
+      ({ data, error }) => {
+        const map = {};
+        if (!error)
+          (data || []).forEach((u) => {
+            const k = String(u?.name || "")
+              .trim()
+              .toLowerCase();
+            if (k && u.email && !(k in map)) map[k] = u.email;
+          });
+        _finishStaffEmailLoad(map);
+      },
+      () => _finishStaffEmailLoad({}),
+    );
+}
+function useStaffEmailOf() {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const fn = () => bump((n) => n + 1);
+    _staffEmailSubs.add(fn);
+    loadStaffEmailMap();
+    return () => {
+      _staffEmailSubs.delete(fn);
+    };
+  }, []);
+  return (actor) => {
+    const raw = String(actor ?? "").trim();
+    if (!raw || raw.includes("@")) return raw;
+    // Scanner rows look like "Name — TK 123": resolve only the name part.
+    const [head, ...rest] = raw.split(" — ");
+    const email = _staffEmailMap?.[head.trim().toLowerCase()];
+    return email ? [email, ...rest].join(" — ") : raw;
+  };
+}
+
 function Timeline({ steps }) {
+  const emailOf = useStaffEmailOf();
   return (
     <div>
       {steps.map((step, i) => {
         const done = step.state === "done";
         const active = step.state === "active";
         const isLast = i === steps.length - 1;
-        const meta = [step.time, step.proceedBy && `${step.proceedBy}`]
+        const meta = [step.time, step.proceedBy && emailOf(step.proceedBy)]
           .filter(Boolean)
           .join(" · ");
         return (
@@ -38314,14 +38370,14 @@ const CustomerApp = (() => {
           STEPS[Math.min(n, 4)][0],
           CUSTOMER_STAGE_TONE[STEPS[Math.min(n, 4)][0]],
         ];
-  const fmtDate = (iso) =>
-    iso
-      ? new Date(iso).toLocaleDateString(dateLoc(), {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-        })
-      : "—";
+  // Numeric month, e.g. "2026-11-23" (same in English and Khmer).
+  const fmtDate = (iso) => {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "—";
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  };
   const digitsOnly = (s) => (s || "").replace(/\D/g, "");
   // Supabase Auth needs an email to sign in with password; customers only
   // ever see/enter their phone. We derive a stable, private-looking email
@@ -38428,16 +38484,17 @@ const CustomerApp = (() => {
       "ការបញ្ជាទិញពីចិនត្រូវបានសងប្រាក់វិញ",
     ],
   };
-  const fmtDateTime = (iso) =>
-    iso
-      ? new Date(iso).toLocaleString(dateLoc(), {
-          day: "2-digit",
-          month: "short",
-          hour: "2-digit",
-          minute: "2-digit",
-        })
-      : "";
-  // Full stamp for status timelines: time + date + year, e.g. "9:49 PM, 31 Oct 2026".
+  const fmtDateTime = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "";
+    const time = d.toLocaleTimeString(dateLoc(), {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    return `${fmtDate(iso)} ${time}`;
+  };
+  // Full stamp for status timelines, e.g. "2026-10-31 9:49 PM".
   const fmtStamp = (iso) => {
     if (!iso) return "—";
     const d = new Date(iso);
@@ -38449,7 +38506,7 @@ const CustomerApp = (() => {
         hour12: true,
       })
       .replace(/\b(am|pm)\b/i, (m) => m.toUpperCase());
-    return `${time}, ${fmtDate(iso)}`;
+    return `${fmtDate(iso)} ${time}`;
   };
 
   function Provider({ children }) {
@@ -38504,7 +38561,7 @@ const CustomerApp = (() => {
     useEffect(() => {
       if (!dark) return;
       const prev = document.body.style.backgroundColor;
-      document.body.style.backgroundColor = "#0b1120";
+      document.body.style.backgroundColor = "#0f0f0f";
       return () => {
         document.body.style.backgroundColor = prev;
       };
@@ -40451,18 +40508,22 @@ const CustomerApp = (() => {
         setNavInd((p) => (p ? null : p));
         return;
       }
-      const left = a.offsetLeft;
-      const width = a.offsetWidth;
+      const left = Math.round(a.offsetLeft);
+      const width = Math.round(a.offsetWidth);
       setNavInd((p) =>
-        p && p.left === left && p.width === width
+        p && Math.abs(p.left - left) < 1 && Math.abs(p.width - width) < 1
           ? p
           : { left, width, animate: !!p },
       );
     };
-    // Every render (route change, tabs loaded, language switch): re-measure.
+    // Re-measure only when something that moves the tabs changes. (It used to
+    // run after EVERY render and set state each time, which could loop
+    // forever right after login: "Maximum update depth exceeded".)
     useLayoutEffect(() => {
       placeNavPill.current();
-    });
+      const id = window.requestAnimationFrame(() => placeNavPill.current());
+      return () => window.cancelAnimationFrame(id);
+    }, [pathname, hideNav, loading, me?.id]);
     useEffect(() => {
       const list = navListRef.current;
       if (!list) return undefined;
@@ -40472,9 +40533,21 @@ const CustomerApp = (() => {
           ? new ResizeObserver(onSize)
           : null;
       ro?.observe(list);
+      // Tabs added / removed (features loaded) or the active tab changed.
+      const mo =
+        typeof MutationObserver !== "undefined"
+          ? new MutationObserver(onSize)
+          : null;
+      mo?.observe(list, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["aria-current"],
+      });
       window.addEventListener("resize", onSize, { passive: true });
       return () => {
         ro?.disconnect();
+        mo?.disconnect();
         window.removeEventListener("resize", onSize);
       };
     }, [loading, me?.id, hideNav]);
@@ -59817,6 +59890,7 @@ function CnRefundModal({ open, row, onClose, onSaved }) {
 // History
 // ------------------------------------------------------------
 function CnHistoryModal({ history, onClose, timeline = null, status = null }) {
+  const emailOf = useStaffEmailOf();
   const [tab, setTab] = useState(timeline ? "timeline" : "history");
   const tabs = timeline ? (
     <div className="flex gap-6 border-b border-slate-200 px-6">
@@ -59861,7 +59935,9 @@ function CnHistoryModal({ history, onClose, timeline = null, status = null }) {
                 </span>
               </div>
               {h.note && <p className="mt-0.5 text-slate-700">{h.note}</p>}
-              <p className="mt-0.5 text-xs text-slate-500">{h.created_by}</p>
+              <p className="mt-0.5 text-xs text-slate-500">
+                {emailOf(h.created_by)}
+              </p>
             </div>
           ))}
         </div>
@@ -59885,6 +59961,7 @@ function CnStatusTimeline({
   // Customer detail uses the simplified Order Table statuses after purchase;
   // Admin/Staff keeps the original operational CN/TK workflow unchanged.
   const row = rowProp || { status };
+  const emailOf = useStaffEmailOf();
   // Staff view only: the real person who scanned each linked TK stage
   // (Inbound / Outbound / Arrived ...), so those steps no longer say "System".
   const [tkScanners, setTkScanners] = useState({});
@@ -59979,17 +60056,23 @@ function CnStatusTimeline({
         : cnNormalizeStatus(h.status) === s;
     });
   const timeOf = (s) => historyEntryOf(s)?.created_at;
-  const processorOf = (s) => {
+  const processorRaw = (s) => {
     const entry = historyEntryOf(s);
     const scanned = tkScanners[s];
     // Automatic rows are written as "System — TK ...": show who scanned.
     if (scanned && (!entry?.created_by || /^system/i.test(entry.created_by)))
-      return `${scanned.by} — TK ${scanned.tk}`;
+      return scanned.by;
     if (entry?.created_by) return entry.created_by;
     if (s === normalizedStatus || s === timelineCurrent) {
       return row.updated_by || row.created_by || null;
     }
     return null;
+  };
+  // Show the staff member's email instead of their display name.
+  const processorOf = (s) => {
+    // Drop any "— TK 123…" suffix; only the person is shown.
+    const r = String(processorRaw(s) || "").replace(/\s+—\s+TK\s+\S+\s*$/i, "");
+    return r ? emailOf(r) : r;
   };
   const refundEntry = history.find(
     (h) => h.event === "status" && h.status === CN_ORDER_TERMINAL,
@@ -60127,11 +60210,6 @@ function CnStatusTimeline({
               {!customerView && !t && (done || active) && processorOf(s) && (
                 <p className="text-sm text-slate-600 mt-0.5">
                   {processorOf(s)}
-                </p>
-              )}
-              {!customerView && active && CN_AUTO_STAGES.has(s) && (
-                <p className="text-sm text-blue-600 mt-0.5">
-                  Updated automatically from the TK.
                 </p>
               )}
             </div>
@@ -64975,7 +65053,7 @@ const SUPPORT_TOOLS = [
   {
     key: "rollback-completed",
     code: "RC",
-    color: "bg-rose-500",
+    color: "bg-emerald-500",
     title: "Rollback Completed",
     desc: "Wrongly marked Completed? Enter the tracking number and move it back to Inbound Warehouse.",
     perm: "support.rollback",
@@ -64983,7 +65061,7 @@ const SUPPORT_TOOLS = [
   {
     key: "rollback-refund",
     code: "RR",
-    color: "bg-amber-500",
+    color: "bg-rose-500",
     title: "Rollback Refund",
     desc: "Undo a CN order refund by Order ID: takes the money back from the wallet and returns the order to Approve Purchase.",
     perm: "support.rollback_refund",
@@ -64999,26 +65077,28 @@ function SupportHubPage() {
   );
   return (
     <div className="min-h-full bg-slate-50/70">
-      <div className="mx-auto max-w-[1100px] space-y-5 p-5 md:p-7">
-        <div>
-          <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
-            Support
-          </h1>
-          <p className="text-sm text-slate-500">
-            Admin tools to fix mistakes and handle special cases.
-          </p>
-        </div>
-        <div className="relative max-w-sm">
-          <Icons.Search
-            size={15}
-            className="absolute left-3 top-3 text-slate-400"
-          />
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search support tools…"
-            className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
-          />
+      <div className="mx-auto max-w-[1400px] space-y-5 p-5 md:p-7">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
+              Support
+            </h1>
+            <p className="text-sm text-slate-500">
+              Admin tools to fix mistakes and handle special cases.
+            </p>
+          </div>
+          <div className="relative w-full sm:w-80">
+            <Icons.Search
+              size={16}
+              className="absolute left-3.5 top-3 text-slate-400"
+            />
+            <input
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search support tools…"
+              className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 text-sm outline-none transition focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+            />
+          </div>
         </div>
         {!tools.length ? (
           <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-400">
@@ -65027,28 +65107,31 @@ function SupportHubPage() {
               : "No support tool is available for your role."}
           </div>
         ) : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {tools.map((t) => (
-              <Link
-                key={t.key}
-                to={`/support/${t.key}`}
-                className="group flex overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm transition hover:border-blue-300 hover:shadow-md"
-              >
-                <span
-                  className={`flex w-16 shrink-0 items-center justify-center text-sm font-bold text-white ${t.color}`}
+          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {tools.map((t) => (
+                <Link
+                  key={t.key}
+                  to={`/support/${t.key}`}
+                  title={t.desc}
+                  className="group flex min-h-[56px] overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm transition hover:border-blue-300 hover:shadow focus:outline-none focus-visible:ring-4 focus-visible:ring-blue-500/20"
                 >
-                  {t.code}
-                </span>
-                <span className="min-w-0 p-3">
-                  <span className="block truncate text-sm font-bold text-slate-900 group-hover:text-blue-700">
-                    {t.title}
+                  <span
+                    className={`flex w-11 shrink-0 items-center justify-center text-xs font-semibold text-white ${t.color}`}
+                  >
+                    {t.code}
                   </span>
-                  <span className="mt-0.5 line-clamp-2 block text-xs text-slate-500">
-                    {t.desc}
+                  <span className="flex min-w-0 flex-1 flex-col justify-center px-3.5 py-2">
+                    <span className="block truncate text-sm font-semibold leading-tight text-slate-900 transition group-hover:text-blue-700">
+                      {t.title}
+                    </span>
+                    <span className="mt-0.5 block truncate text-xs text-slate-500">
+                      {t.desc}
+                    </span>
                   </span>
-                </span>
-              </Link>
-            ))}
+                </Link>
+              ))}
+            </div>
           </div>
         )}
       </div>
@@ -90050,6 +90133,41 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .jz-customer .jz-shop-option-list>button{max-width:100%;white-space:normal;overflow-wrap:anywhere;line-height:1.5;}
 .jz-customer .jz-shop-option-list>button[aria-pressed="true"]{background:#eff6ff;color:#1d4ed8;border-color:#2563eb;box-shadow:inset 0 0 0 1px #2563eb;}
 .jz-customer.cb-cust-dark .jz-shop-option-list>button[aria-pressed="true"]{background:#172d50;color:#bfdbfe;border-color:#60a5fa;box-shadow:inset 0 0 0 1px #60a5fa;}
+/* Customer dark mode: neutral black like DRSB (replaces the navy tint). The
+   extra .jz-customer class makes these win over the earlier .cb-cust-dark rules. */
+.jz-customer.cb-cust-dark{--jz-c-page:#0f0f0f;--jz-c-card:#1b1b1b;--jz-c-text:#f5f5f5;--jz-c-muted:#a3a3a3;--jz-c-border:#2c2c2c;--jz-c-glass:rgba(34,34,34,.6);--jz-c-glass-edge:rgba(255,255,255,.1);--jz-c-chip-bg:linear-gradient(180deg,rgba(255,255,255,.1),rgba(255,255,255,.04));--jz-c-dock-bg:linear-gradient(180deg,rgba(52,52,52,.72),rgba(30,30,30,.55));--jz-c-dock-edge:rgba(255,255,255,.14);--jz-c-dock-ink:#f5f5f5;background:#0f0f0f;color:#f5f5f5;}
+.jz-customer.cb-cust-dark .bg-white{background-color:#1b1b1b;}
+.jz-customer.cb-cust-dark .bg-slate-50{background-color:#0f0f0f;}
+.jz-customer.cb-cust-dark .bg-slate-100{background-color:#262626;}
+.jz-customer.cb-cust-dark .bg-slate-200{background-color:#333;}
+.jz-customer.cb-cust-dark .bg-slate-900{background-color:#404040;}
+.jz-customer.cb-cust-dark .active\\:bg-slate-50:active{background-color:#262626;}
+.jz-customer.cb-cust-dark .focus-within\\:bg-white:focus-within{background-color:#141414;}
+.jz-customer.cb-cust-dark .bg-gradient-to-r.from-blue-50{background-image:linear-gradient(to right,rgba(37,99,235,.18),#1b1b1b);}
+.jz-customer.cb-cust-dark .bg-white\\/95{background-color:rgba(27,27,27,.94);}
+.jz-customer.cb-cust-dark .text-slate-900{color:#f5f5f5;}
+.jz-customer.cb-cust-dark .text-slate-800{color:#ededed;}
+.jz-customer.cb-cust-dark .text-slate-700{color:#d4d4d4;}
+.jz-customer.cb-cust-dark .text-slate-600{color:#b5b5b5;}
+.jz-customer.cb-cust-dark .text-slate-500{color:#a3a3a3;}
+.jz-customer.cb-cust-dark .text-slate-400{color:#7d7d7d;}
+.jz-customer.cb-cust-dark .text-slate-300{color:#525252;}
+.jz-customer.cb-cust-dark .hover\\:text-slate-700:hover{color:#ededed;}
+.jz-customer.cb-cust-dark .hover\\:text-slate-600:hover{color:#d4d4d4;}
+.jz-customer.cb-cust-dark .border-slate-100{border-color:#262626;}
+.jz-customer.cb-cust-dark .border-slate-200{border-color:#2c2c2c;}
+.jz-customer.cb-cust-dark .border-slate-300{border-color:#3a3a3a;}
+.jz-customer.cb-cust-dark .hover\\:border-slate-300:hover{border-color:#474747;}
+.jz-customer.cb-cust-dark .divide-slate-100>:not([hidden])~:not([hidden]){border-color:#262626;}
+.jz-customer.cb-cust-dark .cb-sk{background-color:#262626;}
+.jz-customer.cb-cust-dark .cb-field-input:-webkit-autofill,.jz-customer.cb-cust-dark .cb-field-input:-webkit-autofill:focus{-webkit-box-shadow:0 0 0 1000px #0f0f0f inset!important;-webkit-text-fill-color:#f5f5f5;}
+.jz-customer.cb-cust-dark .bg-white.rounded-2xl{box-shadow:inset 0 0 0 1px rgba(255,255,255,.06);}
+.jz-customer.cb-cust-dark header.bg-blue-600{background:linear-gradient(180deg,#1c1c1c,#121212);box-shadow:inset 0 -1px 0 rgba(255,255,255,.06);border-radius:0 0 28px 28px;}
+.jz-customer.cb-cust-dark header.bg-blue-600 .bg-white\\/15{background-color:rgba(255,255,255,.08);}
+.jz-customer.cb-cust-dark .jz-brand-j{fill:#f5f5f5;}.jz-customer.cb-cust-dark .jz-brand-text{color:#f5f5f5;}
+.jz-customer.cb-cust-dark .jz-toast{background:#262626!important;color:#f5f5f5!important;border-color:rgba(255,255,255,.14)!important;}
+.jz-customer.cb-cust-dark .jz-shop-option-list>button[aria-pressed="true"]{background:#262626;color:#ff8f3a;border-color:#ff8f3a;box-shadow:inset 0 0 0 1px #ff8f3a;}
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.jz-customer.cb-cust-dark{--jz-c-glass:rgba(34,34,34,.94);}}
 .jz-customer .jz-shop-checkout-content{padding-top:20px;padding-bottom:20px;}
 /* DRSB-style footer: full-width bar glued to the screen bottom, no floating card. */
 .jz-customer .jz-shop-action-bar.jz-shop-action-bar--flush{position:fixed;left:0;right:0;bottom:0!important;width:100%;max-width:448px;margin:0 auto;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));border:0;border-top:1px solid var(--jz-c-border);border-radius:0;box-shadow:0 -8px 24px -14px rgba(15,30,60,.28);}
