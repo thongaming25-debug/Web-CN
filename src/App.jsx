@@ -2158,6 +2158,51 @@ html.cb-admin-dark .cbx-act.is-on{ background:rgba(74,222,128,.14); border-color
 .cbx-modal-wide .cbx-modal-foot{ background:transparent; border-top:0; padding:12px 28px 28px; gap:10px; }
 .cbx-modal-wide .cbx-modal-foot .cbx-btn{ height:44px; padding:0 18px; font-size:15px; font-weight:600; border-radius:10px; }
 .cbx-modal-wide .cbx-modal-foot .cbx-btn:not(.cbx-btn-primary){ box-shadow:0 1px 4px rgba(15,23,42,.15); }
+/* Finance-style modal (Create Wallet Top Up) — shared by Verify Scan Arrived */
+.cbx-modal.cbx-modal-fin.cbx-modal-fin-lg{ max-width:820px; }
+.cbx-modal.cbx-modal-fin{ border-radius:16px; border:0; box-shadow:0 25px 50px -12px rgba(15,23,42,.35); }
+.cbx-modal-fin .cbx-modal-head{ padding:24px 32px; border-bottom:1px solid #e2e8f0; align-items:center; }
+.cbx-modal-fin .cbx-modal-title{ font-size:24px; font-weight:700; line-height:1.33; color:#020617; }
+.cbx-modal-fin .cbx-modal-x{ width:36px; height:36px; border-radius:8px; }
+.cbx-modal-fin .cbx-modal-body{ padding:28px 32px; gap:16px; }
+.cbx-modal-fin .cbx-modal-sub{ font-size:14px; margin-top:4px; }
+.cbx-modal-fin .cbx-modal-foot{ background:transparent; border-top:1px solid #f1f5f9; padding:20px 32px; gap:8px; flex-direction:row-reverse; justify-content:flex-start; }
+.cbx-modal-fin .cbx-modal-foot .cbx-btn{ height:44px; border-radius:8px; padding:0 20px; font-size:14px; font-weight:600; color:#0f172a; border-color:#cbd5e1; background:#fff; box-shadow:0 1px 2px rgba(15,23,42,.06); }
+.cbx-modal-fin .cbx-modal-foot .cbx-btn:hover:not(:disabled){ background:#f8fafc; }
+.cbx-modal-fin .cbx-modal-foot .cbx-btn.cbx-btn-primary{ background:#2563eb; border-color:#2563eb; color:#fff; font-weight:700; padding:0 28px; box-shadow:none; }
+.cbx-modal-fin .cbx-modal-foot .cbx-btn.cbx-btn-primary:hover:not(:disabled){ background:#1d4ed8; border-color:#1d4ed8; }
+.cbx-modal-fin .cbx-modal-foot .cbx-btn:disabled{ opacity:.4; }
+/* Finance-style fields (Label / Input / Select) — wrap a modal body in .cbx-fin-form */
+.cbx-fin-form label.uppercase{ text-transform:none; letter-spacing:0; font-size:15px; font-weight:600; color:#0f172a; margin-bottom:8px; }
+.cbx-fin-form :is(input,select,textarea).border-mist-200,
+.cbx-fin-form .cbx-fin-wrap{ border:1px solid #cbd5e1; border-radius:8px; background:#fff; color:#0f172a; font-size:15px; font-weight:500; box-shadow:0 1px 2px rgba(15,23,42,.06); }
+.cbx-fin-form :is(input,select).border-mist-200{ height:48px; padding:0 14px; }
+.cbx-fin-form textarea.border-mist-200{ padding:12px 14px; }
+.cbx-fin-form .cbx-fin-wrap{ min-height:48px; padding:0 14px; }
+.cbx-fin-form .cbx-fin-wrap input{ height:46px; font-size:15px; font-weight:500; color:#0f172a; }
+.cbx-fin-form select.border-mist-200{ appearance:none; -webkit-appearance:none; padding-right:38px; cursor:pointer;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 12px center; }
+.cbx-fin-form :is(input,select,textarea).border-mist-200::placeholder{ color:#64748b; font-weight:400; }
+.cbx-fin-form :is(input,select,textarea).border-mist-200:focus,
+.cbx-fin-form .cbx-fin-wrap:focus-within{ border-color:#64748b; box-shadow:0 1px 2px rgba(15,23,42,.06); outline:none; }
+/* Shop product form (New / Edit Product) — same field look as the Finance modals */
+.cbx-shop-form .shop-f-label{ font-size:15px; font-weight:600; color:#0f172a; margin-bottom:8px; }
+.cbx-shop-form .shop-f-hint{ font-size:13px; color:#64748b; margin-top:6px; }
+.cbx-shop-form :is(input:not([type="checkbox"]):not([type="file"]),select,textarea){ border:1px solid #cbd5e1; border-radius:8px; background-color:#fff; color:#0f172a; font-size:15px; font-weight:500; box-shadow:0 1px 2px rgba(15,23,42,.06); }
+.cbx-shop-form :is(input:not([type="checkbox"]):not([type="file"]),select){ height:48px; padding-left:14px; padding-right:14px; }
+.cbx-shop-form textarea{ padding:12px 14px; }
+.cbx-shop-form input.pr-9{ padding-right:36px; }
+.cbx-shop-form select{ appearance:none; -webkit-appearance:none; padding-right:38px; cursor:pointer;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 12px center; }
+.cbx-shop-form :is(input,select,textarea)::placeholder{ color:#64748b; font-weight:400; }
+.cbx-shop-form :is(input:not([type="checkbox"]):not([type="file"]),select,textarea):focus{ border-color:#64748b; box-shadow:0 1px 2px rgba(15,23,42,.06); outline:none; }
+.cbx-shop-form :is(input,select,textarea):disabled{ background-color:#f8fafc; color:#94a3b8; }
+@media (max-width:640px){
+  .cbx-modal-fin .cbx-modal-head,.cbx-modal-fin .cbx-modal-body,.cbx-modal-fin .cbx-modal-foot{ padding-left:16px; padding-right:16px; }
+  .cbx-modal-fin .cbx-modal-foot .cbx-btn{ flex:1; justify-content:center; }
+}
 @media (max-width:640px){
   .cbx-modal-backdrop{ padding:12px; }
   .cbx-modal-head,.cbx-modal-body,.cbx-modal-foot{ padding-left:16px; padding-right:16px; }
@@ -10337,23 +10382,24 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
   // Same modal shell as New CN Purchase Order (AppModal).
   return (
     <AppModal
-      title={tr("New TK — Inbound Origin", "TK ថ្មី — ទទួលចូលនៅប្រភព")}
+      title={tr("Create New TK", "បង្កើត TK ថ្មី")}
       subtitle={tr(
         "Scan TK, pick the customer, then set cargo & freight (optional).",
         "ស្កែន TK ជ្រើសរើសអតិថិជន រួចកំណត់ទំនិញ និងថ្លៃដឹក (មិនចាំបាច់)។",
       )}
-      maxW="max-w-2xl"
+      className="cbx-modal-fin cbx-modal-fin-lg"
       onClose={onClose}
       onSubmit={handleSubmit}
       busy={saving}
       error={error}
       cancelLabel={tr("Cancel", "បោះបង់")}
-      submitLabel={tr("Save Inbound", "រក្សាទុកការទទួលចូល")}
-      busyLabel={tr("Saving...", "កំពុងរក្សាទុក...")}
+      submitLabel={tr("Submit", "បញ្ជូន")}
+      busyLabel={tr("Saving…", "កំពុងរក្សាទុក…")}
+      submitDisabled={!tkTrim || !f.customer}
     >
-      <div className="space-y-5">
-        <section className="space-y-3.5">
-          <h4 className="text-sm font-bold text-slate-900">
+      <div className="space-y-6 cbx-fin-form">
+        <section className="space-y-4">
+          <h4 className="text-base font-bold text-slate-900">
             {tr("TK & Customer", "TK និងអតិថិជន")}
           </h4>
           <div>
@@ -10361,8 +10407,8 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
               {tr("TK Number", "លេខ TK")}{" "}
               <span className="text-signal-red">*</span>
             </label>
-            <div className="flex items-center gap-2 border border-mist-200 rounded-md px-3 py-2 focus-within:border-signal-blue">
-              <Icons.ScanLine size={16} className="text-ink-600/40 shrink-0" />
+            <div className="cbx-fin-wrap flex items-center gap-2">
+              <Icons.ScanLine size={16} className="text-slate-400 shrink-0" />
               <input
                 autoFocus
                 value={f.tk}
@@ -10471,8 +10517,8 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
           </p>
         </section>
 
-        <section className="space-y-3.5 border-t border-slate-100 pt-5">
-          <h4 className="text-sm font-bold text-slate-900">
+        <section className="space-y-4 border-t border-slate-100 pt-6">
+          <h4 className="text-base font-bold text-slate-900">
             {tr("Goods & Warehouse", "ទំនិញ និងឃ្លាំង")}
           </h4>
           {!cnMode && (
@@ -10567,14 +10613,11 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
 
         {
           <>
-            <section className="space-y-3.5 border-t border-slate-100 pt-5">
-              <h4 className="text-sm font-bold text-slate-900">
+            <section className="space-y-4 border-t border-slate-100 pt-6">
+              <h4 className="text-base font-bold text-slate-900">
                 {tr("Product Photos", "រូបភាពទំនិញ")}{" "}
                 <span className="text-ink-600/45 font-normal text-xs">
-                  {tr(
-                    "(optional — can be added at Scan Arrive)",
-                    "(មិនចាំបាច់ — អាចបន្ថែមពេល Scan Arrive)",
-                  )}
+                  {tr("(optional)", "(មិនចាំបាច់)")}
                 </span>
               </h4>
               <PhotoUploader
@@ -10587,8 +10630,8 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
               />
             </section>
 
-            <section className="space-y-3.5 border-t border-slate-100 pt-5">
-              <h4 className="text-sm font-bold text-slate-900">
+            <section className="space-y-4 border-t border-slate-100 pt-6">
+              <h4 className="text-base font-bold text-slate-900">
                 {tr("Cargo & Freight", "ទំនិញ និងថ្លៃដឹក")}{" "}
                 <span className="text-ink-600/45 font-normal text-xs">
                   {tr(
@@ -10878,23 +10921,6 @@ function VerifyScanModal({
   const [checked, setChecked] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  // Photos are optional at Inbound — if the TK has none yet, staff can add
-  // them here at Arrive. Assume "has photos" until the check finishes (and if
-  // it fails) so we never offer an uploader that could overwrite old photos.
-  const [newPhotos, setNewPhotos] = useState([]);
-  const [hasPhotos, setHasPhotos] = useState(true);
-  useEffect(() => {
-    if (!open || !tk) return;
-    let alive = true;
-    setNewPhotos([]);
-    setHasPhotos(true);
-    loadPhotos(tk)
-      .then((r) => alive && setHasPhotos(r.length > 0))
-      .catch(() => alive && setHasPhotos(true));
-    return () => {
-      alive = false;
-    };
-  }, [open, tk]);
   const { rows: whList } = useWarehouses();
   const [route, setRoute] = useState({
     china: "",
@@ -11011,7 +11037,7 @@ function VerifyScanModal({
         return setError("Length, Width and Height must be positive numbers");
       if (!calc.ok) return setError(calc.message);
       if (!missingSize && !String(dims.reason).trim())
-        return setError("សូមបញ្ចូលReason for adjustment (Reason)");
+        return setError("Please enter a reason for the adjustment");
     }
     setSaving(true);
     try {
@@ -11059,20 +11085,8 @@ function VerifyScanModal({
       }
       if (REQUIRE_BRANCH_ON_ARRIVAL && !route.kh)
         throw new Error(
-          "រកមិនឃើញ Receiving Branch — សូមឱ្យ Admin/Customer Service កំណត់នៅ Order សិន",
+          "Receiving Branch not found — ask Admin / Customer Service to set it on the Order first",
         );
-      if (!hasPhotos && newPhotos.length > 0) {
-        const photoWarning = await savePhotos(
-          {
-            tk: pkg.tk,
-            package_id: pkg.id || null,
-            customer_id: pkg.customer_id ?? null,
-            order_no: pkg.order_no ?? null,
-          },
-          newPhotos,
-        );
-        if (photoWarning) emitCBToast("err", "Photo upload", photoWarning);
-      }
       // Write the inherited warehouses onto the TK so lists/detail match.
       if (
         (route.kh && !pkg.dest_branch_code) ||
@@ -11114,11 +11128,82 @@ function VerifyScanModal({
   // Same shared AppModal frame the CN Order modals use (portal + blur
   // backdrop + Esc to close + Cancel / Confirm footer + error banner), so
   // Verify Scan Arrived looks and behaves like every other form modal.
+  const methodTone =
+    shipMethod === "Air"
+      ? "text-sky-600"
+      : shipMethod === "Sea"
+        ? "text-signal-blue"
+        : "text-orange-600";
+  const hasFee =
+    pkg.freight_fee !== undefined &&
+    pkg.freight_fee !== null &&
+    pkg.freight_fee !== "";
+  const dimsText =
+    pkg.length_cm && pkg.width_cm && pkg.height_cm
+      ? `${pkg.length_cm} × ${pkg.width_cm} × ${pkg.height_cm} cm`
+      : pkg.cargo_type
+        ? `${pkg.cargo_type} · ${sizeLabel(pkg.size_class)}`
+        : pkg.package_type === "small_package" && pkg.size_class
+          ? `Small · ${sizeLabel(pkg.size_class)}`
+          : "—";
+  const orderId = pkg.cn_order_id
+    ? CN_ORDER_NO_BY_ID[pkg.cn_order_id] || pkg.cn_order_no || "—"
+    : pkg.order_no || pkg.order || "—";
+  // DRSB-style 3-column grid (3 rows). Customer sits where DRSB shows UID.
+  const detailRows = [
+    [
+      { label: "Order ID", value: orderId, mono: true },
+      { label: "Tracking Number", value: pkg.tk, mono: true },
+      { label: "Customer", value: pkg.customer || "—" },
+    ],
+    [
+      { label: "Status", value: <StatusBadge label={pkg.status || "—"} /> },
+      {
+        label: "Shipping Method",
+        value: (
+          <span className={`font-semibold ${methodTone}`}>{shipMethod}</span>
+        ),
+      },
+      {
+        label: "Total Parcel / Total Quantity",
+        value: (
+          <span className="inline-flex items-center gap-2">
+            <span>
+              1 <span className="text-ink-600/40">/</span> 1{" "}
+              <span className="text-xs font-normal text-ink-600/50">Pcs</span>
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-signal-teal/30 bg-signal-teal/10 px-2 py-0.5 text-xs font-semibold text-signal-teal">
+              <Check size={12} /> Verified
+            </span>
+          </span>
+        ),
+      },
+    ],
+    [
+      {
+        label: "Total Weight / Total CBM",
+        value: `${pkg.weight || "—"} / ${pkg.cbm || "—"}`,
+      },
+      {
+        label: "Total Price",
+        value: (
+          <span className="font-bold text-signal-blue">
+            {hasFee ? money(pkg.freight_fee) : "—"}
+          </span>
+        ),
+      },
+      { label: "Warehouse", value: pkg.warehouse || "—" },
+    ],
+  ];
+
+  // Same shared AppModal frame as the other form modals (portal + blur
+  // backdrop + Esc to close + error banner). Layout follows the DRSB
+  // "Verify Scan Arrived" modal: Order details grid, Split by Packages
+  // card, Cancel / Confirm footer. No product photos here any more.
   return (
     <AppModal
       title={title}
-      subtitle={`${pkg.tk} · ${pkg.status || "—"} → ${targetStatus}`}
-      maxW="max-w-2xl"
+      className="cbx-modal-fin cbx-modal-fin-lg"
       onClose={onClose}
       onSubmit={handleSubmit}
       error={error}
@@ -11128,6 +11213,7 @@ function VerifyScanModal({
       submitDisabled={!checked || route.loading}
     >
       <div className="space-y-4">
+        {/* Receiving Branch — required by the arrival rule, so it stays */}
         <div
           className={`rounded-xl border px-4 py-3 ${
             route.kh
@@ -11150,93 +11236,61 @@ function VerifyScanModal({
               <div className="text-xs text-ink-600/55 mt-0.5">
                 Origin: {route.china ? whName(whList, route.china) : "—"}
                 {route.source && route.source !== "TK"
-                  ? ` · ពី ${route.source}`
+                  ? ` · from ${route.source}`
                   : ""}
               </div>
             </>
           ) : (
             <div className="text-sm text-[#B87415] mt-0.5">
-              មិនទាន់មាន Receiving Branch លើ Order/Customer នេះ — សូមឱ្យ Admin ឬ
-              Customer Service កំណត់នៅ Order
+              No Receiving Branch is set on this Order / Customer — ask Admin or
+              Customer Service to set it on the Order
             </div>
           )}
         </div>
 
-        <div className="border border-slate-200 rounded-xl overflow-hidden">
-          <div className="bg-slate-50 px-4 py-2.5 text-xs font-semibold text-ink-600/55 uppercase tracking-wide">
+        {/* Order details */}
+        <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+          <div className="bg-slate-50 px-5 py-3.5 text-[15px] font-semibold text-ink-900 border-b border-slate-200">
             Order details
           </div>
-          <div className="p-4">
-            <InfoGrid
-              items={[
-                {
-                  label: "Order ID",
-                  // Parse Link (CN Purchase Order) → show the JZE… order ID,
-                  // not the THN… Shipment order ID, so the two never get mixed up.
-                  value: pkg.cn_order_id
-                    ? CN_ORDER_NO_BY_ID[pkg.cn_order_id] ||
-                      pkg.cn_order_no ||
-                      "—"
-                    : pkg.order_no || pkg.order || "—",
-                },
-                { label: "Tracking Number", value: pkg.tk },
-                { label: "Customer", value: pkg.customer || "—" },
-                {
-                  label: "Status",
-                  value: <StatusBadge label={pkg.status || "—"} />,
-                },
-                { label: "Shipping Method", value: shipMethod },
-                {
-                  label: "Total Parcel / Total Quantity",
-                  value: (
-                    <span className="inline-flex items-center gap-1.5">
-                      1 / 1 Pcs
-                      <span className="inline-flex items-center gap-1 text-signal-teal text-xs font-semibold">
-                        <Check size={12} /> Verified
-                      </span>
-                    </span>
-                  ),
-                },
-                {
-                  label: "Total Weight / Total CBM",
-                  value: `${pkg.weight || "—"} / ${pkg.cbm || "—"}`,
-                },
-                { label: "Warehouse", value: pkg.warehouse || "—" },
-                { label: "Product", value: pkg.product_name || "—" },
-                {
-                  label: "Cargo / Size",
-                  value: pkg.cargo_type
-                    ? `${pkg.cargo_type} · ${sizeLabel(pkg.size_class)}`
-                    : pkg.package_type === "small_package" && pkg.size_class
-                      ? `Small · ${sizeLabel(pkg.size_class)}`
-                      : "—",
-                },
-                {
-                  label: "Freight",
-                  value:
-                    pkg.freight_fee !== undefined &&
-                    pkg.freight_fee !== null &&
-                    pkg.freight_fee !== ""
-                      ? money(pkg.freight_fee)
-                      : "—",
-                },
-              ]}
-            />
+          <div className="divide-y divide-slate-100">
+            {detailRows.map((row, ri) => (
+              <div
+                key={ri}
+                className="grid grid-cols-1 sm:grid-cols-3 gap-x-4 gap-y-3 px-5 py-3"
+              >
+                {row.map((c) => (
+                  <div key={c.label} className="min-w-0">
+                    <div className="text-[13px] text-ink-600/55 sm:whitespace-nowrap">
+                      {c.label}
+                    </div>
+                    <div
+                      className={`mt-1 text-[15px] font-semibold text-ink-900 break-words ${
+                        c.mono ? "font-mono" : ""
+                      }`}
+                    >
+                      {c.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))}
           </div>
         </div>
 
+        {/* Size / Weight adjust (business logic unchanged) */}
         {canEnterSize && (
-          <div className="border border-slate-200 rounded-xl overflow-hidden">
-            <div className="flex items-center justify-between bg-slate-50 px-4 py-2.5">
+          <div className="border border-slate-200 rounded-xl overflow-hidden bg-white">
+            <div className="flex items-center justify-between gap-3 bg-slate-50 px-5 py-3">
               <span className="text-sm font-semibold text-ink-900">
                 {missingSize
-                  ? "បញ្ចូល Size / Weight (មិនទាន់មានពីឃ្លាំងចិន)"
-                  : "ផ្ទៀងផ្ទាត់ Size / Weight ឡើងវិញ"}
+                  ? "Enter Size / Weight (not provided by China warehouse)"
+                  : "Re-verify Size / Weight"}
               </span>
               <button
                 type="button"
                 onClick={() => setEdit((v) => !v)}
-                className="text-xs font-medium text-signal-blue border border-mist-200 bg-white px-2.5 py-1 rounded-md hover:bg-mist-50"
+                className="text-sm font-semibold text-signal-blue border border-slate-200 bg-white px-3.5 py-2 rounded-[10px] hover:bg-mist-50"
               >
                 {edit
                   ? "Cancel changes"
@@ -11246,9 +11300,9 @@ function VerifyScanModal({
               </button>
             </div>
             {edit && (
-              <div className="p-4 space-y-3">
+              <div className="p-5 space-y-3">
                 <div className="text-xs text-ink-600/60">
-                  ពីចិន: {pkg.weight || "—"} · CBM {pkg.cbm || "—"} · Size{" "}
+                  From China: {pkg.weight || "—"} · CBM {pkg.cbm || "—"} · Size{" "}
                   {sizeLabel(pkg.size_class)} · Fee{" "}
                   {pkg.freight_fee != null ? money(pkg.freight_fee) : "—"}
                 </div>
@@ -11361,7 +11415,7 @@ function VerifyScanModal({
                       }
                       className={INPUT_CLS}
                     >
-                      <option value="">— ជ្រើសរើស —</option>
+                      <option value="">— Select —</option>
                       {CARGO_TYPES.map((t) => (
                         <option key={t} value={t}>
                           {t}
@@ -11378,7 +11432,7 @@ function VerifyScanModal({
                       }
                       className={INPUT_CLS}
                     >
-                      <option value="">— ជ្រើសរើស —</option>
+                      <option value="">— Select —</option>
                       {SIZE_CHOICES.map((z) => (
                         <option key={z} value={z}>
                           {sizeLabel(z)}
@@ -11390,7 +11444,7 @@ function VerifyScanModal({
                 <div>
                   <label className={LABEL_CLS}>
                     {missingSize
-                      ? "Reason (មិនចាំបាច់)"
+                      ? "Reason (optional)"
                       : "Reason for adjustment *"}
                   </label>
                   <input
@@ -11404,16 +11458,17 @@ function VerifyScanModal({
                 <div className="text-xs rounded-md bg-mist-50 px-3 py-2 text-ink-700">
                   {calc?.ok ? (
                     <>
-                      CBM ថ្មី:{" "}
+                      New CBM:{" "}
                       <b>{calc.cbm != null ? calc.cbm.toFixed(3) : "—"}</b>
                       {calc.basis === "weight" && (
                         <>
                           {" "}
-                          (គិតតាមទម្ងន់ {calc.weightKg} KG ÷ {calc.kgPerCbm} ={" "}
-                          <b>{calc.chargeCbm.toFixed(3)}</b> CBM)
+                          (charged by weight {calc.weightKg} KG ÷{" "}
+                          {calc.kgPerCbm} = <b>{calc.chargeCbm.toFixed(3)}</b>{" "}
+                          CBM)
                         </>
                       )}{" "}
-                      · Freight ថ្មី:{" "}
+                      · New Freight:{" "}
                       <b>
                         {pkg.freight_overridden
                           ? `${money(pkg.freight_fee)} (Override — Save)`
@@ -11429,74 +11484,90 @@ function VerifyScanModal({
           </div>
         )}
 
-        <div className="border border-slate-200 rounded-xl overflow-hidden">
-          <div className="flex items-center justify-between bg-slate-50 px-4 py-2.5">
-            <span className="text-sm font-semibold text-ink-900">
-              Split by Packages{" "}
-              <span className="text-ink-600/45 font-normal">
-                ({checked ? 1 : 0}/1 Selected)
-              </span>
+        {/* Split by Packages */}
+        <div className="flex items-center justify-between pt-1">
+          <h4 className="text-[15px] font-semibold text-ink-900">
+            Split by Packages{" "}
+            <span className="text-ink-600/55 font-normal text-sm">
+              ({checked ? 1 : 0}/1 Selected)
             </span>
-            <label className="flex items-center gap-1.5 text-xs text-ink-700">
-              <input
-                type="checkbox"
-                checked={checked}
-                onChange={(e) => setChecked(e.target.checked)}
-              />
-              Select All
-            </label>
-          </div>
-          <div className="p-4 flex items-start gap-3">
+          </h4>
+          <label className="inline-flex items-center gap-2 text-sm text-ink-800 border border-slate-200 rounded-lg px-3 py-1.5 bg-white cursor-pointer hover:bg-slate-50">
             <input
               type="checkbox"
               checked={checked}
               onChange={(e) => setChecked(e.target.checked)}
-              className="mt-1"
             />
-            <Package size={18} className="text-signal-blue mt-0.5" />
-            <div className="flex-1 grid grid-cols-3 gap-3 text-sm">
-              <div className="col-span-3 font-medium text-ink-900">
-                Parcel #1
-              </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-ink-600/40 font-semibold">
-                  Qty
+            Select All
+          </label>
+        </div>
+        <div className="border border-slate-200 rounded-xl bg-white px-5 py-4">
+          <div className="flex items-start gap-3">
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={(e) => setChecked(e.target.checked)}
+              className="mt-3"
+              aria-label="Select Parcel #1"
+            />
+            <div className="w-11 h-11 rounded-xl bg-signal-blue/10 flex items-center justify-center shrink-0">
+              <Package size={20} className="text-signal-blue" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+                <div className="min-w-0">
+                  <div className="text-base font-semibold text-ink-900">
+                    Parcel #1
+                  </div>
+                  <div className="text-xs text-ink-600/55 mt-0.5">
+                    {dimsText}
+                  </div>
                 </div>
-                <div className="text-ink-900">1</div>
-              </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-ink-600/40 font-semibold">
-                  Weight
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-sm text-signal-blue break-all">
+                    {pkg.tk}
+                  </span>
+                  <span className="text-base font-bold text-signal-blue">
+                    {hasFee ? money(pkg.freight_fee) : "—"}
+                  </span>
+                  {canEnterSize && (
+                    <button
+                      type="button"
+                      onClick={() => setEdit(true)}
+                      className="inline-flex items-center gap-1.5 bg-orange-500 hover:bg-orange-600 text-white text-sm font-semibold px-3.5 py-2 rounded-[10px]"
+                    >
+                      <Icons.Pencil size={13} /> Update Package
+                    </button>
+                  )}
                 </div>
-                <div className="text-ink-900">{pkg.weight || "—"}</div>
               </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-wide text-ink-600/40 font-semibold">
-                  Status
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3 text-sm">
+                <div>
+                  <div className="text-xs text-ink-600/55">Qty</div>
+                  <div className="font-semibold text-ink-900">1</div>
                 </div>
-                <StatusBadge label={pkg.status || "—"} />
+                <div>
+                  <div className="text-xs text-ink-600/55">Weight</div>
+                  <div className="font-semibold text-ink-900">
+                    {pkg.weight || "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-ink-600/55">CBM</div>
+                  <div className="font-semibold text-ink-900">
+                    {pkg.cbm || "—"}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-ink-600/55">Status</div>
+                  <div className="mt-0.5">
+                    <StatusBadge label={pkg.status || "—"} />
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         </div>
-        <PhotoGallery tk={pkg.tk} />
-        {!hasPhotos && targetStatus === "Arrived Destination" && (
-          <div className="border border-slate-200 rounded-xl overflow-hidden">
-            <div className="bg-slate-50 px-4 py-2.5 text-sm font-semibold text-ink-900">
-              បន្ថែមរូបភាពទំនិញ{" "}
-              <span className="text-ink-600/45 font-normal text-xs">
-                (មិនចាំបាច់ — Inbound មិនទាន់មានរូប)
-              </span>
-            </div>
-            <div className="p-4">
-              <PhotoUploader
-                photos={newPhotos}
-                setPhotos={setNewPhotos}
-                emptyHint="No images yet — មិនចាំបាច់ (optional)"
-              />
-            </div>
-          </div>
-        )}
       </div>
     </AppModal>
   );
@@ -11742,6 +11813,8 @@ function useScanFeedback() {
     setPhase("error");
     setMessage(text);
     setShakeKey((k) => k + 1);
+    // Show the failure as a toast (like Copy / Save) instead of an inline box.
+    if (text) emitCBToast("err", "Scan failed", String(text));
     if (refocus) focusInput(true);
   }
   // Call from the input's onChange with the new value.
@@ -12203,7 +12276,7 @@ function TkScanField({
       </div>
       {/* Fixed-height message slot so the cards below never jump while scanning. */}
       <div className="min-h-[38px] pt-1.5" aria-live="polite">
-        {message && (
+        {message && phase !== "error" && (
           <div
             key={`${phase}-${shakeKey}-${message}`}
             className={`cb-scan-msg flex items-center gap-2 text-sm rounded-md px-3 py-2 ${
@@ -16706,7 +16779,13 @@ function AppModal({
           <div className="cbx-modal-foot">
             {footer || (
               <>
-                <button type="button" className="cbx-btn" onClick={onClose}>
+                <button
+                  type="button"
+                  className="cbx-btn"
+                  onClick={onClose}
+                  disabled={busy}
+                >
+                  <Icons.X size={15} />
                   {cancelLabel}
                 </button>
                 <button
@@ -16714,7 +16793,11 @@ function AppModal({
                   disabled={busy || submitDisabled}
                   className={`cbx-btn cbx-btn-${submitTone}`}
                 >
-                  {busy && <Icons.Loader2 size={15} className="animate-spin" />}
+                  {busy ? (
+                    <Icons.Loader2 size={15} className="animate-spin" />
+                  ) : submitTone === "danger" ? null : (
+                    <Icons.Check size={15} />
+                  )}
                   {busy ? busyLabel : submitLabel}
                 </button>
               </>
@@ -31222,7 +31305,7 @@ function PackageDetail() {
   const showCompleteShipmentBtn =
     isShipmentTk && atInboundWarehouse && canCompleteShipment;
 
-  async function handleCompleteShipment() {
+  async function handleCompleteShipment(note = "") {
     if (!canCompleteShipment)
       throw new Error(
         "You do not have permission to complete this order (Complete Order — Shipment).",
@@ -31257,7 +31340,12 @@ function PackageDetail() {
       updated_by: by,
       updated_at: new Date().toISOString(),
     });
-    logStatus(fresh.tk, "Completed", by, "Order marked complete by staff.");
+    logStatus(
+      fresh.tk,
+      "Completed",
+      by,
+      `Order marked complete by staff.${String(note || "").trim() ? ` ${String(note).trim()}` : ""}`,
+    );
     emitCBToast("ok", "Order completed", `${fresh.tk} → Completed`);
   }
 
@@ -31388,20 +31476,30 @@ function PackageDetail() {
       : data.weight != null && data.weight !== ""
         ? `${data.weight} kg`
         : "—";
-  const cbmValue = data.cbm != null && data.cbm !== "" ? String(data.cbm) : "—";
   const destinationValue =
     data.dest_branch_code || data.dest_branch || data.receiving_branch || "—";
   const packageCountValue = data.package_count || 1;
 
-  function copyTk() {
-    navigator.clipboard?.writeText(data.tk);
+  async function copyTk() {
+    const ok = await cnCopyText(String(data.tk || ""));
+    emitCBToast(
+      ok ? "ok" : "err",
+      ok ? "Tracking number copied" : "Copy failed",
+      ok ? String(data.tk || "") : "Please select and copy the text manually.",
+    );
+    if (!ok) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }
-  function shareTk() {
-    navigator.clipboard?.writeText(
-      `${window.location.origin}/customer/shipments/${encodeURIComponent(data.tk)}`,
+  async function shareTk() {
+    const link = `${window.location.origin}/customer/shipments/${encodeURIComponent(data.tk)}`;
+    const ok = await cnCopyText(link);
+    emitCBToast(
+      ok ? "ok" : "err",
+      ok ? "Link copied" : "Copy failed",
+      ok ? link : "Please select and copy the link manually.",
     );
+    if (!ok) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   }
@@ -31774,25 +31872,23 @@ function PackageDetail() {
                   <dl className="cn-detail-info">
                     <div>
                       <dt>Tracking number</dt>
-                      <dd className="flex items-center gap-2">
-                        <span className="break-all">{data.tk}</span>
-                        <button
-                          type="button"
-                          onClick={copyTk}
-                          className="cn-detail-copy"
-                          aria-label="Copy tracking number"
-                        >
-                          {copied ? <Check size={16} /> : <Copy size={16} />}
-                        </button>
+                      <dd>
+                        <span className="inline-flex max-w-full items-center gap-2">
+                          <span className="font-mono break-all">{data.tk}</span>
+                          <button
+                            type="button"
+                            onClick={copyTk}
+                            className="cn-detail-copy"
+                            aria-label={`Copy tracking number ${data.tk}`}
+                          >
+                            {copied ? <Check size={14} /> : <Copy size={14} />}
+                          </button>
+                        </span>
                       </dd>
                     </div>
                     <div>
                       <dt>Order ID</dt>
                       <dd>{data.order_no || data.order || "—"}</dd>
-                    </div>
-                    <div>
-                      <dt>Shipment</dt>
-                      <dd>{data.shipment || "—"}</dd>
                     </div>
                     <div>
                       <dt>Type</dt>
@@ -31806,34 +31902,6 @@ function PackageDetail() {
                             pkgDisplayStatus({ ...data, status: currentStage }),
                           )}
                         />
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Weight / CBM</dt>
-                      <dd>
-                        {weightValue}{" "}
-                        <span className="text-ink-600/50 mx-2">/</span>{" "}
-                        {cbmValue}
-                        {cbmValue !== "—" ? " m³" : ""}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Dimensions</dt>
-                      <dd>{dimensionText || "—"}</dd>
-                    </div>
-                    <div>
-                      <dt>Container</dt>
-                      <dd>
-                        {containerNo ? (
-                          <Link
-                            to={`/containers/${containerNo}`}
-                            className="text-signal-blue hover:underline"
-                          >
-                            {containerNo}
-                          </Link>
-                        ) : (
-                          "Not Assigned"
-                        )}
                       </dd>
                     </div>
                     <div>
@@ -31852,13 +31920,10 @@ function PackageDetail() {
                             from CN Order
                           </span>
                         ) : canChangeShipMethodBase ? (
-                          <button
-                            type="button"
+                          <EditIconButton
                             onClick={() => setShowShipMethod(true)}
-                            className="text-[11px] text-signal-blue hover:underline"
-                          >
-                            Change
-                          </button>
+                            title="Update Shipping method"
+                          />
                         ) : null
                       }
                       branchCode={pkgBranch}
@@ -32222,11 +32287,11 @@ function PackageDetail() {
         status={data.status}
       />
       {showCompleteShipmentBtn && (
-        <ConfirmModal
+        <CompleteOrderModal
           open={showCompleteShipment}
-          title="Complete Order"
-          message={`Mark ${data.tk} as completed? Do this when the customer has received the goods. Your name will be recorded as the person who completed it.`}
-          confirmLabel="Complete Order"
+          orderNo={data.tk}
+          orderLabel="Tracking number"
+          by={cnBy(user)}
           onClose={() => setShowCompleteShipment(false)}
           onConfirm={handleCompleteShipment}
         />
@@ -34154,6 +34219,77 @@ function useContainerStore() {
 // ------------------------------------------------------------
 // components: ConfirmModal, ContainerFormModal
 // ------------------------------------------------------------
+// Complete Order — same form-modal look as "Change Tracking Number".
+function CompleteOrderModal({
+  open,
+  orderNo,
+  orderLabel = "Order",
+  by,
+  onClose,
+  onConfirm,
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+  useEffect(() => {
+    if (open) {
+      setBusy(false);
+      setErr("");
+      setNote("");
+    }
+  }, [open]);
+  if (!open) return null;
+
+  async function submit(e) {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await onConfirm(note);
+      onClose();
+    } catch (ex) {
+      setErr(ex?.message || "Unable to complete the order.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <CnModalShell
+      title="Complete Order"
+      subtitle="Do this when the customer has received the goods."
+      onClose={onClose}
+      onSubmit={submit}
+      error={err}
+      busy={busy}
+      submitLabel="Complete Order"
+      busyLabel="Completing…"
+    >
+      <div>
+        <label className={LABEL_CLS}>{orderLabel}</label>
+        <div className="font-mono font-semibold text-slate-900">{orderNo}</div>
+      </div>
+      <div>
+        <label className={LABEL_CLS}>Completed by</label>
+        <div className="font-semibold text-slate-900">{by || "—"}</div>
+        <p className="mt-1 text-xs text-slate-500">
+          Your name will be recorded as the person who completed it.
+        </p>
+      </div>
+      <div>
+        <label className={LABEL_CLS}>Note (optional)</label>
+        <input
+          autoFocus
+          className={INPUT_CLS}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="e.g. picked up by the customer"
+        />
+      </div>
+    </CnModalShell>
+  );
+}
+
 function ConfirmModal({
   open,
   title,
@@ -56706,7 +56842,7 @@ function CnModalShell({
       submitTone={tone}
       submitDisabled={submitDisabled}
       footer={footer}
-      className={className}
+      className={`cbx-modal-fin ${className}`}
     >
       {children}
     </AppModal>
@@ -58108,7 +58244,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
           ? "Customer buys the item themselves and ships to our China warehouse. Starts at Shipping to China WH."
           : "Customer pays first, then we purchase. Starts at Order Processing."
       }
-      maxW="max-w-2xl"
+      className="cbx-modal-fin cbx-modal-fin-lg"
       onClose={onClose}
       onSubmit={submit}
       error={error}
@@ -59280,8 +59416,7 @@ function CnStatusUpdateModal({ open, row, parcels = [], onClose, onSaved }) {
           ? undefined
           : `${row.order_id} · ${cnStageLabel(row.status)} → ${next ? cnStageLabel(next) : "—"}`
       }
-      maxW={isTransitStep ? "" : "max-w-md"}
-      className={isTransitStep ? "cbx-modal-wide" : ""}
+      maxW={isTransitStep ? "max-w-2xl" : "max-w-md"}
       onClose={onClose}
       onSubmit={submit}
       error={error}
@@ -59621,7 +59756,7 @@ function CnEditModal({ open, row, onClose, onSaved }) {
           ? "Prices are locked (paid or already purchased). You can correct names, links, shop and note."
           : "Unpaid: you can correct items, prices, rate and fee. The total is recalculated."
       }`}
-      maxW="max-w-2xl"
+      className="cbx-modal-fin-lg"
       onClose={onClose}
       onSubmit={submit}
       error={error}
@@ -75806,21 +75941,6 @@ function CustomerDetailPage() {
 // after searching by Customer ID / name / phone.
 // Uses the existing wallet_top_up RPC (supabase_wallet_payment.sql).
 // ============================================================
-const WTU_RANGES = [
-  ["today", "Today"],
-  ["7d", "Last 7 days"],
-  ["30d", "Last 30 days"],
-  ["all", "All time"],
-];
-function wtuStart(range) {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  if (range === "today") return d.getTime();
-  if (range === "7d") return d.getTime() - 6 * 86400000;
-  if (range === "30d") return d.getTime() - 29 * 86400000;
-  return 0;
-}
-
 // App-style modal (DRSB look): divider under the title, blurred backdrop, a
 // "Search Type" picker next to the search box, 2-column fields, Submit/Cancel.
 // The app's global CSS paints a blue outline on focused inputs; inline style wins.
@@ -75852,12 +75972,6 @@ function WalletTopUpCreateModal({ onClose, onDone, initialCustomer = null }) {
   const label = "mb-2 block text-[15px] font-semibold text-slate-900";
   const field =
     "h-12 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-[15px] font-medium text-slate-900 shadow-sm transition placeholder:font-normal placeholder:text-slate-500 focus:border-slate-500";
-
-  useEffect(() => {
-    const onKey = (e) => e.key === "Escape" && !busy && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [busy, onClose]);
 
   // Debounced customer search (by the chosen Search Type)
   useEffect(() => {
@@ -75915,261 +76029,229 @@ function WalletTopUpCreateModal({ onClose, onDone, initialCustomer = null }) {
     onDone();
   }
 
-  return createPortal(
-    <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[3px]"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Create Wallet Top Up"
+  return (
+    <AppModal
+      title="Create Wallet Top Up"
+      className="cbx-modal-fin cbx-modal-fin-lg"
+      onClose={onClose}
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+      error={err}
+      busy={busy}
+      submitLabel="Submit"
+      busyLabel="Saving…"
+      submitDisabled={!valid}
     >
-      <div className="flex max-h-[92vh] w-full max-w-[820px] flex-col rounded-2xl bg-white shadow-2xl">
-        <div className="flex items-center justify-between border-b border-slate-200 px-8 py-6">
-          <h3 className="text-2xl font-bold text-slate-950">
-            Create Wallet Top Up
-          </h3>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="grid h-9 w-9 place-items-center rounded-lg text-slate-700 transition hover:bg-slate-100 hover:text-slate-900"
-          >
-            <Icons.X size={18} />
-          </button>
-        </div>
-
-        <div className="overflow-y-auto px-8 py-7">
-          {/* Customer: Search Type + search box */}
-          <div>
-            <span className={label}>
-              Search Type <span className="text-red-500">*</span>
-            </span>
-            {customer ? (
-              <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-bold text-slate-900">
-                    {fmtCustomerId(customer.customer_code)} · {customer.name}
-                  </div>
-                  <div className="text-xs font-medium text-slate-500">
-                    {customer.phone || "No phone"} · Balance{" "}
-                    <b className="text-slate-800">
-                      {moneyS(customer.balance || 0)}
-                    </b>
-                  </div>
+      <div>
+        {/* Customer: Search Type + search box */}
+        <div>
+          <span className={label}>
+            Search Type <span className="text-red-500">*</span>
+          </span>
+          {customer ? (
+            <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-3 py-2.5">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-bold text-slate-900">
+                  {fmtCustomerId(customer.customer_code)} · {customer.name}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCustomer(null);
-                    setQ("");
-                  }}
-                  className="ml-3 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-white hover:text-slate-700"
-                  title="Change customer"
-                >
-                  <Icons.X size={16} />
-                </button>
-              </div>
-            ) : (
-              <div className="relative">
-                <div className="flex h-12 items-stretch overflow-hidden rounded-lg border border-slate-300 bg-white shadow-sm transition focus-within:border-slate-500">
-                  <div className="relative border-r border-slate-300 bg-white">
-                    <select
-                      value={searchType}
-                      onChange={(e) => setSearchType(e.target.value)}
-                      aria-label="Search type"
-                      className="h-full cursor-pointer appearance-none bg-transparent pl-3.5 pr-9 text-[15px] font-semibold text-slate-900"
-                      style={WTU_NO_RING}
-                    >
-                      {WTU_SEARCH_TYPES.map(([k, l]) => (
-                        <option key={k} value={k}>
-                          {l}
-                        </option>
-                      ))}
-                    </select>
-                    <Icons.ChevronDown
-                      size={15}
-                      className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500"
-                    />
-                  </div>
-                  <div className="relative flex-1">
-                    <Icons.Search
-                      size={16}
-                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-                    />
-                    <input
-                      autoFocus
-                      className="h-full w-full bg-transparent pl-10 pr-3 text-[15px] font-medium text-slate-900 placeholder:font-normal placeholder:text-slate-500"
-                      style={WTU_NO_RING}
-                      value={q}
-                      onChange={(e) => setQ(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && results[0]) {
-                          e.preventDefault();
-                          setCustomer(results[0]);
-                          setResults([]);
-                        }
-                      }}
-                      placeholder={placeholder}
-                    />
-                  </div>
+                <div className="text-xs font-medium text-slate-500">
+                  {customer.phone || "No phone"} · Balance{" "}
+                  <b className="text-slate-800">
+                    {moneyS(customer.balance || 0)}
+                  </b>
                 </div>
-                {q.trim() && (
-                  <div className="absolute z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
-                    {searching && (
-                      <div className="px-3 py-3 text-xs font-medium text-slate-400">
-                        Searching…
-                      </div>
-                    )}
-                    {!searching && results.length === 0 && (
-                      <div className="px-3 py-3 text-xs font-medium text-slate-400">
-                        No customer found.
-                      </div>
-                    )}
-                    {results.map((c) => (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => {
-                          setCustomer(c);
-                          setResults([]);
-                        }}
-                        className="flex w-full items-center justify-between px-3 py-2.5 text-left hover:bg-slate-50"
-                      >
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-bold text-slate-900">
-                            {fmtCustomerId(c.customer_code)} · {c.name}
-                          </span>
-                          <span className="block text-xs font-medium text-slate-400">
-                            {c.phone || "No phone"}
-                          </span>
-                        </span>
-                        <span className="ml-3 text-xs font-bold text-slate-600">
-                          {moneyS(c.balance || 0)}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
               </div>
-            )}
-          </div>
-
-          <div className="mt-6 grid gap-6 sm:grid-cols-2">
-            <div>
-              <label className={label} htmlFor="wtu-method">
-                Payment Method
-              </label>
-              <div className="relative">
-                <select
-                  id="wtu-method"
-                  value={method}
-                  onChange={(e) => setMethod(e.target.value)}
-                  className={`${field} cursor-pointer appearance-none pr-10 ${method ? "" : "font-normal text-slate-500"}`}
-                  style={WTU_NO_RING}
-                >
-                  <option value="">Select an option…</option>
-                  {CN_PAYMENT_METHODS.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-                <Icons.ChevronDown
-                  size={16}
-                  className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-500"
-                />
-              </div>
-            </div>
-            <div>
-              <label className={label} htmlFor="wtu-amount">
-                Amount <span className="text-red-500">*</span>
-              </label>
-              <div className="relative">
-                <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[15px] font-medium text-slate-700">
-                  $
-                </span>
-                <input
-                  id="wtu-amount"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  inputMode="decimal"
-                  className={`${field} pl-8 pr-16`}
-                  style={WTU_NO_RING}
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder="0.00"
-                />
-                <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-900">
-                  USD
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-6">
-            <div className="mb-2 flex items-center justify-between">
-              <label
-                className="text-[15px] font-semibold text-slate-900"
-                htmlFor="wtu-note"
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomer(null);
+                  setQ("");
+                }}
+                className="ml-3 grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-white hover:text-slate-700"
+                title="Change customer"
               >
-                Remark
-              </label>
-              <span className="text-sm text-slate-600">optional</span>
+                <Icons.X size={16} />
+              </button>
             </div>
-            <textarea
-              id="wtu-note"
-              rows={6}
-              className="w-full resize-none rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-[15px] font-medium text-slate-900 shadow-sm transition placeholder:font-normal placeholder:text-slate-500 focus:border-slate-500"
-              style={WTU_NO_RING}
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="e.g. ABA transfer, cash"
-            />
-          </div>
-
-          <div className="mt-6">
-            <WalletProofPicker
-              files={proofs}
-              setFiles={setProofs}
-              disabled={busy}
-            />
-          </div>
-
-          {customer && valid && (
-            <div className="mt-6 flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3.5 text-sm text-slate-600">
-              <span>New balance</span>
-              <b className="text-base text-slate-900">
-                {moneyS(Number(customer.balance || 0) + amt)}
-              </b>
+          ) : (
+            <div className="relative">
+              <div className="flex h-12 items-stretch overflow-hidden rounded-lg border border-slate-300 bg-white shadow-sm transition focus-within:border-slate-500">
+                <div className="relative border-r border-slate-300 bg-white">
+                  <select
+                    value={searchType}
+                    onChange={(e) => setSearchType(e.target.value)}
+                    aria-label="Search type"
+                    className="h-full cursor-pointer appearance-none bg-transparent pl-3.5 pr-9 text-[15px] font-semibold text-slate-900"
+                    style={WTU_NO_RING}
+                  >
+                    {WTU_SEARCH_TYPES.map(([k, l]) => (
+                      <option key={k} value={k}>
+                        {l}
+                      </option>
+                    ))}
+                  </select>
+                  <Icons.ChevronDown
+                    size={15}
+                    className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500"
+                  />
+                </div>
+                <div className="relative flex-1">
+                  <Icons.Search
+                    size={16}
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                  />
+                  <input
+                    autoFocus
+                    className="h-full w-full bg-transparent pl-10 pr-3 text-[15px] font-medium text-slate-900 placeholder:font-normal placeholder:text-slate-500"
+                    style={WTU_NO_RING}
+                    value={q}
+                    onChange={(e) => setQ(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && results[0]) {
+                        e.preventDefault();
+                        setCustomer(results[0]);
+                        setResults([]);
+                      }
+                    }}
+                    placeholder={placeholder}
+                  />
+                </div>
+              </div>
+              {q.trim() && (
+                <div className="absolute z-10 mt-1 max-h-64 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg">
+                  {searching && (
+                    <div className="px-3 py-3 text-xs font-medium text-slate-400">
+                      Searching…
+                    </div>
+                  )}
+                  {!searching && results.length === 0 && (
+                    <div className="px-3 py-3 text-xs font-medium text-slate-400">
+                      No customer found.
+                    </div>
+                  )}
+                  {results.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => {
+                        setCustomer(c);
+                        setResults([]);
+                      }}
+                      className="flex w-full items-center justify-between px-3 py-2.5 text-left hover:bg-slate-50"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-bold text-slate-900">
+                          {fmtCustomerId(c.customer_code)} · {c.name}
+                        </span>
+                        <span className="block text-xs font-medium text-slate-400">
+                          {c.phone || "No phone"}
+                        </span>
+                      </span>
+                      <span className="ml-3 text-xs font-bold text-slate-600">
+                        {moneyS(c.balance || 0)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-          {err && (
-            <p className="mt-3 text-xs font-semibold text-red-600">{err}</p>
           )}
         </div>
 
-        <div className="flex justify-end gap-2 border-t border-slate-100 px-8 py-5">
-          <button
-            type="button"
-            disabled={!valid || busy}
-            onClick={submit}
-            className="h-11 rounded-lg bg-blue-600 px-7 text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
-          >
-            {busy ? "Saving…" : "Submit"}
-          </button>
-          <button
-            type="button"
-            onClick={onClose}
+        <div className="mt-6 grid gap-6 sm:grid-cols-2">
+          <div>
+            <label className={label} htmlFor="wtu-method">
+              Payment Method
+            </label>
+            <div className="relative">
+              <select
+                id="wtu-method"
+                value={method}
+                onChange={(e) => setMethod(e.target.value)}
+                className={`${field} cursor-pointer appearance-none pr-10 ${method ? "" : "font-normal text-slate-500"}`}
+                style={WTU_NO_RING}
+              >
+                <option value="">Select an option…</option>
+                {CN_PAYMENT_METHODS.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+              <Icons.ChevronDown
+                size={16}
+                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-500"
+              />
+            </div>
+          </div>
+          <div>
+            <label className={label} htmlFor="wtu-amount">
+              Amount <span className="text-red-500">*</span>
+            </label>
+            <div className="relative">
+              <span className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[15px] font-medium text-slate-700">
+                $
+              </span>
+              <input
+                id="wtu-amount"
+                type="number"
+                min="0"
+                step="0.01"
+                inputMode="decimal"
+                className={`${field} pl-8 pr-16`}
+                style={WTU_NO_RING}
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="0.00"
+              />
+              <span className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-sm font-semibold text-slate-900">
+                USD
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <div className="mb-2 flex items-center justify-between">
+            <label
+              className="text-[15px] font-semibold text-slate-900"
+              htmlFor="wtu-note"
+            >
+              Remark
+            </label>
+            <span className="text-sm text-slate-600">optional</span>
+          </div>
+          <textarea
+            id="wtu-note"
+            rows={6}
+            className="w-full resize-none rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-[15px] font-medium text-slate-900 shadow-sm transition placeholder:font-normal placeholder:text-slate-500 focus:border-slate-500"
+            style={WTU_NO_RING}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="e.g. ABA transfer, cash"
+          />
+        </div>
+
+        <div className="mt-6">
+          <WalletProofPicker
+            files={proofs}
+            setFiles={setProofs}
             disabled={busy}
-            className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-slate-300 px-5 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50"
-          >
-            <Icons.X size={14} />
-            Cancel
-          </button>
+          />
         </div>
+
+        {customer && valid && (
+          <div className="mt-6 flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3.5 text-sm text-slate-600">
+            <span>New balance</span>
+            <b className="text-base text-slate-900">
+              {moneyS(Number(customer.balance || 0) + amt)}
+            </b>
+          </div>
+        )}
       </div>
-    </div>,
-    document.body,
+    </AppModal>
   );
 }
 
@@ -78596,7 +78678,12 @@ function WalletTopUpPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [range, setRange] = useState("today");
+  // Date range (same picker as the other admin pages): presets + custom from/to.
+  const [dateRange, setDateRange] = useState({
+    preset: "today",
+    from: "",
+    to: "",
+  });
   const [create, setCreate] = useState(false);
   const [reverse, setReverse] = useState(null);
   const [debtors, setDebtors] = useState([]);
@@ -78654,20 +78741,19 @@ function WalletTopUpPage() {
   }, [reload]);
 
   const shown = useMemo(() => {
-    const from = wtuStart(range);
     const s = search.trim().toLowerCase();
     return rows.filter((r) => {
-      if (from && new Date(r.created_at).getTime() < from) return false;
+      if (!dateInRange(r.created_at, dateRange)) return false;
       if (!s) return true;
       return [r._c?.customer_code, r._c?.name, r._c?.phone, r.note]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(s));
     });
-  }, [rows, search, range]);
+  }, [rows, search, dateRange]);
 
   const total = shown.reduce((a, r) => a + (Number(r.amount) || 0), 0);
   const customers = new Set(shown.map((r) => r.customer_id)).size;
-  const hasFilter = search || range !== "today";
+  const hasFilter = search || dateRange.preset !== "today";
   const stat = (icon, tone, label, value) => {
     const Ic = Icons[icon];
     return (
@@ -78863,23 +78949,17 @@ function WalletTopUpPage() {
               className="h-10 w-full rounded-xl border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
             />
           </div>
-          <select
-            value={range}
-            onChange={(e) => setRange(e.target.value)}
-            className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 outline-none focus:border-blue-500"
-          >
-            {WTU_RANGES.map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-          </select>
+          <DateRangeFilter
+            label="Date"
+            value={dateRange}
+            onChange={setDateRange}
+          />
           {hasFilter && (
             <button
               type="button"
               onClick={() => {
                 setSearch("");
-                setRange("today");
+                setDateRange({ preset: "today", from: "", to: "" });
               }}
               className="flex h-10 items-center gap-1.5 rounded-xl bg-red-50 px-3 text-sm font-semibold text-red-600 hover:bg-red-100"
             >
@@ -83256,12 +83336,14 @@ function ShopBadge({ text }) {
 function ShopField({ label, hint, children, className = "" }) {
   return (
     <label className={`block ${className}`}>
-      <span className="mb-1 block text-xs font-bold text-slate-600">
+      <span className="shop-f-label mb-1 block text-xs font-bold text-slate-600">
         {label}
       </span>
       {children}
       {hint && (
-        <span className="mt-1 block text-[11px] text-slate-400">{hint}</span>
+        <span className="shop-f-hint mt-1 block text-[11px] text-slate-400">
+          {hint}
+        </span>
       )}
     </label>
   );
@@ -84867,491 +84949,519 @@ function ShopProductModal({
   }
 
   const ro = !canEdit;
+  // Scroll to the top so the error banner (shown above the fields) is seen.
+  useEffect(() => {
+    if (!err) return;
+    const bodies = document.querySelectorAll(".cbx-modal-body");
+    bodies[bodies.length - 1]?.scrollTo({ top: 0, behavior: "smooth" });
+  }, [err]);
   return (
-    <ShopModal
-      wide
-      title={isNew ? "New Product" : ro ? "Product" : "Edit Product"}
-      onClose={busy ? () => {} : onClose}
-      footer={
-        <>
-          {canDelete && !isNew && (
+    <>
+      <AppModal
+        title={isNew ? "New Product" : ro ? "Product" : "Edit Product"}
+        className="cbx-modal-fin cbx-modal-fin-lg"
+        onClose={busy || delVar ? () => {} : onClose}
+        error={err}
+        busy={busy}
+        footer={
+          <>
             <button
               type="button"
-              className={`${SHOP_BTN_GHOST} mr-auto text-red-600`}
-              onClick={onDelete}
+              className="cbx-btn"
+              onClick={onClose}
               disabled={busy}
             >
-              <Icons.Trash2 size={15} /> Delete product
+              <Icons.X size={15} />
+              Close
             </button>
-          )}
-          <button
-            type="button"
-            className={SHOP_BTN_GHOST}
-            onClick={onClose}
-            disabled={busy}
-          >
-            Close
-          </button>
-          {canEdit && (
-            <button
-              type="button"
-              className={SHOP_BTN_PRIMARY}
-              onClick={save}
-              disabled={busy || loadingV}
+            {canEdit && (
+              <button
+                type="button"
+                className="cbx-btn cbx-btn-primary"
+                onClick={save}
+                disabled={busy || loadingV}
+              >
+                {busy ? (
+                  <Icons.Loader2 size={15} className="animate-spin" />
+                ) : (
+                  <Icons.Check size={15} />
+                )}
+                {busy ? "Saving…" : "Save Product"}
+              </button>
+            )}
+            {canDelete && !isNew && (
+              <button
+                type="button"
+                className="cbx-btn mr-auto"
+                style={{ color: "#dc2626" }}
+                onClick={onDelete}
+                disabled={busy}
+              >
+                <Icons.Trash2 size={15} /> Delete product
+              </button>
+            )}
+          </>
+        }
+      >
+        <div className="cbx-shop-form grid gap-5 sm:grid-cols-2">
+          <ShopField label="Product code (SKU) *">
+            <input
+              className={SHOP_INP}
+              disabled={ro}
+              value={v.product_code}
+              onChange={(e) => setV({ ...v, product_code: e.target.value })}
+            />
+          </ShopField>
+          <ShopField label="Category *">
+            <select
+              className={SHOP_INP}
+              disabled={ro}
+              value={v.category_id}
+              onChange={(e) => setV({ ...v, category_id: e.target.value })}
             >
-              {busy ? "Saving…" : "Save Product"}
-            </button>
-          )}
-        </>
-      }
-    >
-      <div className="grid gap-3 sm:grid-cols-2">
-        <ShopField label="Product code (SKU) *">
-          <input
-            className={SHOP_INP}
-            disabled={ro}
-            value={v.product_code}
-            onChange={(e) => setV({ ...v, product_code: e.target.value })}
-          />
-        </ShopField>
-        <ShopField label="Category *">
-          <select
-            className={SHOP_INP}
-            disabled={ro}
-            value={v.category_id}
-            onChange={(e) => setV({ ...v, category_id: e.target.value })}
-          >
-            <option value="">Select…</option>
-            {cats.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-                {c.is_active ? "" : " (inactive)"}
-              </option>
-            ))}
-          </select>
-        </ShopField>
-        <ShopField label="Product name *" className="sm:col-span-2">
-          <input
-            className={SHOP_INP}
-            disabled={ro}
-            value={v.name}
-            onChange={(e) => setV({ ...v, name: e.target.value })}
-          />
-        </ShopField>
-        <ShopField label="Description" className="sm:col-span-2">
-          <textarea
-            rows={3}
-            className={SHOP_TXT}
-            disabled={ro}
-            value={v.description}
-            onChange={(e) => setV({ ...v, description: e.target.value })}
-          />
-        </ShopField>
-        <ShopField label="Brand">
-          <input
-            className={SHOP_INP}
-            disabled={ro}
-            value={v.brand}
-            onChange={(e) => setV({ ...v, brand: e.target.value })}
-          />
-        </ShopField>
-        <ShopField label="Status">
-          <select
-            className={SHOP_INP}
-            disabled={ro}
-            value={v.status}
-            onChange={(e) => setV({ ...v, status: e.target.value })}
-          >
-            {["Draft", "Active", "Inactive"].map((x) => (
-              <option key={x}>{x}</option>
-            ))}
-          </select>
-        </ShopField>
-        <ShopField label="Selling price (USD) *">
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            className={SHOP_INP}
-            disabled={ro}
-            value={v.selling_price}
-            onChange={(e) => setV({ ...v, selling_price: e.target.value })}
-          />
-        </ShopField>
-        <ShopField
-          label="Discount (%)"
-          hint={(() => {
-            const dp = shopPriceFromPct(v.selling_price, v.discount_pct);
-            const sp = shopNum(v.selling_price);
-            return dp != null && Number(v.discount_pct) <= 100
-              ? `Customer pays ${money(dp)} (save ${money(sp - dp)}).`
-              : "Leave empty for no discount.";
-          })()}
-        >
-          <div className="relative">
+              <option value="">Select…</option>
+              {cats.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                  {c.is_active ? "" : " (inactive)"}
+                </option>
+              ))}
+            </select>
+          </ShopField>
+          <ShopField label="Product name *" className="sm:col-span-2">
+            <input
+              className={SHOP_INP}
+              disabled={ro}
+              value={v.name}
+              onChange={(e) => setV({ ...v, name: e.target.value })}
+            />
+          </ShopField>
+          <ShopField label="Description" className="sm:col-span-2">
+            <textarea
+              rows={3}
+              className={SHOP_TXT}
+              disabled={ro}
+              value={v.description}
+              onChange={(e) => setV({ ...v, description: e.target.value })}
+            />
+          </ShopField>
+          <ShopField label="Brand">
+            <input
+              className={SHOP_INP}
+              disabled={ro}
+              value={v.brand}
+              onChange={(e) => setV({ ...v, brand: e.target.value })}
+            />
+          </ShopField>
+          <ShopField label="Status">
+            <select
+              className={SHOP_INP}
+              disabled={ro}
+              value={v.status}
+              onChange={(e) => setV({ ...v, status: e.target.value })}
+            >
+              {["Draft", "Active", "Inactive"].map((x) => (
+                <option key={x}>{x}</option>
+              ))}
+            </select>
+          </ShopField>
+          <ShopField label="Selling price (USD) *">
             <input
               type="number"
               min="0"
-              max="100"
               step="0.01"
-              placeholder="e.g. 10"
-              className={`${SHOP_INP} pr-9`}
+              className={SHOP_INP}
               disabled={ro}
-              value={v.discount_pct}
-              onChange={(e) => setV({ ...v, discount_pct: e.target.value })}
+              value={v.selling_price}
+              onChange={(e) => setV({ ...v, selling_price: e.target.value })}
             />
-            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
-              %
-            </span>
-          </div>
-        </ShopField>
-        <ShopField
-          label="Cost price"
-          hint="Internal only — customers never see it."
-        >
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            className={SHOP_INP}
-            disabled={ro}
-            value={v.cost_price}
-            onChange={(e) => setV({ ...v, cost_price: e.target.value })}
-          />
-        </ShopField>
-        <ShopField label="Featured">
-          <select
-            className={SHOP_INP}
-            disabled={ro}
-            value={v.is_featured ? "1" : "0"}
-            onChange={(e) =>
-              setV({ ...v, is_featured: e.target.value === "1" })
-            }
+          </ShopField>
+          <ShopField
+            label="Discount (%)"
+            hint={(() => {
+              const dp = shopPriceFromPct(v.selling_price, v.discount_pct);
+              const sp = shopNum(v.selling_price);
+              return dp != null && Number(v.discount_pct) <= 100
+                ? `Customer pays ${money(dp)} (save ${money(sp - dp)}).`
+                : "Leave empty for no discount.";
+            })()}
           >
-            <option value="0">No</option>
-            <option value="1">Yes</option>
-          </select>
-        </ShopField>
-        <ShopField label="Weight (kg)">
-          <input
-            type="number"
-            min="0"
-            step="0.001"
-            className={SHOP_INP}
-            disabled={ro}
-            value={v.weight_kg}
-            onChange={(e) => setV({ ...v, weight_kg: e.target.value })}
-          />
-        </ShopField>
-        <ShopField label="Dimensions">
-          <input
-            className={SHOP_INP}
-            disabled={ro}
-            placeholder="e.g. 30 x 20 x 10 cm"
-            value={v.dimensions}
-            onChange={(e) => setV({ ...v, dimensions: e.target.value })}
-          />
-        </ShopField>
-        <div className="sm:col-span-2">
-          <ShopImageManager images={imgs} onChange={setImgs} disabled={ro} />
-        </div>
-      </div>
-
-      <div className="mt-5 rounded-xl border border-slate-200 p-3">
-        <div className="mb-2 flex items-center justify-between">
-          <div>
-            <div className="text-sm font-extrabold text-slate-800">
-              Variants
+            <div className="relative">
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                placeholder="e.g. 10"
+                className={`${SHOP_INP} pr-9`}
+                disabled={ro}
+                value={v.discount_pct}
+                onChange={(e) => setV({ ...v, discount_pct: e.target.value })}
+              />
+              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
+                %
+              </span>
             </div>
-            <div className="text-xs text-slate-400">
-              Each variant has its own SKU, stock and (optionally) its own
-              photo. Opening stock can be entered here; later changes are made
-              in Inventory.
-            </div>
-          </div>
-          <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+          </ShopField>
+          <ShopField
+            label="Cost price"
+            hint="Internal only — customers never see it."
+          >
             <input
-              type="checkbox"
-              disabled={ro || variants.some((x) => x.id && !x.is_default)}
-              checked={hasVariants}
-              onChange={(e) => {
-                setHasVariants(e.target.checked);
-                if (e.target.checked && variants.length === 0)
-                  setVariants([shopBlankVariant()]);
-                if (!e.target.checked)
-                  setVariants((l) => l.filter((x) => x.id));
-              }}
+              type="number"
+              min="0"
+              step="0.01"
+              className={SHOP_INP}
+              disabled={ro}
+              value={v.cost_price}
+              onChange={(e) => setV({ ...v, cost_price: e.target.value })}
             />
-            Has Color / Size options
-          </label>
+          </ShopField>
+          <ShopField label="Featured">
+            <select
+              className={SHOP_INP}
+              disabled={ro}
+              value={v.is_featured ? "1" : "0"}
+              onChange={(e) =>
+                setV({ ...v, is_featured: e.target.value === "1" })
+              }
+            >
+              <option value="0">No</option>
+              <option value="1">Yes</option>
+            </select>
+          </ShopField>
+          <ShopField label="Weight (kg)">
+            <input
+              type="number"
+              min="0"
+              step="0.001"
+              className={SHOP_INP}
+              disabled={ro}
+              value={v.weight_kg}
+              onChange={(e) => setV({ ...v, weight_kg: e.target.value })}
+            />
+          </ShopField>
+          <ShopField label="Dimensions">
+            <input
+              className={SHOP_INP}
+              disabled={ro}
+              placeholder="e.g. 30 x 20 x 10 cm"
+              value={v.dimensions}
+              onChange={(e) => setV({ ...v, dimensions: e.target.value })}
+            />
+          </ShopField>
+          <div className="sm:col-span-2">
+            <ShopImageManager images={imgs} onChange={setImgs} disabled={ro} />
+          </div>
         </div>
-        {loadingV && (
-          <p className="text-sm text-slate-400">Loading variants…</p>
-        )}
-        {canEdit && !loadingV && (
-          <div className="mb-3 rounded-lg border border-dashed border-slate-300 bg-white p-3">
-            <div className="mb-2 text-xs font-bold text-slate-600">
-              Quick add — type colors and sizes, we create every combination
+
+        <div className="mt-5 rounded-xl border border-slate-200 p-3">
+          <div className="mb-2 flex items-center justify-between">
+            <div>
+              <div className="text-sm font-extrabold text-slate-800">
+                Variants
+              </div>
+              <div className="text-xs text-slate-400">
+                Each variant has its own SKU, stock and (optionally) its own
+                photo. Opening stock can be entered here; later changes are made
+                in Inventory.
+              </div>
             </div>
-            <div className="grid items-end gap-2 sm:grid-cols-12">
-              <ShopField
-                label="Colors (comma separated)"
-                className="sm:col-span-5"
-              >
-                <input
-                  className={SHOP_INP}
-                  placeholder="e.g. Red, Black, Blue"
-                  value={genColors}
-                  onChange={(e) => setGenColors(e.target.value)}
-                />
-              </ShopField>
-              <ShopField
-                label="Sizes (comma separated)"
-                className="sm:col-span-5"
-              >
-                <input
-                  className={SHOP_INP}
-                  placeholder="e.g. S, M, L, XL"
-                  value={genSizes}
-                  onChange={(e) => setGenSizes(e.target.value)}
-                />
-              </ShopField>
-              <div className="sm:col-span-2">
-                <button
-                  type="button"
-                  className={SHOP_BTN_PRIMARY}
-                  onClick={generate}
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+              <input
+                type="checkbox"
+                disabled={ro || variants.some((x) => x.id && !x.is_default)}
+                checked={hasVariants}
+                onChange={(e) => {
+                  setHasVariants(e.target.checked);
+                  if (e.target.checked && variants.length === 0)
+                    setVariants([shopBlankVariant()]);
+                  if (!e.target.checked)
+                    setVariants((l) => l.filter((x) => x.id));
+                }}
+              />
+              Has Color / Size options
+            </label>
+          </div>
+          {loadingV && (
+            <p className="text-sm text-slate-400">Loading variants…</p>
+          )}
+          {canEdit && !loadingV && (
+            <div className="mb-3 rounded-lg border border-dashed border-slate-300 bg-white p-3">
+              <div className="mb-2 text-xs font-bold text-slate-600">
+                Quick add — type colors and sizes, we create every combination
+              </div>
+              <div className="grid items-end gap-2 sm:grid-cols-12">
+                <ShopField
+                  label="Colors (comma separated)"
+                  className="sm:col-span-5"
                 >
-                  Generate
-                </button>
+                  <input
+                    className={SHOP_INP}
+                    placeholder="e.g. Red, Black, Blue"
+                    value={genColors}
+                    onChange={(e) => setGenColors(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        generate();
+                      }
+                    }}
+                  />
+                </ShopField>
+                <ShopField
+                  label="Sizes (comma separated)"
+                  className="sm:col-span-5"
+                >
+                  <input
+                    className={SHOP_INP}
+                    placeholder="e.g. S, M, L, XL"
+                    value={genSizes}
+                    onChange={(e) => setGenSizes(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        generate();
+                      }
+                    }}
+                  />
+                </ShopField>
+                <div className="sm:col-span-2">
+                  <button
+                    type="button"
+                    className={SHOP_BTN_PRIMARY}
+                    onClick={generate}
+                  >
+                    Generate
+                  </button>
+                </div>
               </div>
+              {genMsg && (
+                <p className="mt-2 text-xs font-semibold text-slate-600">
+                  {genMsg}
+                </p>
+              )}
             </div>
-            {genMsg && (
-              <p className="mt-2 text-xs font-semibold text-slate-600">
-                {genMsg}
+          )}
+          {!hasVariants && !loadingV && (
+            <div>
+              <p className="text-sm text-slate-500">
+                This product is sold as a single item (SKU = product code).
               </p>
-            )}
-          </div>
-        )}
-        {!hasVariants && !loadingV && (
-          <div>
-            <p className="text-sm text-slate-500">
-              This product is sold as a single item (SKU = product code).
-            </p>
-            {isNew && canStock && (
-              <div className="mt-2 max-w-[220px]">
-                <ShopField label="Opening stock (optional)">
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    className={SHOP_INP}
-                    value={openStock}
-                    onChange={(e) => setOpenStock(e.target.value)}
-                  />
-                </ShopField>
-              </div>
-            )}
-          </div>
-        )}
-        {hasVariants && (
-          <div className="space-y-2">
-            {variants.map((x) => (
-              <div
-                key={x._key}
-                className="grid items-end gap-2 rounded-lg bg-slate-50 p-2 sm:grid-cols-12"
-              >
-                <ShopField label="SKU *" className="sm:col-span-3">
-                  <input
-                    className={SHOP_INP}
-                    disabled={ro || !!x.id}
-                    value={x.sku}
-                    onChange={(e) => setVar(x._key, { sku: e.target.value })}
-                  />
-                </ShopField>
-                <ShopField label="Color" className="sm:col-span-2">
-                  <input
-                    className={SHOP_INP}
-                    disabled={ro}
-                    value={x.option_color}
-                    onChange={(e) =>
-                      setVar(x._key, { option_color: e.target.value })
-                    }
-                  />
-                </ShopField>
-                <ShopField label="Size" className="sm:col-span-2">
-                  <input
-                    className={SHOP_INP}
-                    disabled={ro}
-                    value={x.option_size}
-                    onChange={(e) =>
-                      setVar(x._key, { option_size: e.target.value })
-                    }
-                  />
-                </ShopField>
-                <ShopField label="Price override" className="sm:col-span-2">
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    className={SHOP_INP}
-                    disabled={ro}
-                    value={x.price_override}
-                    onChange={(e) =>
-                      setVar(x._key, { price_override: e.target.value })
-                    }
-                  />
-                </ShopField>
-                {!x.id && canStock ? (
-                  <ShopField label="Opening stock" className="sm:col-span-2">
+              {isNew && canStock && (
+                <div className="mt-2 max-w-[220px]">
+                  <ShopField label="Opening stock (optional)">
                     <input
                       type="number"
                       min="0"
                       step="1"
                       className={SHOP_INP}
+                      value={openStock}
+                      onChange={(e) => setOpenStock(e.target.value)}
+                    />
+                  </ShopField>
+                </div>
+              )}
+            </div>
+          )}
+          {hasVariants && (
+            <div className="space-y-2">
+              {variants.map((x) => (
+                <div
+                  key={x._key}
+                  className="grid items-end gap-2 rounded-lg bg-slate-50 p-2 sm:grid-cols-12"
+                >
+                  <ShopField label="SKU *" className="sm:col-span-3">
+                    <input
+                      className={SHOP_INP}
+                      disabled={ro || !!x.id}
+                      value={x.sku}
+                      onChange={(e) => setVar(x._key, { sku: e.target.value })}
+                    />
+                  </ShopField>
+                  <ShopField label="Color" className="sm:col-span-2">
+                    <input
+                      className={SHOP_INP}
                       disabled={ro}
-                      value={x.stock}
+                      value={x.option_color}
                       onChange={(e) =>
-                        setVar(x._key, { stock: e.target.value })
+                        setVar(x._key, { option_color: e.target.value })
                       }
                     />
                   </ShopField>
-                ) : (
-                  <ShopField label="Active" className="sm:col-span-2">
-                    <select
+                  <ShopField label="Size" className="sm:col-span-2">
+                    <input
                       className={SHOP_INP}
                       disabled={ro}
-                      value={x.is_active ? "1" : "0"}
+                      value={x.option_size}
                       onChange={(e) =>
-                        setVar(x._key, { is_active: e.target.value === "1" })
+                        setVar(x._key, { option_size: e.target.value })
                       }
-                    >
-                      <option value="1">Yes</option>
-                      <option value="0">No</option>
-                    </select>
+                    />
                   </ShopField>
-                )}
-                <div className="sm:col-span-1">
-                  {!x.id && !ro && (
-                    <button
-                      type="button"
-                      className={SHOP_BTN_GHOST}
-                      title="Remove row"
-                      onClick={() =>
-                        setVariants((l) => l.filter((y) => y._key !== x._key))
+                  <ShopField label="Price override" className="sm:col-span-2">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      className={SHOP_INP}
+                      disabled={ro}
+                      value={x.price_override}
+                      onChange={(e) =>
+                        setVar(x._key, { price_override: e.target.value })
                       }
-                    >
-                      <Icons.X size={14} />
-                    </button>
+                    />
+                  </ShopField>
+                  {!x.id && canStock ? (
+                    <ShopField label="Opening stock" className="sm:col-span-2">
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        className={SHOP_INP}
+                        disabled={ro}
+                        value={x.stock}
+                        onChange={(e) =>
+                          setVar(x._key, { stock: e.target.value })
+                        }
+                      />
+                    </ShopField>
+                  ) : (
+                    <ShopField label="Active" className="sm:col-span-2">
+                      <select
+                        className={SHOP_INP}
+                        disabled={ro}
+                        value={x.is_active ? "1" : "0"}
+                        onChange={(e) =>
+                          setVar(x._key, { is_active: e.target.value === "1" })
+                        }
+                      >
+                        <option value="1">Yes</option>
+                        <option value="0">No</option>
+                      </select>
+                    </ShopField>
                   )}
-                  {x.id && canDelete && (
-                    <button
-                      type="button"
-                      className={`${SHOP_BTN_GHOST} text-red-600`}
-                      title="Delete variant"
-                      aria-label={`Delete variant ${x.sku}`}
-                      onClick={() => setDelVar(x)}
-                    >
-                      <Icons.Trash2 size={14} />
-                    </button>
+                  <div className="sm:col-span-1">
+                    {!x.id && !ro && (
+                      <button
+                        type="button"
+                        className={SHOP_BTN_GHOST}
+                        title="Remove row"
+                        onClick={() =>
+                          setVariants((l) => l.filter((y) => y._key !== x._key))
+                        }
+                      >
+                        <Icons.X size={14} />
+                      </button>
+                    )}
+                    {x.id && canDelete && (
+                      <button
+                        type="button"
+                        className={`${SHOP_BTN_GHOST} text-red-600`}
+                        title="Delete variant"
+                        aria-label={`Delete variant ${x.sku}`}
+                        onClick={() => setDelVar(x)}
+                      >
+                        <Icons.Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                  {(imgs.length > 0 || x.image_url) && (
+                    <div className="flex items-center gap-2 sm:col-span-12">
+                      <div className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-lg bg-slate-200 text-slate-400">
+                        {x.image_url ? (
+                          <img
+                            src={x.image_url}
+                            alt=""
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <Icons.Image size={15} />
+                        )}
+                      </div>
+                      <select
+                        aria-label="Variant photo"
+                        className={`${SHOP_INP} max-w-xs`}
+                        disabled={ro}
+                        value={x.image_url || ""}
+                        onChange={(e) =>
+                          setVar(x._key, { image_url: e.target.value })
+                        }
+                      >
+                        <option value="">Photo: same as product (main)</option>
+                        {[
+                          ...imgs,
+                          ...(x.image_url && !imgs.includes(x.image_url)
+                            ? [x.image_url]
+                            : []),
+                        ].map((u, i) => (
+                          <option key={u} value={u}>
+                            {imgs.includes(u)
+                              ? `Photo ${imgs.indexOf(u) + 1}${imgs.indexOf(u) === 0 ? " (main)" : ""}`
+                              : "Previous photo"}
+                          </option>
+                        ))}
+                      </select>
+                      {!ro &&
+                        x.option_color.trim() &&
+                        x.image_url &&
+                        variants.some(
+                          (y) =>
+                            y._key !== x._key &&
+                            y.option_color.trim().toLowerCase() ===
+                              x.option_color.trim().toLowerCase() &&
+                            y.image_url !== x.image_url,
+                        ) && (
+                          <button
+                            type="button"
+                            className="text-xs font-bold text-blue-700 underline"
+                            onClick={() =>
+                              setVariants((l) =>
+                                l.map((y) =>
+                                  y.option_color.trim().toLowerCase() ===
+                                  x.option_color.trim().toLowerCase()
+                                    ? { ...y, image_url: x.image_url }
+                                    : y,
+                                ),
+                              )
+                            }
+                          >
+                            Use for all {x.option_color.trim()}
+                          </button>
+                        )}
+                    </div>
                   )}
                 </div>
-                {(imgs.length > 0 || x.image_url) && (
-                  <div className="flex items-center gap-2 sm:col-span-12">
-                    <div className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-lg bg-slate-200 text-slate-400">
-                      {x.image_url ? (
-                        <img
-                          src={x.image_url}
-                          alt=""
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <Icons.Image size={15} />
-                      )}
-                    </div>
-                    <select
-                      aria-label="Variant photo"
-                      className={`${SHOP_INP} max-w-xs`}
-                      disabled={ro}
-                      value={x.image_url || ""}
-                      onChange={(e) =>
-                        setVar(x._key, { image_url: e.target.value })
-                      }
-                    >
-                      <option value="">Photo: same as product (main)</option>
-                      {[
-                        ...imgs,
-                        ...(x.image_url && !imgs.includes(x.image_url)
-                          ? [x.image_url]
-                          : []),
-                      ].map((u, i) => (
-                        <option key={u} value={u}>
-                          {imgs.includes(u)
-                            ? `Photo ${imgs.indexOf(u) + 1}${imgs.indexOf(u) === 0 ? " (main)" : ""}`
-                            : "Previous photo"}
-                        </option>
-                      ))}
-                    </select>
-                    {!ro &&
-                      x.option_color.trim() &&
-                      x.image_url &&
-                      variants.some(
-                        (y) =>
-                          y._key !== x._key &&
-                          y.option_color.trim().toLowerCase() ===
-                            x.option_color.trim().toLowerCase() &&
-                          y.image_url !== x.image_url,
-                      ) && (
-                        <button
-                          type="button"
-                          className="text-xs font-bold text-blue-700 underline"
-                          onClick={() =>
-                            setVariants((l) =>
-                              l.map((y) =>
-                                y.option_color.trim().toLowerCase() ===
-                                x.option_color.trim().toLowerCase()
-                                  ? { ...y, image_url: x.image_url }
-                                  : y,
-                              ),
-                            )
-                          }
-                        >
-                          Use for all {x.option_color.trim()}
-                        </button>
-                      )}
-                  </div>
+              ))}
+              {variants.some(
+                (x) => x.id && !x.option_color.trim() && !x.option_size.trim(),
+              ) &&
+                variants.some(
+                  (x) => x.option_color.trim() || x.option_size.trim(),
+                ) && (
+                  <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                    The original item (no color / size) cannot be chosen by
+                    customers once options exist. Give it a color / size, or set
+                    Active = No.
+                  </p>
                 )}
-              </div>
-            ))}
-            {variants.some(
-              (x) => x.id && !x.option_color.trim() && !x.option_size.trim(),
-            ) &&
-              variants.some(
-                (x) => x.option_color.trim() || x.option_size.trim(),
-              ) && (
-                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  The original item (no color / size) cannot be chosen by
-                  customers once options exist. Give it a color / size, or set
-                  Active = No.
-                </p>
+              {canEdit && (
+                <button
+                  type="button"
+                  className={SHOP_BTN_GHOST}
+                  onClick={() => setVariants((l) => [...l, shopBlankVariant()])}
+                >
+                  <Icons.Plus size={14} /> Add variant
+                </button>
               )}
-            {canEdit && (
-              <button
-                type="button"
-                className={SHOP_BTN_GHOST}
-                onClick={() => setVariants((l) => [...l, shopBlankVariant()])}
-              >
-                <Icons.Plus size={14} /> Add variant
-              </button>
-            )}
-            <p className="text-[11px] text-slate-400">
-              Saved variants are never deleted (order history depends on them) —
-              set Active = No to stop selling one.
-            </p>
-          </div>
-        )}
-      </div>
-      {err && <p className="mt-3 text-sm font-semibold text-red-600">{err}</p>}
+              <p className="text-[11px] text-slate-400">
+                Saved variants are never deleted (order history depends on them)
+                — set Active = No to stop selling one.
+              </p>
+            </div>
+          )}
+        </div>
+      </AppModal>
       {delVar && (
         <ShopActionModal
           title={`Delete variant ${delVar.sku}?`}
@@ -85375,7 +85485,7 @@ function ShopProductModal({
           }}
         />
       )}
-    </ShopModal>
+    </>
   );
 }
 
