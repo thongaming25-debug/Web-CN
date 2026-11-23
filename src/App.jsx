@@ -90891,11 +90891,12 @@ html.cb-admin-dark .cb-app main table td :is(.rounded-full,.rounded-md){border:1
 /* ===== Customer scroll polish (DRSB-style) =====
    1) Bottom dock is solid: page content no longer shows through the buttons.
    2) Profile header is transparent at the top and turns frosted on scroll. */
-.jz-customer .jz-bottom-nav{background:var(--jz-c-card)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;border:1px solid var(--jz-c-border);box-shadow:0 12px 28px -14px rgba(5,20,45,.30),0 2px 6px rgba(5,20,45,.06);}
-.jz-customer .jz-nav-pill{backdrop-filter:none;-webkit-backdrop-filter:none;}
+.jz-customer .jz-bottom-nav{background:linear-gradient(180deg,rgba(255,255,255,.30),rgba(255,255,255,.12))!important;backdrop-filter:blur(14px) saturate(190%)!important;-webkit-backdrop-filter:blur(14px) saturate(190%)!important;border:1px solid var(--jz-c-dock-edge);box-shadow:0 20px 44px -16px rgba(5,20,45,.38),0 2px 8px rgba(5,20,45,.08),inset 0 1px 0 var(--jz-c-dock-edge);}
+.jz-customer.cb-cust-dark .jz-bottom-nav{background:linear-gradient(180deg,rgba(60,60,60,.28),rgba(30,30,30,.12))!important;}
+.jz-customer .jz-nav-pill{backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);}
 /* Solid strip behind the dock: scrolling content stops at the dock instead of
    showing around / under it (DRSB keeps the menu "stuck" to the screen). */
-.jz-customer .jz-dock-mask{position:fixed;left:0;right:0;bottom:0;z-index:39;height:calc(var(--jz-nav-clearance, calc(92px + env(safe-area-inset-bottom))) - 2px);background:var(--jz-c-page);pointer-events:none;}
+.jz-customer .jz-dock-mask{position:fixed;left:0;right:0;bottom:0;z-index:39;height:calc(var(--jz-nav-clearance, calc(92px + env(safe-area-inset-bottom))) - 2px);background:transparent;display:none;pointer-events:none;}
 .jz-customer .jz-prof-top{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:max(.75rem,env(safe-area-inset-top)) 1rem .5rem;background:transparent;box-shadow:none;transition:background-color .2s ease,box-shadow .2s ease;}
 .jz-customer .jz-prof-top.is-scrolled{background:rgba(243,246,251,.82);box-shadow:0 1px 0 var(--jz-c-border);backdrop-filter:blur(14px) saturate(160%);-webkit-backdrop-filter:blur(14px) saturate(160%);}
 .jz-customer.cb-cust-dark .jz-prof-top.is-scrolled{background:rgba(15,15,15,.82);}
