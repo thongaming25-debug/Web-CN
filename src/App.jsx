@@ -39484,6 +39484,7 @@ const CustomerApp = (() => {
           style={FONTS[lang]}
         >
           <HapticLayer />
+          <GlassTabsLayer />
           <style>{`.cb-km *{line-height:1.6 !important}.cb-km input,.cb-km select{line-height:normal !important}`}</style>
           {dark && <style>{CUST_DARK_CSS}</style>}
           {children}
@@ -40536,72 +40537,26 @@ const CustomerApp = (() => {
     label.appendChild(input);
     el.appendChild(label);
   }
-  // Everything that should tick: order tabs, plus anything tagged data-haptic
-  // (QR, +/- quantity, Pay-from-Wallet, tappable images), the promo slides and
-  // the promo detail controls.
-  const HX_TARGETS =
-    "[data-haptic-tabs] > button, [data-haptic], .jzb-slide, .jzb-nav, .jzb-close";
-  // Containers that swipe: overlays step aside while the finger is moving.
-  const HX_QUIET = "[data-haptic-tabs], .jzb-frame, .cb-shop-snap";
+  // iOS overlay (real-tap switch) is used ONLY on small fixed controls: anything
+  // tagged data-haptic (QR, +/- quantity, Pay-from-Wallet) and the promo detail
+  // buttons. Swipeable / scrollable things (order tabs, promo slides, tappable
+  // images) must NOT get an overlay: it makes touch-scrolling stall on iOS.
+  const HX_TARGETS = "[data-haptic], .jzb-nav, .jzb-close";
+  // Android (vibrate) and iOS <= 26.4 can still tick those scrollable things
+  // without any overlay, so they are listed here for the click path only.
+  const HX_CLICK = `${HX_TARGETS}, [data-haptic-tabs] > button, [data-haptic-soft], .jzb-slide`;
   function HapticLayer() {
     useEffect(() => {
-      // Android / non-overlay path: tick when an order tab is tapped.
       const onClick = (e) => {
         const t = e.target;
         if (!t || !t.closest) return;
         if (t.closest(".jz-hx")) return; // iOS overlay already ticked
-        const el = t.closest(HX_TARGETS);
+        const el = t.closest(HX_CLICK);
         if (!el || el.disabled || el.getAttribute("aria-disabled") === "true")
           return;
         hapticPulse(15);
       };
       document.addEventListener("click", onClick, true);
-
-      // While a tab row is being swiped / coasting, let touches pass straight
-      // through the invisible switches so scrolling stays smooth.
-      const timers = new WeakMap();
-      const quiet = (row) => {
-        if (!row) return;
-        row.classList.add("jz-hx-scrolling");
-        clearTimeout(timers.get(row));
-        timers.set(
-          row,
-          setTimeout(() => row.classList.remove("jz-hx-scrolling"), 220),
-        );
-      };
-      const rowOf = (n) => (n && n.closest ? n.closest(HX_QUIET) : null);
-      let sx = 0;
-      let sy = 0;
-      const onTS = (e) => {
-        const t = e.touches && e.touches[0];
-        if (t) {
-          sx = t.clientX;
-          sy = t.clientY;
-        }
-      };
-      const onTM = (e) => {
-        const row = rowOf(e.target);
-        const t = e.touches && e.touches[0];
-        if (!row || !t) return;
-        if (Math.abs(t.clientX - sx) > 4 || Math.abs(t.clientY - sy) > 4)
-          quiet(row);
-      };
-      const onScroll = (e) => {
-        const el = e.target;
-        if (el && el.matches && el.matches(HX_QUIET)) quiet(el);
-      };
-      document.addEventListener("touchstart", onTS, {
-        capture: true,
-        passive: true,
-      });
-      document.addEventListener("touchmove", onTM, {
-        capture: true,
-        passive: true,
-      });
-      document.addEventListener("scroll", onScroll, {
-        capture: true,
-        passive: true,
-      });
 
       let mo = null;
       let timer = 0;
@@ -40616,25 +40571,96 @@ const CustomerApp = (() => {
             }
           });
         };
+        // Debounced + trailing, and cheap: only a handful of tagged controls.
         const schedule = () => {
-          if (!timer) timer = window.setTimeout(scan, 80);
+          if (!timer) timer = window.setTimeout(scan, 250);
         };
         mo = new MutationObserver(schedule);
-        mo.observe(document.body, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          attributeFilter: ["disabled", "aria-disabled"],
-        });
+        mo.observe(document.body, { childList: true, subtree: true });
         schedule();
       }
       return () => {
         document.removeEventListener("click", onClick, true);
-        document.removeEventListener("touchstart", onTS, true);
-        document.removeEventListener("touchmove", onTM, true);
-        document.removeEventListener("scroll", onScroll, true);
         if (mo) mo.disconnect();
         if (timer) clearTimeout(timer);
+      };
+    }, []);
+    return null;
+  }
+
+  // DRSB-style glass segmented tabs: one rounded glass bar, text-only tabs and a
+  // single raised pill that SLIDES to the selected tab. The pill is a decorative
+  // span appended to each [data-haptic-tabs] row and positioned from the selected
+  // button (aria-pressed="true"), so every order-tab page gets it with no edits.
+  function GlassTabsLayer() {
+    useEffect(() => {
+      let raf = 0;
+      const reduce =
+        window.matchMedia &&
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      const place = (row) => {
+        let ind = row.querySelector(":scope > .jz-gt-ind");
+        if (!ind) {
+          ind = document.createElement("span");
+          ind.className = "jz-gt-ind";
+          ind.setAttribute("aria-hidden", "true");
+          row.appendChild(ind);
+        }
+        const sel = row.querySelector(':scope > button[aria-pressed="true"]');
+        if (!sel || !sel.offsetWidth) {
+          ind.style.opacity = "0";
+          return;
+        }
+        const first = !ind.dataset.ready;
+        if (first || reduce) ind.style.transition = "none";
+        ind.style.width = sel.offsetWidth + "px";
+        ind.style.transform = "translateX(" + sel.offsetLeft + "px)";
+        ind.style.opacity = "1";
+        if (first || reduce) {
+          void ind.offsetWidth; // commit without animating the first placement
+          ind.style.transition = "";
+        }
+        // Keep the selected tab comfortably in view (smooth, only on change).
+        const key = sel.textContent || "";
+        if (ind.dataset.ready && ind.dataset.sel !== key && row.scrollTo) {
+          const left = sel.offsetLeft - (row.clientWidth - sel.offsetWidth) / 2;
+          row.scrollTo({
+            left: Math.max(0, left),
+            behavior: reduce ? "auto" : "smooth",
+          });
+        }
+        ind.dataset.sel = key;
+        ind.dataset.ready = "1";
+      };
+      const sync = () => {
+        raf = 0;
+        document.querySelectorAll("[data-haptic-tabs]").forEach((row) => {
+          try {
+            place(row);
+          } catch {
+            /* decorative only */
+          }
+        });
+      };
+      const schedule = () => {
+        if (!raf) raf = requestAnimationFrame(sync);
+      };
+      const mo = new MutationObserver(schedule);
+      mo.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ["aria-pressed"],
+      });
+      window.addEventListener("resize", schedule);
+      if (document.fonts && document.fonts.ready)
+        document.fonts.ready.then(schedule).catch(() => {});
+      schedule();
+      return () => {
+        mo.disconnect();
+        window.removeEventListener("resize", schedule);
+        if (raf) cancelAnimationFrame(raf);
       };
     }, []);
     return null;
@@ -53816,7 +53842,7 @@ function AirImg({
   return (
     <div
       onClick={showFallback ? undefined : onClick}
-      data-haptic={onClick && !showFallback ? "" : undefined}
+      data-haptic-soft={onClick && !showFallback ? "" : undefined}
       className={`relative overflow-hidden bg-slate-100 shrink-0 ${onClick && !showFallback ? "cursor-pointer" : ""} ${className}`}
     >
       {state === "loading" && (
@@ -90456,7 +90482,14 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 /* iOS haptic overlay: a real finger tap must land on a native switch (iOS 26.5+). Kept near-transparent, full-cover, and scroll-friendly. */
 .jz-hx{position:absolute;inset:0;z-index:5;display:block;margin:0;padding:0;border-radius:inherit;opacity:.01;touch-action:pan-x pan-y;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;cursor:pointer;}
 .jz-hx>input{position:absolute;inset:0;width:100%;height:100%;margin:0;}
-.jz-hx-scrolling .jz-hx,.jz-hx-scrolling .jz-hx>input{pointer-events:none;}
+/* DRSB-style glass segmented order tabs: one glass bar, text-only tabs, a sliding raised pill. */
+.jz-customer .jz-chip-row[data-haptic-tabs]{position:relative;align-items:center;gap:2px;margin-left:0;margin-right:0;padding:5px;border-radius:999px;background:linear-gradient(180deg,rgba(255,255,255,.82),rgba(255,255,255,.6));border:1px solid rgba(15,30,60,.08);box-shadow:0 14px 28px -20px rgba(5,20,45,.4),inset 0 1px 0 rgba(255,255,255,.9);backdrop-filter:blur(10px) saturate(160%);-webkit-backdrop-filter:blur(10px) saturate(160%);scroll-padding:0 5px;}
+.jz-customer.cb-cust-dark .jz-chip-row[data-haptic-tabs]{background:linear-gradient(180deg,rgba(255,255,255,.08),rgba(255,255,255,.03));border-color:rgba(255,255,255,.12);box-shadow:0 14px 28px -20px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.1);}
+.jz-customer .jz-chip-row[data-haptic-tabs]>button{position:relative;z-index:1;height:40px;padding:0 16px;border-radius:999px;background:transparent!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;color:var(--jz-c-muted)!important;font-weight:600;transition:color .25s ease;}
+.jz-customer .jz-chip-row[data-haptic-tabs]>button[aria-pressed="true"]{background:transparent!important;color:var(--jz-c-brand)!important;font-weight:700;box-shadow:none!important;}
+.jz-customer .jz-chip-row[data-haptic-tabs]>button:active{scale:.96;}
+.jz-customer .jz-chip-row[data-haptic-tabs] .jz-gt-ind{position:absolute;z-index:0;top:5px;bottom:5px;left:0;width:0;border-radius:999px;pointer-events:none;opacity:0;background:linear-gradient(180deg,#fff,rgba(255,255,255,.72));border:1px solid rgba(15,30,60,.14);box-shadow:0 6px 14px -8px rgba(5,20,45,.4),inset 0 1px 0 #fff,inset 0 -1px 0 rgba(15,30,60,.05);transition:transform .38s cubic-bezier(.22,1.15,.36,1),width .38s cubic-bezier(.22,1.15,.36,1),opacity .2s ease;}
+.jz-customer.cb-cust-dark .jz-chip-row[data-haptic-tabs] .jz-gt-ind{background:linear-gradient(180deg,rgba(255,255,255,.2),rgba(255,255,255,.09));border-color:rgba(255,255,255,.2);box-shadow:0 6px 14px -8px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.22);}
 @media print{.cb-app .cbx-sidebar,.cb-app .cbx-topbar,.jz-bottom-nav{display:none!important;}.cb-app main{padding:0;overflow:visible;}.cb-app{height:auto;overflow:visible;background:#fff;}}
 
 /* Comfortable admin scale: restore large, crisp type and icons. */
