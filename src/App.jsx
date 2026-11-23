@@ -39483,6 +39483,7 @@ const CustomerApp = (() => {
           className={`jz-customer ${lang === "km" ? "cb-km" : lang === "zh" ? "cb-zh cb-en" : "cb-en"}${dark ? " cb-cust-dark" : ""}`}
           style={FONTS[lang]}
         >
+          <HapticLayer />
           <style>{`.cb-km *{line-height:1.6 !important}.cb-km input,.cb-km select{line-height:normal !important}`}</style>
           {dark && <style>{CUST_DARK_CSS}</style>}
           {children}
@@ -40440,6 +40441,65 @@ const CustomerApp = (() => {
         <div ref={bodyRef}>{children}</div>
       </div>
     );
+  }
+
+  // ---------- Haptic feedback (premium-app feel) ----------
+  // Android/Chrome: navigator.vibrate. iOS 17.4+ Safari has no vibrate(), but
+  // toggling a hidden <input type="checkbox" switch> from a tap fires the
+  // system haptic, so we use that as the fallback. One delegated listener
+  // covers every tab, chip, button and bottom-nav item inside .jz-customer.
+  // Turn it off with: localStorage.setItem("jz_haptics", "0")
+  let __hapticSwitch = null;
+  function hapticPulse(ms) {
+    try {
+      if (localStorage.getItem("jz_haptics") === "0") return;
+    } catch {
+      /* storage unavailable: keep haptics on */
+    }
+    try {
+      if (typeof navigator.vibrate === "function") {
+        navigator.vibrate(ms);
+        return;
+      }
+      if (!__hapticSwitch) {
+        const label = document.createElement("label");
+        label.setAttribute("aria-hidden", "true");
+        label.style.cssText =
+          "position:fixed;left:0;top:0;width:24px;height:24px;opacity:0;pointer-events:none;z-index:-1;";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.setAttribute("switch", "");
+        input.tabIndex = -1;
+        label.appendChild(input);
+        document.body.appendChild(label);
+        __hapticSwitch = label;
+      }
+      __hapticSwitch.click();
+    } catch {
+      /* haptics are a nicety, never block the tap */
+    }
+  }
+  function HapticLayer() {
+    useEffect(() => {
+      const SEL =
+        'button,a[href],[role="tab"],[role="button"],[role="switch"],[role="menuitem"],summary';
+      const onClick = (e) => {
+        const t = e.target;
+        if (!t || !t.closest) return;
+        const el = t.closest(SEL);
+        if (!el || !el.closest(".jz-customer")) return;
+        if (el.disabled || el.getAttribute("aria-disabled") === "true") return;
+        if (el.closest("[data-no-haptic]")) return;
+        // Light tick for navigation (tabs, chips, dock); firmer for actions.
+        const light =
+          el.getAttribute("role") === "tab" ||
+          el.closest(".jz-bottom-nav, .jz-chip-row");
+        hapticPulse(light ? 15 : 25);
+      };
+      document.addEventListener("click", onClick, true);
+      return () => document.removeEventListener("click", onClick, true);
+    }, []);
+    return null;
   }
 
   // ---------- Shell (bottom nav) ----------
@@ -90227,6 +90287,11 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 @media(prefers-reduced-motion:reduce){
  .cb-app *,.cb-premium-dialog,.cb-modal-backdrop>form,.cbx-menu,.jz-customer *{animation:none!important;transition:none!important;scroll-behavior:auto!important;}
 }
+/* Press feedback: tiny, springy squish on tap (pairs with haptics). The scale property is used instead of transform so Tailwind translate classes keep working. */
+.jz-customer button:not(:disabled),.jz-customer [role="tab"],.jz-customer .jz-bottom-nav a{-webkit-tap-highlight-color:transparent;transition-property:background-color,color,border-color,box-shadow,opacity,scale;transition-duration:.18s;transition-timing-function:cubic-bezier(.22,1.2,.36,1);}
+.jz-customer button:not(:disabled):active,.jz-customer [role="tab"]:active{scale:.96;transition-duration:.08s;}
+.jz-customer .jz-chip-row>button:active{scale:.94;}
+@media (prefers-reduced-motion:reduce){.jz-customer button:active,.jz-customer [role="tab"]:active{scale:1;}}
 @media print{.cb-app .cbx-sidebar,.cb-app .cbx-topbar,.jz-bottom-nav{display:none!important;}.cb-app main{padding:0;overflow:visible;}.cb-app{height:auto;overflow:visible;background:#fff;}}
 
 /* Comfortable admin scale: restore large, crisp type and icons. */
