@@ -40485,6 +40485,56 @@ const CustomerApp = (() => {
       /* haptics are a nicety, never block the tap */
     }
   }
+  // iOS 26.5+ blocks script-triggered switch haptics (label.click() is now an
+  // untrusted click and stays silent). The only path that still ticks is a REAL
+  // finger tap landing on a native switch. So on iPhone we lay an invisible
+  // <label><input type=checkbox switch></label> over every tappable control; the
+  // tap hits the switch (haptic), and the click bubbles up to the control's own
+  // onClick, so app behaviour is unchanged. Android keeps navigator.vibrate().
+  const __isIOS =
+    typeof navigator !== "undefined" &&
+    (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
+  const __HX_SKIP = new WeakSet();
+  const __HX_INNER =
+    'a,button,select,textarea,input:not([data-jz-hx-in]),[role="button"],[role="tab"]';
+  function hxSync(el) {
+    const ov = el.querySelector(":scope > .jz-hx");
+    if (__HX_SKIP.has(el)) return;
+    let ok =
+      !el.disabled &&
+      el.getAttribute("aria-disabled") !== "true" &&
+      !el.hasAttribute("data-no-haptic");
+    if (ok) ok = !el.querySelector(__HX_INNER);
+    if (ok) {
+      const r = el.getBoundingClientRect();
+      ok = r.width >= 20 && r.height >= 20;
+    }
+    if (!ok) {
+      if (ov) ov.remove();
+      return;
+    }
+    if (ov) return;
+    // Never break form submit, and never re-anchor absolutely-positioned children.
+    if (el.closest("form")) return void __HX_SKIP.add(el);
+    if (getComputedStyle(el).position === "static") {
+      const abs = Array.from(el.querySelectorAll("*")).some(
+        (c) => getComputedStyle(c).position === "absolute",
+      );
+      if (abs) return void __HX_SKIP.add(el);
+      el.style.position = "relative";
+    }
+    const label = document.createElement("label");
+    label.className = "jz-hx";
+    label.setAttribute("aria-hidden", "true");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.setAttribute("switch", "");
+    input.setAttribute("data-jz-hx-in", "");
+    input.tabIndex = -1;
+    label.appendChild(input);
+    el.appendChild(label);
+  }
   function HapticLayer() {
     useEffect(() => {
       const SEL =
@@ -40492,6 +40542,8 @@ const CustomerApp = (() => {
       const onClick = (e) => {
         const t = e.target;
         if (!t || !t.closest) return;
+        // The iOS overlay already played the native tick on the real tap.
+        if (t.closest(".jz-hx")) return;
         const el = t.closest(SEL);
         if (!el || !el.closest(".jz-customer")) return;
         if (el.disabled || el.getAttribute("aria-disabled") === "true") return;
@@ -40502,9 +40554,43 @@ const CustomerApp = (() => {
           el.closest(".jz-bottom-nav, .jz-chip-row");
         hapticPulse(light ? 15 : 25);
       };
-      if (typeof navigator.vibrate !== "function") ensureHapticSwitch();
       document.addEventListener("click", onClick, true);
-      return () => document.removeEventListener("click", onClick, true);
+
+      let mo = null;
+      let timer = 0;
+      if (__isIOS && typeof navigator.vibrate !== "function") {
+        ensureHapticSwitch(); // fallback for iOS 17.4-26.4 on non-overlaid controls
+        const scan = () => {
+          timer = 0;
+          document
+            .querySelectorAll(
+              '.jz-customer button, .jz-customer [role="tab"], .jz-customer .jz-bottom-nav a',
+            )
+            .forEach((el) => {
+              try {
+                hxSync(el);
+              } catch {
+                /* never let a scan break the UI */
+              }
+            });
+        };
+        const schedule = () => {
+          if (!timer) timer = window.setTimeout(scan, 80);
+        };
+        mo = new MutationObserver(schedule);
+        mo.observe(document.body, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["disabled", "aria-disabled"],
+        });
+        schedule();
+      }
+      return () => {
+        document.removeEventListener("click", onClick, true);
+        if (mo) mo.disconnect();
+        if (timer) clearTimeout(timer);
+      };
     }, []);
     return null;
   }
@@ -90299,6 +90385,9 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .jz-customer button:not(:disabled):active,.jz-customer [role="tab"]:active{scale:.96;transition-duration:.08s;}
 .jz-customer .jz-chip-row>button:active{scale:.94;}
 @media (prefers-reduced-motion:reduce){.jz-customer button:active,.jz-customer [role="tab"]:active{scale:1;}}
+/* iOS haptic overlay: a real finger tap must land on a native switch (iOS 26.5+). Kept near-transparent, full-cover, and scroll-friendly. */
+.jz-customer .jz-hx{position:absolute;inset:0;z-index:5;display:block;margin:0;padding:0;border-radius:inherit;opacity:.01;touch-action:pan-x pan-y;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;cursor:pointer;}
+.jz-customer .jz-hx>input{position:absolute;inset:0;width:100%;height:100%;margin:0;}
 @media print{.cb-app .cbx-sidebar,.cb-app .cbx-topbar,.jz-bottom-nav{display:none!important;}.cb-app main{padding:0;overflow:visible;}.cb-app{height:auto;overflow:visible;background:#fff;}}
 
 /* Comfortable admin scale: restore large, crisp type and icons. */
