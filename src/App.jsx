@@ -44871,14 +44871,27 @@ const CustomerApp = (() => {
   // Account overview only. Language / Appearance / Change Password / Log Out
   // live on the Settings page (gear icon, top right).
   function Profile() {
-    const { me, addrs, tr, say, uploadAvatar, removeAvatar } = useApp();
+    const { me, addrs, tr, say, uploadAvatar, removeAvatar, theme } = useApp();
     const fileRef = useRef(null);
+    const [themeOpen, setThemeOpen] = useState(false);
     const [editOpen, setEditOpen] = useState(false);
     const [photoOpen, setPhotoOpen] = useState(false);
     const [qrOpen, setQrOpen] = useState(false);
     const [avatarBusy, setAvatarBusy] = useState(false);
     const [imgBroken, setImgBroken] = useState(false);
     useEffect(() => setImgBroken(false), [me.avatar_url]);
+    // DRSB-style header: transparent at the top, frosted + shows the customer's
+    // name once the avatar block has scrolled under it.
+    const [topScrolled, setTopScrolled] = useState(false);
+    useEffect(() => {
+      const onScroll = () => {
+        const y = window.scrollY || document.documentElement.scrollTop || 0;
+        setTopScrolled((prev) => (prev ? y > 70 : y > 100));
+      };
+      onScroll();
+      window.addEventListener("scroll", onScroll, { passive: true });
+      return () => window.removeEventListener("scroll", onScroll);
+    }, []);
     const onPick = async (e) => {
       const file = e.target.files?.[0];
       e.target.value = "";
@@ -44955,6 +44968,17 @@ const CustomerApp = (() => {
         : []),
     ];
     const support = [
+      [
+        Icons.Palette,
+        "violet",
+        tr("Appearance", "រូបរាង"),
+        () => setThemeOpen(true),
+        theme === "dark"
+          ? tr("Dark", "ងងឹត")
+          : theme === "system"
+            ? tr("Device", "តាមឧបករណ៍")
+            : tr("Light", "ភ្លឺ"),
+      ],
       ...(feat("profile_notif_settings") && feat("notifications")
         ? [
             [
@@ -44978,31 +45002,29 @@ const CustomerApp = (() => {
     ];
     return (
       <>
-        <Top
-          title={tr("Profile", "គណនី")}
-          left={
-            <button
-              data-haptic
-              type="button"
-              onClick={() => setQrOpen(true)}
-              aria-label={tr("My QR code", "QR របស់ខ្ញុំ")}
-              className="w-11 h-11 -ml-1 grid place-items-center rounded-full bg-white/15 active:bg-white/30 transition-colors"
-            >
-              <Icons.QrCode size={20} />
-            </button>
-          }
-          right={
-            <button
-              type="button"
-              onClick={() => nav(P("/profile/settings"))}
-              aria-label={tr("Settings", "ការកំណត់")}
-              className="w-11 h-11 grid place-items-center rounded-full bg-white/15 active:bg-white/30 transition-colors"
-            >
-              <Icons.Settings size={20} />
-            </button>
-          }
-        />
-        <div className="px-4 pt-5 space-y-4">
+        <header className={`jz-prof-top${topScrolled ? " is-scrolled" : ""}`}>
+          <button
+            data-haptic
+            type="button"
+            onClick={() => setQrOpen(true)}
+            aria-label={tr("My QR code", "QR របស់ខ្ញុំ")}
+            className="jz-prof-btn"
+          >
+            <Icons.QrCode size={20} />
+          </button>
+          <h1 className="jz-prof-title" aria-hidden={!topScrolled}>
+            {me.name || tr("Profile", "គណនី")}
+          </h1>
+          <button
+            type="button"
+            onClick={() => nav(P("/profile/settings"))}
+            aria-label={tr("Settings", "ការកំណត់")}
+            className="jz-prof-btn"
+          >
+            <Icons.Settings size={20} />
+          </button>
+        </header>
+        <div className="px-4 pt-1 space-y-4">
           <div className="text-center">
             <input
               ref={fileRef}
@@ -45084,18 +45106,20 @@ const CustomerApp = (() => {
                 {tr("Support", "ជំនួយ")}
               </p>
               <Card className="divide-y divide-slate-100 overflow-hidden">
-                {support.map(([I, tone, l, fn]) => (
+                {support.map(([I, tone, l, fn, val]) => (
                   <MenuRow
                     key={l}
                     icon={I}
                     tone={tone}
                     label={l}
+                    value={val}
                     onClick={fn}
                   />
                 ))}
               </Card>
             </>
           )}
+          {themeOpen && <ThemeSheet onClose={() => setThemeOpen(false)} />}
         </div>
       </>
     );
@@ -45203,11 +45227,10 @@ const CustomerApp = (() => {
 
   // ---------- Settings (Language · Appearance · Security · Log Out) ----------
   function CustomerSettings() {
-    const { logout, tr, lang, theme } = useApp();
+    const { logout, tr, lang } = useApp();
     const nav = useNavigate();
     const feat = useCustomerFeatures();
     const [langOpen, setLangOpen] = useState(false);
-    const [themeOpen, setThemeOpen] = useState(false);
     const [signOutOpen, setSignOutOpen] = useState(false);
     return (
       <>
@@ -45222,19 +45245,6 @@ const CustomerApp = (() => {
                 lang === "km" ? "ភាសាខ្មែរ" : lang === "zh" ? "中文" : "English"
               }
               onClick={() => setLangOpen(true)}
-            />
-            <MenuRow
-              icon={Icons.Palette}
-              tone="violet"
-              label={tr("Appearance", "រូបរាង")}
-              value={
-                theme === "dark"
-                  ? tr("Dark", "ងងឹត")
-                  : theme === "system"
-                    ? tr("Device", "តាមឧបករណ៍")
-                    : tr("Light", "ភ្លឺ")
-              }
-              onClick={() => setThemeOpen(true)}
             />
             <PushMenuRow />
             <InstallMenuRow />
@@ -45255,7 +45265,6 @@ const CustomerApp = (() => {
             </>
           )}
           {langOpen && <LangSheet onClose={() => setLangOpen(false)} />}
-          {themeOpen && <ThemeSheet onClose={() => setThemeOpen(false)} />}
           <div className="pt-2">
             <button
               type="button"
@@ -90685,6 +90694,21 @@ html.cb-admin-dark .cb-app main table td :is(.rounded-full,.rounded-md){border:1
 @media(min-width:1000px){
  .jz-customer .jz-skel-list{grid-template-columns:repeat(3,minmax(0,1fr));}
 }
+
+/* ===== Customer scroll polish (DRSB-style) =====
+   1) Bottom dock is solid: page content no longer shows through the buttons.
+   2) Profile header is transparent at the top and turns frosted on scroll. */
+.jz-customer .jz-bottom-nav{background:var(--jz-c-card)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;border:1px solid var(--jz-c-border);box-shadow:0 12px 28px -14px rgba(5,20,45,.30),0 2px 6px rgba(5,20,45,.06);}
+.jz-customer .jz-nav-pill{backdrop-filter:none;-webkit-backdrop-filter:none;}
+.jz-customer .jz-prof-top{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:max(.75rem,env(safe-area-inset-top)) 1rem .5rem;background:transparent;box-shadow:none;transition:background-color .2s ease,box-shadow .2s ease;}
+.jz-customer .jz-prof-top.is-scrolled{background:rgba(243,246,251,.82);box-shadow:0 1px 0 var(--jz-c-border);backdrop-filter:blur(14px) saturate(160%);-webkit-backdrop-filter:blur(14px) saturate(160%);}
+.jz-customer.cb-cust-dark .jz-prof-top.is-scrolled{background:rgba(15,15,15,.82);}
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.jz-customer .jz-prof-top.is-scrolled{background:var(--jz-c-page);}}
+.jz-customer .jz-prof-title{flex:1;min-width:0;margin:0;text-align:center;font-size:16px;font-weight:700;line-height:1.2;color:var(--jz-c-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:0;transform:translateY(6px);transition:opacity .2s ease,transform .2s ease;pointer-events:none;}
+.jz-customer .jz-prof-top.is-scrolled .jz-prof-title{opacity:1;transform:none;}
+.jz-customer .jz-prof-btn{width:44px;height:44px;flex:none;display:grid;place-items:center;border-radius:999px;background:var(--jz-c-card);color:var(--jz-c-text);box-shadow:0 1px 4px rgba(5,20,45,.10);}
+.jz-customer .jz-prof-btn:active{opacity:.7;}
+@media(min-width:640px){.jz-customer .jz-prof-top{padding-inline:var(--jz-c-gutter);}}
 
 
 /* ===== DRSB-style polish (final layer) =====
