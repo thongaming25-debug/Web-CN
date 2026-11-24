@@ -27522,11 +27522,23 @@ function ShipmentLookup() {
               : fieldKey === "customer_name"
                 ? "name"
                 : "phone";
-          const { data: custs, error: custErr } = await supabase
-            .from("customers")
-            .select("id")
-            .ilike(customerCol, `%${qa}%`)
-            .limit(100);
+          let custReq = supabase.from("customers").select("id");
+          if (fieldKey === "customer_id") {
+            // Customer ID = exact match only (4 must not match 14 / 24 / 104)
+            const digits = qa.replace(/^KH-?/i, "");
+            if (/^\d+$/.test(digits)) {
+              const n = String(Number(digits));
+              custReq = custReq.or(
+                `customer_code.eq.${n},customer_code.eq.KH-${n.padStart(6, "0")}`,
+              );
+            } else {
+              custReq = custReq.ilike(customerCol, `%${qa}%`);
+            }
+          } else {
+            // name / phone keep partial matching
+            custReq = custReq.ilike(customerCol, `%${qa}%`);
+          }
+          const { data: custs, error: custErr } = await custReq.limit(100);
           if (custErr) throw custErr;
           customerIds = (custs || []).map((c) => c.id).filter(Boolean);
         }
@@ -27742,10 +27754,14 @@ function ShipmentLookup() {
               return isAir ? r.order_id : r.order_no || r.order_id;
           }
         };
-        const hit = (r, isAir) =>
-          String(pick(r, isAir) || "")
-            .toUpperCase()
-            .includes(upper);
+        const hit = (r, isAir) => {
+          const val = String(pick(r, isAir) || "").toUpperCase();
+          if (fieldKey === "customer_id") {
+            const norm = (x) => String(x).replace(/^KH-?0*/i, "");
+            return norm(val) === norm(upper);
+          }
+          return val.includes(upper);
+        };
         const matches = packages.filter((p) => hit(p, false));
         setRows([
           ...groupLookupRows(matches.map((pkg) => normalize(pkg, {}, {}, {}))),
@@ -30547,10 +30563,18 @@ function ReceivingEditModal({
     }
   }
 
+  const currentText = isWh
+    ? branchName(currentBranchCode) || "—"
+    : currentAddress
+      ? currentAddress.label ||
+        String(receivingAddressText(currentAddress) || "").slice(0, 60) ||
+        "—"
+      : "—";
+
   return (
-    <AppModal
+    <CnModalShell
       title={isWh ? "Update Internal Warehouse" : "Update Customer Address"}
-      maxW="max-w-xl"
+      subtitle={`${tk} · currently ${currentText}`}
       onClose={onClose}
       onSubmit={(e) => {
         e.preventDefault();
@@ -30558,39 +30582,43 @@ function ReceivingEditModal({
       }}
       busy={busy}
       error={error}
-      submitLabel="Update"
+      submitLabel="Save"
       busyLabel="Saving…"
       submitDisabled={!canConfirm}
     >
       <div>
-        <label className={LABEL_CLS}>
-          {isWh ? "Warehouse" : "Address"}{" "}
-          <span className="text-signal-red">*</span>
+        <label className="mb-1.5 block text-sm font-semibold text-slate-900">
+          {isWh ? "Internal Warehouse" : "Customer Address"}{" "}
+          <span className="text-red-500">*</span>
         </label>
         {addresses === null ? (
-          <div className="py-6 text-center text-sm text-ink-600/45">
+          <div className="py-6 text-center text-sm text-slate-400">
             Loading…
           </div>
         ) : !isWh && options.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-mist-200 p-5 text-center text-sm text-ink-600/55">
+          <div className="rounded-lg border border-dashed border-slate-300 p-5 text-center text-sm text-slate-500">
             This customer has no saved address yet.
           </div>
         ) : (
-          <SearchableSelect
+          <ModalSelect
             value={selected}
             onChange={setSelected}
             options={options}
+            placeholder={
+              isWh ? "Select internal warehouse" : "Select customer address"
+            }
+            searchLabel={isWh ? "Search warehouse" : "Search address"}
           />
         )}
       </div>
       {willMismatch && (
-        <div className="rounded-lg border border-signal-red/25 bg-signal-red/5 px-3 py-2 text-xs text-signal-red">
+        <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">
           {isWh
             ? "Customer Address stays as it is. Internal Warehouse will show in red until the Customer Address is at this branch."
             : "Internal Warehouse stays as it is. It will show in red until it matches this address's branch."}
         </div>
       )}
-    </AppModal>
+    </CnModalShell>
   );
 }
 
@@ -50664,6 +50692,20 @@ function TelegramBotsPage() {
   );
 }
 
+// Shared by Customer Features / Role Management: show the app-wide toast.
+function emitAdminToast(m) {
+  if (!m) return;
+  emitCBToast(
+    m.type,
+    m.type === "ok"
+      ? "Changes saved successfully"
+      : m.type === "warn"
+        ? "Saved with a notice"
+        : "Action could not be completed",
+    m.text,
+  );
+}
+
 function CustomerFeaturesPage() {
   const { user } = useAuth();
   const canManage = hasPermission(user, "role.manage");
@@ -50671,7 +50713,7 @@ function CustomerFeaturesPage() {
   const masterDisabled = customerFeatureStore.disabled;
   const [draft, setDraft] = useState(null); // { master:{key:bool}, roles:[...] }
   const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState(null);
+  const setMsg = emitAdminToast; // app-wide toast (same as the other pages)
   const [server, setServer] = useState(null); // null = checking
   const [rolesServer, setRolesServer] = useState(null);
   const [newOpen, setNewOpen] = useState(false);
@@ -50748,9 +50790,9 @@ function CustomerFeaturesPage() {
   function createRole(e) {
     e.preventDefault();
     const name = newName.trim();
-    if (!name) return setNewErr("សូមបញ្ចូលឈ្មោះ Role");
+    if (!name) return setNewErr("Please enter a role name");
     if (view.roles.some((r) => r.name.toLowerCase() === name.toLowerCase()))
-      return setNewErr("ឈ្មោះ Role នេះមានរួចហើយ");
+      return setNewErr("This role name already exists");
     const src = view.roles.find((r) => r.name === copyFrom);
     edit((d) => ({
       ...d,
@@ -50815,15 +50857,9 @@ function CustomerFeaturesPage() {
       }
     } finally {
       setSaving(false);
-      setTimeout(() => setMsg(null), 5000);
     }
   }
 
-  const msgCls = {
-    ok: "bg-emerald-50 text-emerald-700",
-    warn: "bg-amber-50 text-amber-700",
-    err: "bg-signal-red/10 text-signal-red",
-  };
   const th =
     "sticky top-0 z-10 bg-mist-50 border-b border-mist-200 px-3 py-3 text-center font-semibold text-ink-900 whitespace-nowrap";
   const cb =
@@ -50837,8 +50873,8 @@ function CustomerFeaturesPage() {
             Customer Features
           </h1>
           <p className="text-sm text-ink-600/55 mt-0.5">
-            Customer Role = feature ណាដែលភ្ញៀវប្រើបាន · Master =
-            បិទសម្រាប់ភ្ញៀវទាំងអស់
+            Customer Role = which features a customer can use · Master = switch
+            a feature off for all customers
           </p>
           <p className="text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2 mt-2 max-w-3xl">
             Master OFF hides the feature for every customer. A Role checkbox
@@ -50877,19 +50913,15 @@ function CustomerFeaturesPage() {
       {!canManage && (
         <div className="flex items-center gap-2 text-sm text-ink-700 bg-mist-100 rounded-md px-3 py-2">
           <Icons.Lock size={14} />
-          View only — មានតែ Super Admin ទេដែលអាចកែ Customer Role និង Feature។
-        </div>
-      )}
-      {msg && (
-        <div className={`text-sm rounded-md px-3 py-2 ${msgCls[msg.type]}`}>
-          {msg.text}
+          View only — only Super Admin can edit Customer Roles and Features.
         </div>
       )}
       {(server === false || rolesServer === false) && (
         <details className="text-sm bg-amber-50 text-amber-800 rounded-md px-3 py-2">
           <summary className="cursor-pointer font-medium">
             Table <code>customer_features</code> / <code>customer_roles</code>{" "}
-            មិនទាន់មាន — ការកំណត់រក្សាទុកតែក្នុង browser នេះ (ចុចមើល SQL)
+            does not exist yet — settings are saved in this browser only (click
+            to view the SQL)
           </summary>
           <pre className="mt-2 text-xs whitespace-pre-wrap overflow-x-auto">
             {CUSTOMER_FEATURES_SQL}
@@ -50934,8 +50966,8 @@ function CustomerFeaturesPage() {
           </button>
           {newErr && <span className="text-sm text-signal-red">{newErr}</span>}
           <p className="basis-full text-xs text-ink-600/55">
-            បន្ទាប់ពីបង្កើត សូមចុច <b>Save changes</b> ហើយកំណត់ Role ឱ្យភ្ញៀវនៅ
-            Customers › (ជ្រើសភ្ញៀវ) › Customer Details។
+            After creating, click <b>Save changes</b>, then assign the Role to a
+            customer in Customers › (select a customer) › Customer Details.
           </p>
         </form>
       )}
@@ -51012,9 +51044,6 @@ function CustomerFeaturesPage() {
                       <td className="px-3 py-2.5 border-b border-mist-200">
                         <div className="flex items-center gap-2 flex-wrap">
                           <b className="text-ink-900">{f.label}</b>
-                          <span className="text-xs text-ink-600/55">
-                            {f.kh}
-                          </span>
                         </div>
                         <p className="text-xs text-ink-600/55 mt-0.5">
                           {f.desc}
@@ -51064,9 +51093,9 @@ function CustomerFeaturesPage() {
         </table>
       </div>
       <p className="text-xs text-ink-600/55">
-        Customer ដែលគ្មាន Role ឬ Role ត្រូវបានលុប នឹងប្រើ{" "}
-        <b>{DEFAULT_CUSTOMER_ROLE}</b>។ Feature ថ្មីដែលបន្ថែមនៅពេលក្រោយ
-        បើកជាលំនាំដើមសម្រាប់ Role ទាំងអស់។
+        Customers with no Role, or whose Role was deleted, use{" "}
+        <b>{DEFAULT_CUSTOMER_ROLE}</b>. Features added later are ON by default
+        for all Roles.
       </p>
     </div>
   );
@@ -51170,13 +51199,13 @@ function CreateRoleModal({ open, roles, onClose, onCreate }) {
   async function submit(e) {
     e.preventDefault();
     const name = String(f.name || "").trim();
-    if (!name) return setError("សូមបញ្ចូលឈ្មោះ Role");
+    if (!name) return setError("Please enter a role name");
     if (name.toLowerCase() === "customer")
       return setError(
-        '"Customer" ជា account របស់អតិថិជន មិនមែន Role បុគ្គលិកទេ',
+        '"Customer" is a customer account type, not a staff Role',
       );
     if (roles.some((r) => r.name.toLowerCase() === name.toLowerCase()))
-      return setError("ឈ្មោះ Role នេះមានរួចហើយ");
+      return setError("This role name already exists");
     setBusy(true);
     try {
       const src = roles.find((r) => r.name === f.copyFrom);
@@ -51189,7 +51218,7 @@ function CreateRoleModal({ open, roles, onClose, onCreate }) {
       });
       onClose();
     } catch (err) {
-      setError(err.message || "មិនអាចបង្កើត Role បានទេ");
+      setError(err.message || "Unable to create the role");
     } finally {
       setBusy(false);
     }
@@ -51317,20 +51346,12 @@ function RoleManagementPage() {
   const [menuFor, setMenuFor] = useState(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState(null); // { type: ok | warn | err, text }
+  const setMsg = emitAdminToast; // { type: ok | warn | err, text } -> app-wide toast
   const [confirmAction, setConfirmAction] = useState(null);
 
   useEffect(() => {
     syncRolesFromServer();
   }, []);
-
-  // Role Management feedback appears as a floating toast and dismisses itself.
-  useEffect(() => {
-    if (!msg) return undefined;
-    const delay = msg.type === "err" ? 7000 : msg.type === "warn" ? 6000 : 4200;
-    const timeoutId = window.setTimeout(() => setMsg(null), delay);
-    return () => window.clearTimeout(timeoutId);
-  }, [msg]);
 
   const savedOf = (name) =>
     roles.find((r) => r.name === name)?.permissions ?? [];
@@ -51450,7 +51471,7 @@ function RoleManagementPage() {
         requirePermission(
           user,
           "role.manage",
-          "មានតែ Super Admin ទេដែលអាចកែ Role",
+          "Only Super Admin can edit roles",
         );
         const cur = loadRoles();
         const next = cur.map((r) =>
@@ -51474,11 +51495,7 @@ function RoleManagementPage() {
 
   function updateMeta(name, patch) {
     return run(async () => {
-      requirePermission(
-        user,
-        "role.manage",
-        "មានតែ Super Admin ទេដែលអាចកែ Role",
-      );
+      requirePermission(user, "role.manage", "Only Super Admin can edit roles");
       const next = loadRoles().map((r) =>
         r.name === name ? normalizeRole({ ...r, ...patch }) : r,
       );
@@ -51553,7 +51570,7 @@ function RoleManagementPage() {
   }
 
   async function createRole(values) {
-    requirePermission(user, "role.manage", "មានតែ Super Admin ទេដែលអាចកែ Role");
+    requirePermission(user, "role.manage", "Only Super Admin can edit roles");
     const role = normalizeRole(values);
     commitRoles([...loadRoles(), role]);
     const res = await persistRoles([role]);
@@ -51569,12 +51586,6 @@ function RoleManagementPage() {
 
   const th =
     "sticky top-0 z-20 bg-mist-50 border-b border-mist-200 px-3 py-3 text-center font-semibold text-ink-900 whitespace-nowrap";
-  const msgCls = {
-    ok: "bg-emerald-50 text-emerald-700",
-    warn: "bg-amber-50 text-amber-700",
-    err: "bg-signal-red/10 text-signal-red",
-  };
-
   return (
     <div className="space-y-5">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -51583,7 +51594,8 @@ function RoleManagementPage() {
             Role Management
           </h1>
           <p className="text-sm text-ink-600/55 mt-0.5">
-            Role = អ្វីដែល user ធ្វើបាន · Department / Warehouse = ធ្វើបាននៅទីណា
+            Role = what a user can do · Department / Warehouse = where they can
+            do it
           </p>
         </div>
         {canManage && (
@@ -51600,85 +51612,13 @@ function RoleManagementPage() {
       {!canManage && (
         <div className="flex items-center gap-2 text-sm text-ink-700 bg-mist-100 rounded-md px-3 py-2">
           <Icons.Lock size={14} />
-          View only — មានតែ Super Admin ទេដែលអាចកែ Role និង Permission។
-        </div>
-      )}
-      {msg && (
-        <div
-          className="fixed top-5 right-5 z-[200] w-[min(430px,calc(100vw-2rem))] pointer-events-none"
-          aria-live={msg.type === "err" ? "assertive" : "polite"}
-          aria-atomic="true"
-        >
-          <div
-            role={msg.type === "err" ? "alert" : "status"}
-            className={`pointer-events-auto relative overflow-hidden rounded-2xl border bg-white shadow-[0_18px_55px_rgba(15,23,42,0.18)] ${
-              msg.type === "ok"
-                ? "border-emerald-200"
-                : msg.type === "warn"
-                  ? "border-amber-200"
-                  : "border-rose-200"
-            }`}
-            style={{
-              animation: "cb-role-toast-in 260ms cubic-bezier(.2,.8,.2,1) both",
-            }}
-          >
-            <div className="flex items-start gap-3 p-4">
-              <div
-                className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${
-                  msg.type === "ok"
-                    ? "bg-emerald-50 text-emerald-600"
-                    : msg.type === "warn"
-                      ? "bg-amber-50 text-amber-600"
-                      : "bg-rose-50 text-rose-600"
-                }`}
-              >
-                {msg.type === "ok" ? (
-                  <Icons.CheckCircle2 size={21} />
-                ) : msg.type === "warn" ? (
-                  <Icons.AlertTriangle size={21} />
-                ) : (
-                  <Icons.XCircle size={21} />
-                )}
-              </div>
-              <div className="min-w-0 flex-1 pt-0.5">
-                <div
-                  className={`text-sm font-bold ${msg.type === "ok" ? "text-emerald-800" : msg.type === "warn" ? "text-amber-800" : "text-rose-800"}`}
-                >
-                  {msg.type === "ok"
-                    ? "Changes saved successfully"
-                    : msg.type === "warn"
-                      ? "Saved with a notice"
-                      : "Action could not be completed"}
-                </div>
-                <p className="mt-1 break-words text-sm leading-5 text-slate-600">
-                  {msg.text}
-                </p>
-              </div>
-              <button
-                type="button"
-                aria-label="Dismiss notification"
-                onClick={() => setMsg(null)}
-                className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-              >
-                <Icons.X size={16} />
-              </button>
-            </div>
-            <div className="h-1 w-full bg-slate-100">
-              <div
-                className={`h-full ${msg.type === "ok" ? "bg-emerald-500" : msg.type === "warn" ? "bg-amber-500" : "bg-rose-500"}`}
-                style={{
-                  animation: `cb-role-toast-progress ${msg.type === "err" ? "7s" : msg.type === "warn" ? "6s" : "4.2s"} linear both`,
-                }}
-              />
-            </div>
-            <style>{`@keyframes cb-role-toast-in { from { opacity: 0; transform: translate3d(18px,-8px,0) scale(.98); } to { opacity: 1; transform: translate3d(0,0,0) scale(1); } } @keyframes cb-role-toast-progress { from { width: 100%; } to { width: 0%; } } @media (prefers-reduced-motion: reduce) { [role="status"], [role="alert"] { animation: none !important; } }`}</style>
-          </div>
+          View only — only Super Admin can edit Roles and Permissions.
         </div>
       )}
       {canManage && supabase && rolesStore.server === false && (
         <div className="text-xs text-amber-700 bg-amber-50 rounded-md px-3 py-2">
-          តារាង `roles` មិនទាន់មានក្នុង Supabase — ការកែនឹងមានតែក្នុង browser
-          នេះ។ សូមរត់ SQL នៅ lib/permissions.js។
+          The `roles` table does not exist in Supabase yet — changes will be
+          saved in this browser only. Please run the SQL in lib/permissions.js.
         </div>
       )}
 
@@ -51877,7 +51817,7 @@ function RoleManagementPage() {
                   colSpan={8}
                   className="px-4 py-6 text-center text-ink-600/50"
                 >
-                  រកមិនឃើញ Role ទេ
+                  No roles found
                 </td>
               </tr>
             )}
@@ -51902,8 +51842,8 @@ function RoleManagementPage() {
               )}
             </h2>
             <p className="text-xs text-ink-600/50 mt-0.5">
-              Super Admin មានសិទ្ធិគ្រប់យ៉ាងជានិច្ច ហើយមិនត្រូវបានគ្រប់គ្រងក្នុង
-              matrix នេះទេ។
+              Super Admin always has full access and is not managed in this
+              matrix.
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
@@ -51957,8 +51897,8 @@ function RoleManagementPage() {
         {dirty && (
           <div className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 px-3 py-2 border-b border-mist-200">
             <TriangleAlert size={13} />
-            មាន Unsaved changes ({dirtyNames.join(", ")}) — ចុច Save Changes
-            ដើម្បីអនុវត្តលើ user Allនៃ Role នោះ។
+            Unsaved changes ({dirtyNames.join(", ")}) — click Save Changes to
+            apply them to all users of those roles.
           </div>
         )}
 
@@ -52113,7 +52053,7 @@ function RoleManagementPage() {
                     colSpan={matrixRoles.length + 1}
                     className="px-4 py-8 text-center text-ink-600/50"
                   >
-                    រកមិនឃើញ Permission ទេ
+                    No permissions found
                   </td>
                 </tr>
               )}
@@ -60398,6 +60338,219 @@ function CnEditModal({ open, row, onClose, onSaved }) {
 // Staff can change Land / Sea / Air after the order is created (customer chose
 // another route, or the wrong one was picked). Freight is only calculated when
 // the TK arrives, so a change here is picked up automatically then.
+// Dropdown used inside modals: field + floating list with a search box and a
+// check mark on the selected option. The list is rendered in a portal so the
+// modal's overflow never clips it.
+// options = [{ value, label, sub?, badge?, icon? }]
+function ModalSelect({
+  value,
+  onChange,
+  options = [],
+  placeholder = "Select an option",
+  emptyText = "No results",
+  searchLabel = "Search",
+}) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [rect, setRect] = useState(null);
+  const [hi, setHi] = useState(0);
+  const btnRef = useRef(null);
+  const panelRef = useRef(null);
+
+  const selected = options.find((o) => o.value === value) || null;
+  const needle = q.trim().toLowerCase();
+  const shown = needle
+    ? options.filter((o) =>
+        `${o.label} ${o.sub || ""} ${o.badge || ""}`
+          .toLowerCase()
+          .includes(needle),
+      )
+    : options;
+
+  const measure = React.useCallback(() => {
+    if (!btnRef.current) return;
+    const r = btnRef.current.getBoundingClientRect();
+    const panelH = 64 + Math.min(Math.max(options.length, 1), 5) * 48;
+    const below = window.innerHeight - r.bottom;
+    const up = below < panelH + 16 && r.top > below;
+    setRect({
+      left: r.left,
+      width: r.width,
+      top: up ? undefined : r.bottom + 6,
+      bottom: up ? window.innerHeight - r.top + 6 : undefined,
+    });
+  }, [options.length]);
+
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, [open, measure]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDoc = (e) => {
+      if (btnRef.current?.contains(e.target)) return;
+      if (panelRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  useEffect(() => {
+    setHi(0);
+  }, [q, open]);
+
+  const pick = (o) => {
+    onChange(o.value);
+    setOpen(false);
+    setQ("");
+    btnRef.current?.focus();
+  };
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => {
+          setOpen((o) => !o);
+          setQ("");
+        }}
+        className={`flex min-h-12 w-full items-center justify-between gap-2 rounded-lg border bg-white px-3.5 py-2 text-left text-[15px] transition ${open ? "border-blue-600 ring-2 ring-blue-600/20" : "border-slate-300 hover:border-slate-400"}`}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          {selected?.icon}
+          {selected?.badge && (
+            <span className="shrink-0 rounded-md bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-600">
+              {selected.badge}
+            </span>
+          )}
+          <span
+            className={`min-w-0 truncate ${selected ? "text-slate-900" : "text-slate-400"}`}
+          >
+            {selected ? selected.label : placeholder}
+          </span>
+        </span>
+        <Icons.ChevronDown
+          size={18}
+          className={`shrink-0 text-slate-500 transition ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open &&
+        rect &&
+        createPortal(
+          <div
+            ref={panelRef}
+            role="listbox"
+            style={{
+              position: "fixed",
+              left: rect.left,
+              width: rect.width,
+              top: rect.top,
+              bottom: rect.bottom,
+              zIndex: 100000,
+            }}
+            className="rounded-lg border border-slate-200 bg-white p-2 shadow-[0_12px_32px_rgba(15,23,42,0.18)]"
+          >
+            <input
+              autoFocus
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (shown[hi]) pick(shown[hi]);
+                } else if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setHi((i) => Math.min(i + 1, shown.length - 1));
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setHi((i) => Math.max(i - 1, 0));
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setOpen(false);
+                  btnRef.current?.focus();
+                }
+              }}
+              className="mb-1 h-11 w-full rounded-md bg-slate-100 px-3 text-sm text-slate-900 outline-none"
+              aria-label={searchLabel}
+            />
+            <div className="max-h-60 overflow-y-auto">
+              {shown.length === 0 ? (
+                <div className="px-3 py-3 text-sm text-slate-500">
+                  {emptyText}
+                </div>
+              ) : (
+                shown.map((o, i) => (
+                  <button
+                    key={o.value}
+                    type="button"
+                    role="option"
+                    aria-selected={o.value === value}
+                    onMouseEnter={() => setHi(i)}
+                    onClick={() => pick(o)}
+                    className={`flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-[15px] ${i === hi ? "bg-slate-100" : ""} ${o.value === value ? "font-bold text-slate-900" : "text-slate-700"}`}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      {o.icon}
+                      {o.badge && (
+                        <span className="shrink-0 rounded-md bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-600">
+                          {o.badge}
+                        </span>
+                      )}
+                      <span className="min-w-0 break-words">
+                        {o.label}
+                        {o.sub && (
+                          <span className="ml-2 text-xs font-normal text-slate-400">
+                            {o.sub}
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                    {o.value === value && (
+                      <Icons.Check
+                        size={18}
+                        className="shrink-0 text-blue-600"
+                      />
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>,
+          document.body,
+        )}
+    </>
+  );
+}
+
+// Shipping Method (Land / Sea / Air) dropdown.
+function ShipMethodSelect({ value, onChange, options = CN_SHIP_METHODS }) {
+  return (
+    <ModalSelect
+      value={value}
+      onChange={onChange}
+      searchLabel="Search shipping method"
+      placeholder="Select shipping method"
+      options={options.map((m) => ({
+        value: m,
+        label: m,
+        icon: <ShipMethodIcon m={m} size={17} />,
+      }))}
+    />
+  );
+}
+
 function CnShipMethodModal({ open, row, onClose, onSaved }) {
   const { user } = useAuth();
   const [m, setM] = useState("Land");
@@ -60458,18 +60611,11 @@ function CnShipMethodModal({ open, row, onClose, onSaved }) {
       submitLabel="Save"
       busyLabel="Saving…"
     >
-      <div className="grid grid-cols-3 gap-2">
-        {CN_SHIP_METHODS.map((x) => (
-          <button
-            key={x}
-            type="button"
-            onClick={() => setM(x)}
-            className={`inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-bold transition ${m === x ? "border-blue-600 bg-blue-600 text-white shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-blue-300"}`}
-          >
-            <ShipMethodIcon m={x} size={18} />
-            {x}
-          </button>
-        ))}
+      <div>
+        <label className="mb-1.5 block text-sm font-semibold text-slate-900">
+          Shipping Method <span className="text-red-500">*</span>
+        </label>
+        <ShipMethodSelect value={m} onChange={setM} />
       </div>
       <p className="text-xs text-slate-500">
         Land / Sea: freight by Size S/M/L or CBM. Air: freight by KG. If a TK
@@ -60548,18 +60694,11 @@ function PackageShipMethodModal({
       submitLabel="Save"
       busyLabel="Saving…"
     >
-      <div className="grid grid-cols-3 gap-2">
-        {CN_SHIP_METHODS.map((x) => (
-          <button
-            key={x}
-            type="button"
-            onClick={() => setM(x)}
-            className={`inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-bold transition ${m === x ? "border-blue-600 bg-blue-600 text-white shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-blue-300"}`}
-          >
-            <ShipMethodIcon m={x} size={18} />
-            {x}
-          </button>
-        ))}
+      <div>
+        <label className="mb-1.5 block text-sm font-semibold text-slate-900">
+          Shipping Method <span className="text-red-500">*</span>
+        </label>
+        <ShipMethodSelect value={m} onChange={setM} />
       </div>
       <p className="text-xs text-slate-500">
         Land / Sea: freight by Size S/M/L or CBM. Air: freight by KG.
@@ -69724,16 +69863,14 @@ function SettingsPage() {
   const { user } = useAuth();
   const [settings, setSettings] = useState(() => getSystemSettings());
   const [tab, setTab] = useState("company");
-  const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(!!supabase);
   const [saving, setSaving] = useState(false);
   const [remoteError, setRemoteError] = useState("");
   const [policyHistory, setPolicyHistory] = useState([]);
 
-  const notify = (title, text, type = "success") => {
-    setToast({ title, text, type, id: Date.now() });
-    window.setTimeout(() => setToast(null), type === "err" ? 6500 : 4200);
-  };
+  // Use the app-wide toast (same look as every other page).
+  const notify = (title, text, type = "success") =>
+    emitCBToast(type, title, text);
 
   useEffect(() => {
     let alive = true;
@@ -70513,33 +70650,6 @@ function SettingsPage() {
           )}
         </div>
       </div>
-      {toast && (
-        <div
-          className={`fixed right-5 top-5 z-[100] w-[min(390px,calc(100vw-2rem))] rounded-2xl border bg-white shadow-2xl p-4 flex gap-3 ${toast.type === "err" ? "border-red-200" : toast.type === "warn" ? "border-amber-200" : "border-emerald-200"}`}
-          role={toast.type === "err" ? "alert" : "status"}
-        >
-          <div
-            className={`h-10 w-10 rounded-xl grid place-items-center ${toast.type === "err" ? "bg-red-50 text-red-600" : toast.type === "warn" ? "bg-amber-50 text-amber-600" : "bg-emerald-50 text-emerald-600"}`}
-          >
-            {toast.type === "err" ? (
-              <Icons.XCircle size={20} />
-            ) : toast.type === "warn" ? (
-              <Icons.TriangleAlert size={20} />
-            ) : (
-              <Icons.CircleCheck size={20} />
-            )}
-          </div>
-          <div className="flex-1">
-            <div className="font-bold text-sm text-slate-900">
-              {toast.title}
-            </div>
-            <div className="text-xs text-slate-500 mt-1">{toast.text}</div>
-          </div>
-          <button onClick={() => setToast(null)}>
-            <Icons.X size={16} className="text-slate-400" />
-          </button>
-        </div>
-      )}
     </div>
   );
 }
