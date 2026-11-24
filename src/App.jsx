@@ -7384,20 +7384,18 @@ function WarehouseSelect({
         {label} <span className="text-signal-red">*</span>
       </label>
       {hint && <p className="text-[11px] text-ink-600/50 mb-1">{hint}</p>}
-      <select
+      <ModalSelect
         value={value || ""}
         disabled={disabled}
-        onChange={(e) => onChange(e.target.value)}
-        className={INPUT_CLS}
-      >
-        <option value="">{tr("— Select —", "— ជ្រើសរើស —")}</option>
-        {options.map((w) => (
-          <option key={w.code} value={w.code} disabled={w.status !== "Active"}>
-            {w.code} · {w.name}
-            {w.status !== "Active" ? tr(" (Disabled)", " (បានបិទ)") : ""}
-          </option>
-        ))}
-      </select>
+        onChange={onChange}
+        placeholder={tr("— Select —", "— ជ្រើសរើស —")}
+        searchLabel={label}
+        options={options.map((w) => ({
+          value: w.code,
+          label: `${w.code} · ${w.name}${w.status !== "Active" ? tr(" (Disabled)", " (បានបិទ)") : ""}`,
+          disabled: w.status !== "Active",
+        }))}
+      />
     </div>
   );
 }
@@ -9356,17 +9354,12 @@ function PhotoUploader({
           <label className={LABEL_CLS}>
             {tr("Photo Type", "ប្រភេទរូបភាព")}
           </label>
-          <select
+          <ModalSelect
             value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            className={INPUT_CLS}
-          >
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {tr.v(c)}
-              </option>
-            ))}
-          </select>
+            onChange={setCategory}
+            searchLabel={tr("Photo Type", "ប្រភេទរូបភាព")}
+            options={categories.map((c) => ({ value: c, label: tr.v(c) }))}
+          />
         </div>
         <button
           type="button"
@@ -9543,19 +9536,10 @@ function CargoCalculator({
         <label className={LABEL_CLS}>
           {tr("Shipping Method", "វិធីដឹកជញ្ជូន")}
         </label>
-        <div className="grid grid-cols-3 gap-2.5">
-          {CN_SHIP_METHODS.map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setForm((f) => ({ ...f, shippingMethod: m }))}
-              className={`${segBtn(normShipMethod(form.shippingMethod) === m)} inline-flex items-center justify-center gap-2`}
-            >
-              <ShipMethodIcon m={m} size={16} />
-              {tr.v(m)}
-            </button>
-          ))}
-        </div>
+        <ShipMethodSelect
+          value={normShipMethod(form.shippingMethod)}
+          onChange={(m) => setForm((f) => ({ ...f, shippingMethod: m }))}
+        />
         <p className="text-xs text-ink-600/50 mt-1.5">
           {tr(
             "Land / Sea: freight by Size S/M/L or CBM. Air: freight by KG.",
@@ -10568,45 +10552,37 @@ function CreatePackageModal({ open, onClose, onCreated, initialTk = "" }) {
               <label className={LABEL_CLS}>
                 {tr("China Warehouse", "ឃ្លាំងនៅចិន")}
               </label>
-              <select
+              <ModalSelect
                 value={f.warehouse}
-                onChange={(e) =>
-                  setF((x) => ({ ...x, warehouse: e.target.value }))
-                }
-                className={INPUT_CLS}
-              >
-                <option value="">{tr("— Select —", "— ជ្រើសរើស —")}</option>
-                {(whList.filter((w) => w.type === "china").length
+                onChange={(v) => setF((x) => ({ ...x, warehouse: v }))}
+                placeholder={tr("— Select —", "— ជ្រើសរើស —")}
+                searchLabel={tr("China Warehouse", "ឃ្លាំងនៅចិន")}
+                options={(whList.filter((w) => w.type === "china").length
                   ? whList.filter(
                       (w) =>
                         w.type === "china" &&
                         (w.status === "Active" || w.code === f.warehouse),
                     )
                   : CHINA_WAREHOUSES
-                ).map((w) => (
-                  <option key={w.code} value={w.code}>
-                    {w.code} · {w.name}
-                  </option>
-                ))}
-              </select>
+                ).map((w) => ({
+                  value: w.code,
+                  label: `${w.code} · ${w.name}`,
+                }))}
+              />
             </div>
             <div>
               <label className={LABEL_CLS}>
                 {tr("Inbound Status", "ស្ថានភាពទទួលចូល")}
               </label>
-              <select
+              <ModalSelect
                 value={f.inboundStatus}
-                onChange={(e) =>
-                  setF((x) => ({ ...x, inboundStatus: e.target.value }))
-                }
-                className={INPUT_CLS}
-              >
-                {INBOUND_STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {tr.v(s)}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => setF((x) => ({ ...x, inboundStatus: v }))}
+                searchLabel={tr("Inbound Status", "ស្ថានភាពទទួលចូល")}
+                options={INBOUND_STATUSES.map((st) => ({
+                  value: st,
+                  label: tr.v(st),
+                }))}
+              />
             </div>
           </div>
         </section>
@@ -58729,15 +58705,12 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
       <div className="grid md:grid-cols-2 gap-3">
         <div>
           <label className={LABEL_CLS}>Platform</label>
-          <select
-            className={INPUT_CLS}
+          <ModalSelect
             value={platform}
-            onChange={(e) => setPlatform(e.target.value)}
-          >
-            {CN_PLATFORMS.map((p) => (
-              <option key={p}>{p}</option>
-            ))}
-          </select>
+            onChange={setPlatform}
+            searchLabel="Search platform"
+            options={CN_PLATFORMS.map((p) => ({ value: p, label: p }))}
+          />
         </div>
         <div>
           <label className={LABEL_CLS}>Shop</label>
@@ -58751,19 +58724,7 @@ function CnOrderCreateModal({ open, onClose, onSaved }) {
       </div>
       <div>
         <label className={LABEL_CLS}>Shipping Method *</label>
-        <div className="grid grid-cols-3 gap-2">
-          {CN_SHIP_METHODS.map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setShipMethod(m)}
-              className={`inline-flex items-center justify-center gap-2 rounded-xl border px-3 py-2.5 text-sm font-bold transition ${shipMethod === m ? "border-blue-600 bg-blue-600 text-white shadow-sm" : "border-slate-200 bg-white text-slate-600 hover:border-blue-300"}`}
-            >
-              <ShipMethodIcon m={m} size={18} />
-              {m}
-            </button>
-          ))}
-        </div>
+        <ShipMethodSelect value={shipMethod} onChange={setShipMethod} />
         <p className="text-xs text-slate-500 mt-1.5">
           Land / Sea: freight by Size S/M/L or CBM. Air: freight by KG.
         </p>
@@ -60150,17 +60111,15 @@ function CnEditModal({ open, row, onClose, onSaved }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
           <label className={LABEL_CLS}>Platform</label>
-          <select
-            className={INPUT_CLS}
+          <ModalSelect
             value={platform}
-            onChange={(e) => setPlatform(e.target.value)}
-          >
-            {[...new Set([platform, ...CN_PLATFORMS])].map((x) => (
-              <option key={x} value={x}>
-                {x}
-              </option>
-            ))}
-          </select>
+            onChange={setPlatform}
+            searchLabel="Search platform"
+            options={[...new Set([platform, ...CN_PLATFORMS])].map((x) => ({
+              value: x,
+              label: x,
+            }))}
+          />
         </div>
         <div>
           <label className={LABEL_CLS}>Shop</label>
@@ -60349,6 +60308,7 @@ function ModalSelect({
   placeholder = "Select an option",
   emptyText = "No results",
   searchLabel = "Search",
+  disabled = false,
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -60408,6 +60368,7 @@ function ModalSelect({
   }, [q, open]);
 
   const pick = (o) => {
+    if (o.disabled) return;
     onChange(o.value);
     setOpen(false);
     setQ("");
@@ -60419,13 +60380,14 @@ function ModalSelect({
       <button
         ref={btnRef}
         type="button"
+        disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => {
           setOpen((o) => !o);
           setQ("");
         }}
-        className={`flex min-h-12 w-full items-center justify-between gap-2 rounded-lg border bg-white px-3.5 py-2 text-left text-[15px] transition ${open ? "border-blue-600 ring-2 ring-blue-600/20" : "border-slate-300 hover:border-slate-400"}`}
+        className={`flex min-h-12 w-full items-center justify-between gap-2 rounded-lg border bg-white px-3.5 py-2 text-left text-[15px] transition disabled:cursor-not-allowed disabled:bg-slate-50 disabled:opacity-60 ${open ? "border-blue-600 ring-2 ring-blue-600/20" : "border-slate-300 hover:border-slate-400"}`}
       >
         <span className="flex min-w-0 items-center gap-2">
           {selected?.icon}
@@ -60497,9 +60459,10 @@ function ModalSelect({
                     type="button"
                     role="option"
                     aria-selected={o.value === value}
+                    aria-disabled={!!o.disabled}
                     onMouseEnter={() => setHi(i)}
                     onClick={() => pick(o)}
-                    className={`flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-[15px] ${i === hi ? "bg-slate-100" : ""} ${o.value === value ? "font-bold text-slate-900" : "text-slate-700"}`}
+                    className={`flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-[15px] ${i === hi ? "bg-slate-100" : ""} ${o.disabled ? "cursor-not-allowed opacity-50" : ""} ${o.value === value ? "font-bold text-slate-900" : "text-slate-700"}`}
                   >
                     <span className="flex min-w-0 items-center gap-2">
                       {o.icon}
