@@ -20589,10 +20589,6 @@ function CreateCustomerAccountModal({ open, onClose, onCreated }) {
   }, [open]);
   if (!open) return null;
   const set = (k, v) => setValues((o) => ({ ...o, [k]: v }));
-  const inputCls =
-    "w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue";
-  const labelCls =
-    "block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1";
 
   async function copyPw() {
     try {
@@ -20608,15 +20604,15 @@ function CreateCustomerAccountModal({ open, onClose, onCreated }) {
     const name = (values.name || "").trim();
     const phone = (values.phone || "").trim();
     const password = values.password || "";
-    if (!name) return setError("សូមបញ្ចូលឈ្មោះ");
+    if (!name) return setError("Please enter a name");
     if (phone.replace(/\D/g, "").length < 6)
-      return setError("លេខទូរស័ព្ទមិនត្រឹមត្រូវ");
+      return setError("Invalid phone number");
     if (password.length < 6)
-      return setError("Password ត្រូវមានយ៉ាងតិច 6 តួអក្សរ");
+      return setError("Password must be at least 6 characters");
     setSaving(true);
     setError("");
     try {
-      if (!supabase) throw new Error("Supabase មិនទាន់តភ្ជាប់");
+      if (!supabase) throw new Error("Supabase is not connected");
       const { data: session } = await supabase.auth.getSession();
       const { data, error: fnError } = await supabase.functions.invoke(
         CREATE_CUSTOMER_FUNCTION,
@@ -20632,91 +20628,382 @@ function CreateCustomerAccountModal({ open, onClose, onCreated }) {
       onCreated(data?.data);
       onClose();
     } catch (err) {
-      setError(await edgeFnErrorMessage(err, "មិនអាចបង្កើតអតិថិជនបានទេ"));
+      setError(await edgeFnErrorMessage(err, "Unable to create customer"));
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <AppModal
+    <CrModalShell
       title="New Customer"
-      subtitle="អតិថិជនអាចចូលប្រើដោយ Phone + Password នេះភ្លាមៗ"
-      maxW="max-w-md"
+      subtitle="The customer can sign in with this phone + password right away."
       onClose={onClose}
-      onSubmit={handleSubmit}
       busy={saving}
       error={error}
-      submitLabel="Create"
-      busyLabel="កំពុងបង្កើត..."
+      footer={
+        <>
+          <button
+            type="submit"
+            form="new-customer-form"
+            disabled={saving}
+            className={CR_BTN_PRIMARY}
+          >
+            {saving ? (
+              <Icons.Loader2 size={15} className="animate-spin" />
+            ) : (
+              <Icons.Check size={15} />
+            )}
+            {saving ? "Creating..." : "Create"}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className={CR_BTN_GHOST}
+          >
+            <Icons.X size={14} />
+            Cancel
+          </button>
+        </>
+      }
     >
-      <div>
-        <label className={labelCls}>Name</label>
-        <input
-          required
-          autoFocus
-          value={values.name ?? ""}
-          onChange={(e) => set("name", e.target.value)}
-          className={inputCls}
-        />
-      </div>
-      <div>
-        <label className={labelCls}>Phone (ប្រើសម្រាប់ Login)</label>
-        <input
-          required
-          inputMode="tel"
-          value={values.phone ?? ""}
-          onChange={(e) => set("phone", e.target.value)}
-          className={inputCls}
-        />
-      </div>
-      <div>
-        <label className={labelCls}>Password</label>
-        <div className="flex items-center gap-2">
+      <form
+        id="new-customer-form"
+        onSubmit={handleSubmit}
+        className="space-y-5"
+      >
+        <div>
+          <label className={CR_LABEL} htmlFor="nc-name">
+            Name <span className="text-red-500">*</span>
+          </label>
           <input
+            id="nc-name"
             required
-            type={show ? "text" : "password"}
-            value={values.password ?? ""}
-            onChange={(e) => set("password", e.target.value)}
-            className={inputCls}
+            autoFocus
+            value={values.name ?? ""}
+            onChange={(e) => set("name", e.target.value)}
+            style={WTU_NO_RING}
+            className={CR_FIELD}
           />
-          <button
-            type="button"
-            onClick={() => setShow((v) => !v)}
-            className="h-9 w-9 shrink-0 rounded-md border border-mist-200 grid place-items-center text-ink-600/60"
-            aria-label="Show / hide password"
-          >
-            {show ? <Icons.EyeOff size={15} /> : <Icons.Eye size={15} />}
-          </button>
-          <button
-            type="button"
-            onClick={copyPw}
-            className="h-9 px-2.5 shrink-0 rounded-md border border-mist-200 text-xs font-semibold text-ink-700"
-          >
-            {copied ? "Copied" : "Copy"}
-          </button>
-          <button
-            type="button"
-            onClick={() => set("password", generateTempPassword())}
-            className="h-9 px-2.5 shrink-0 rounded-md border border-mist-200 text-xs font-semibold text-ink-700"
-          >
-            Generate
-          </button>
         </div>
-        <p className="text-xs text-ink-600/45 mt-1">
-          យ៉ាងតិច 6 តួអក្សរ — ចម្លងផ្ញើជូនអតិថិជនមុនបិទ Form នេះ។
-        </p>
-      </div>
-      <div>
-        <label className={labelCls}>Email (មិនចាំបាច់)</label>
-        <input
-          type="email"
-          value={values.email ?? ""}
-          onChange={(e) => set("email", e.target.value)}
-          className={inputCls}
+
+        <div>
+          <label className={CR_LABEL} htmlFor="nc-phone">
+            Phone (used for login) <span className="text-red-500">*</span>
+          </label>
+          <input
+            id="nc-phone"
+            required
+            inputMode="tel"
+            value={values.phone ?? ""}
+            onChange={(e) => set("phone", e.target.value)}
+            style={WTU_NO_RING}
+            className={CR_FIELD}
+          />
+        </div>
+
+        <div>
+          <label className={CR_LABEL} htmlFor="nc-password">
+            Password <span className="text-red-500">*</span>
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              id="nc-password"
+              required
+              type={show ? "text" : "password"}
+              value={values.password ?? ""}
+              onChange={(e) => set("password", e.target.value)}
+              autoComplete="new-password"
+              style={WTU_NO_RING}
+              className={`${CR_FIELD} min-w-0 flex-1 font-mono`}
+            />
+            <button
+              type="button"
+              onClick={() => setShow((v) => !v)}
+              aria-label="Show / hide password"
+              className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-slate-300 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50"
+            >
+              {show ? <Icons.EyeOff size={17} /> : <Icons.Eye size={17} />}
+            </button>
+            <button
+              type="button"
+              onClick={copyPw}
+              className="h-12 shrink-0 rounded-lg border border-slate-300 bg-white px-4 text-[15px] font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50"
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+            <button
+              type="button"
+              onClick={() => set("password", generateTempPassword())}
+              className="h-12 shrink-0 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-4 text-[15px] font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50"
+            >
+              Generate
+            </button>
+          </div>
+          <p className={`mt-2 ${CR_HINT}`}>
+            At least 6 characters — copy it and send it to the customer before
+            closing this form.
+          </p>
+        </div>
+
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <label
+              className="text-[15px] font-semibold text-slate-900"
+              htmlFor="nc-email"
+            >
+              Email
+            </label>
+            <span className="text-sm text-slate-600">optional</span>
+          </div>
+          <input
+            id="nc-email"
+            type="email"
+            value={values.email ?? ""}
+            onChange={(e) => set("email", e.target.value)}
+            style={WTU_NO_RING}
+            className={CR_FIELD}
+          />
+        </div>
+      </form>
+    </CrModalShell>
+  );
+}
+
+// ------------------------------------------------------------
+// CbSelect — card-style dropdown (replaces the native <select> popup).
+// Renders its list in a portal so it is never clipped by a scrolling
+// modal body. Click-outside / Esc / Arrow keys + Enter, optional search.
+// options: [{ value, label }]   value: string
+// ------------------------------------------------------------
+function CbSelect({
+  id,
+  value,
+  onChange,
+  options,
+  placeholder = "Select an option…",
+  allowClear = false,
+  clearLabel = "None",
+  searchable,
+  disabled = false,
+  compact = false,
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
+  const [q, setQ] = useState("");
+  const [active, setActive] = useState(0);
+  const btnRef = useRef(null);
+  const listRef = useRef(null);
+  const selected = options.find((o) => o.value === value);
+  const showSearch = searchable ?? options.length > 7;
+  const term = q.trim().toLowerCase();
+  const filtered = term
+    ? options.filter((o) => o.label.toLowerCase().includes(term))
+    : options;
+  const items =
+    allowClear && !term
+      ? [{ value: "", label: clearLabel }, ...filtered]
+      : filtered;
+
+  // latest values for the (stable) keyboard handler
+  const live = useRef({});
+  live.current = { items, active };
+
+  function openList() {
+    if (disabled) return;
+    setQ("");
+    const idx = items.findIndex((o) => o.value === value && value !== "");
+    setActive(idx >= 0 ? idx : 0);
+    setOpen(true);
+  }
+  function choose(o) {
+    if (!o) return;
+    onChange(o.value);
+    setOpen(false);
+    btnRef.current?.focus();
+  }
+
+  // position + outside click
+  useEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const below = window.innerHeight - r.bottom - 12;
+      const above = r.top - 12;
+      const up = below < 220 && above > below;
+      setPos({
+        left: r.left,
+        width: r.width,
+        top: up ? undefined : r.bottom + 6,
+        bottom: up ? window.innerHeight - r.top + 6 : undefined,
+        maxH: Math.max(160, Math.min(320, up ? above : below)),
+      });
+    };
+    const onDown = (e) => {
+      if (btnRef.current?.contains(e.target)) return;
+      if (listRef.current?.contains(e.target)) return;
+      setOpen(false);
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    document.addEventListener("mousedown", onDown);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+      document.removeEventListener("mousedown", onDown);
+    };
+  }, [open]);
+
+  // keyboard (capture phase so Esc closes only the list, not the modal)
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      const { items: its, active: act } = live.current;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setOpen(false);
+        btnRef.current?.focus();
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActive((i) => Math.min(i + 1, Math.max(its.length - 1, 0)));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActive((i) => Math.max(i - 1, 0));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        choose(its[act]);
+      } else if (e.key === "Tab") {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [open]);
+
+  // keep the highlighted row in view
+  useEffect(() => {
+    if (!open) return;
+    listRef.current
+      ?.querySelector(`[data-i="${active}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [active, open, pos]);
+
+  return (
+    <div className="relative">
+      <button
+        ref={btnRef}
+        id={id}
+        type="button"
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => (open ? setOpen(false) : openList())}
+        style={WTU_NO_RING}
+        className={`flex w-full items-center justify-between gap-2 border bg-white px-3.5 text-left transition disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500 ${
+          compact
+            ? "h-[42px] rounded-xl text-sm"
+            : "h-12 rounded-lg text-[15px] shadow-sm"
+        } ${open ? "border-blue-500" : compact ? "border-slate-200" : "border-slate-300"}`}
+      >
+        <span
+          className={`truncate ${
+            selected
+              ? compact
+                ? "text-slate-800"
+                : "font-medium text-slate-900"
+              : "text-slate-500"
+          }`}
+        >
+          {selected ? selected.label : placeholder}
+        </span>
+        <Icons.ChevronDown
+          size={16}
+          className={`shrink-0 text-slate-500 transition-transform ${open ? "rotate-180" : ""}`}
         />
-      </div>
-    </AppModal>
+      </button>
+
+      {open &&
+        pos &&
+        createPortal(
+          <div
+            ref={listRef}
+            role="listbox"
+            style={{
+              position: "fixed",
+              left: pos.left,
+              width: pos.width,
+              top: pos.top,
+              bottom: pos.bottom,
+              maxHeight: pos.maxH,
+            }}
+            className="z-[200] flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl"
+          >
+            {showSearch && (
+              <div className="relative border-b border-slate-100 p-2">
+                <Icons.Search
+                  size={15}
+                  className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-slate-400"
+                />
+                <input
+                  autoFocus
+                  value={q}
+                  onChange={(e) => {
+                    setQ(e.target.value);
+                    setActive(0);
+                  }}
+                  placeholder="Search…"
+                  style={WTU_NO_RING}
+                  className="h-9 w-full rounded-lg bg-slate-50 pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-400"
+                />
+              </div>
+            )}
+            <div className="overflow-y-auto py-1.5">
+              {items.length === 0 && (
+                <div className="px-4 py-3 text-sm text-slate-400">
+                  No results
+                </div>
+              )}
+              {items.map((o, i) => {
+                const isSel = o.value === value && o.value !== "";
+                return (
+                  <button
+                    key={`${o.value}-${i}`}
+                    type="button"
+                    role="option"
+                    aria-selected={isSel}
+                    data-i={i}
+                    onMouseEnter={() => setActive(i)}
+                    onClick={() => choose(o)}
+                    className={`flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left transition-colors ${
+                      compact ? "text-sm" : "text-[15px]"
+                    } ${i === active ? "bg-slate-50" : ""} ${
+                      isSel
+                        ? "font-semibold text-blue-700"
+                        : o.value === ""
+                          ? "text-slate-500"
+                          : "text-slate-800"
+                    }`}
+                  >
+                    <span className="truncate">{o.label}</span>
+                    {isSel && (
+                      <Icons.Check
+                        size={16}
+                        className="shrink-0 text-blue-600"
+                      />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>,
+          document.body,
+        )}
+    </div>
   );
 }
 
@@ -20753,6 +21040,13 @@ function CreateStaffUserModal({ open, existingRows, onClose, onCreated }) {
     }
   }, [open]);
 
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => e.key === "Escape" && !saving && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, saving, onClose]);
+
   if (!open) return null;
 
   function set(key, val) {
@@ -20765,15 +21059,16 @@ function CreateStaffUserModal({ open, existingRows, onClose, onCreated }) {
     setError("");
     try {
       requirePermission(user, "user.create");
+      if (!values.role) throw new Error("Please select a Role");
       assertCanAssignRole(user, values.role);
       if (selectedRole && selectedRole.scope !== "GLOBAL" && !values.department)
-        throw new Error("សូមជ្រើសរើស Department");
+        throw new Error("Please select a Department");
       if (
         selectedRole &&
         ["WAREHOUSE", "BRANCH", "TEAM", "SELF"].includes(selectedRole.scope) &&
         !values.warehouse_code
       )
-        throw new Error("សូមជ្រើសរើស Warehouse / Branch");
+        throw new Error("Please select a Warehouse / Branch");
       if (!supabase) {
         // UI-only mode: no Edge Function to call — just add it locally
         // like every other mock module so the page still feels alive.
@@ -20818,7 +21113,7 @@ function CreateStaffUserModal({ open, existingRows, onClose, onCreated }) {
       });
       onClose();
     } catch (err) {
-      setError(err.message || "មិនអាចបង្កើត user បានទេ");
+      setError(err.message || "Unable to create user");
     } finally {
       setSaving(false);
     }
@@ -20828,168 +21123,214 @@ function CreateStaffUserModal({ open, existingRows, onClose, onCreated }) {
     ...new Set(existingRows.map((r) => r.status).filter(Boolean)),
   ];
 
-  return (
-    <AppModal
-      title="New User"
-      maxW="max-w-md"
-      onClose={onClose}
-      onSubmit={handleSubmit}
-      busy={saving}
-      error={error}
-      submitLabel="បង្កើត User"
-      busyLabel="កំពុងបង្កើត..."
+  const label = "mb-2 block text-[15px] font-semibold text-slate-900";
+  const field =
+    "h-12 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-[15px] font-medium text-slate-900 shadow-sm transition placeholder:font-normal placeholder:text-slate-500 focus:border-slate-500";
+  const roleOpts = roleOptions.map((r) => ({
+    value: r.name,
+    label: r.level == null ? r.name : `${r.name} (Level ${r.level})`,
+  }));
+  const deptOpts = DEPARTMENTS.map((d) => ({ value: d.name, label: d.name }));
+  const whOpts = whOptions.map((w) => ({
+    value: w.code,
+    label: `${w.code} — ${w.name}`,
+  }));
+  const statusOpts = (
+    statusOptions.length ? statusOptions : ["Active", "Suspended"]
+  ).map((o) => ({ value: o, label: o }));
+  const deptRequired = !!selectedRole && selectedRole.scope !== "GLOBAL";
+  const whRequired =
+    !!selectedRole &&
+    ["WAREHOUSE", "BRANCH", "TEAM", "SELF"].includes(selectedRole.scope);
+  const Req = () => <span className="text-red-500">*</span>;
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[3px]"
+      role="dialog"
+      aria-modal="true"
+      aria-label="New User"
     >
-      <div>
-        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-          Name
-        </label>
-        <input
-          required
-          value={values.name ?? ""}
-          onChange={(e) => set("name", e.target.value)}
-          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-        />
-      </div>
-
-      <div>
-        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-          Role
-        </label>
-        <select
-          required
-          value={values.role ?? ""}
-          onChange={(e) => set("role", e.target.value)}
-          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-        >
-          <option value="" disabled>
-            ជ្រើសរើស...
-          </option>
-          {roleOptions.map((r) => (
-            <option key={r.name} value={r.name}>
-              {r.level == null ? r.name : `${r.name} (Level ${r.level})`}
-            </option>
-          ))}
-        </select>
-        {selectedRole && (
-          <p className="text-xs text-ink-600/45 mt-1">
-            Data scope: {selectedRole.scope} — {SCOPE_HINT[selectedRole.scope]}
-          </p>
-        )}
-      </div>
-
-      <div>
-        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-          Department
-        </label>
-        <select
-          required={!!selectedRole && selectedRole.scope !== "GLOBAL"}
-          value={values.department ?? ""}
-          onChange={(e) => {
-            const d = DEPARTMENTS.find((x) => x.name === e.target.value);
-            setValues((v) => ({
-              ...v,
-              department: e.target.value,
-              // drop a warehouse that no longer matches the department
-              warehouse_code:
-                d?.country &&
-                whRows.find((w) => w.code === v.warehouse_code)?.type !==
-                  d.country
-                  ? ""
-                  : v.warehouse_code,
-            }));
-          }}
-          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-        >
-          <option value="">—</option>
-          {DEPARTMENTS.map((d) => (
-            <option key={d.name} value={d.name}>
-              {d.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div>
-        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-          Warehouse / Branch
-        </label>
-        <select
-          required={
-            !!selectedRole &&
-            ["WAREHOUSE", "BRANCH", "TEAM", "SELF"].includes(selectedRole.scope)
-          }
-          value={values.warehouse_code ?? ""}
-          onChange={(e) => set("warehouse_code", e.target.value)}
-          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-        >
-          <option value="">—</option>
-          {whOptions.map((w) => (
-            <option key={w.code} value={w.code}>
-              {w.code} — {w.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div>
-        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-          Email
-        </label>
-        <input
-          required
-          type="email"
-          value={values.email ?? ""}
-          onChange={(e) => set("email", e.target.value)}
-          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-        />
-      </div>
-
-      <div>
-        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-          Password
-        </label>
-        <div className="relative">
-          <input
-            required
-            minLength={8}
-            type={showPassword ? "text" : "password"}
-            value={values.password ?? ""}
-            onChange={(e) => set("password", e.target.value)}
-            className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 pr-9 text-sm outline-none focus:border-signal-blue"
-          />
+      <form
+        onSubmit={handleSubmit}
+        className="flex max-h-[92vh] w-full max-w-[640px] flex-col rounded-2xl bg-white shadow-2xl"
+      >
+        <div className="flex items-center justify-between border-b border-slate-200 px-7 py-5">
+          <h3 className="text-xl font-bold text-slate-950">New User</h3>
           <button
             type="button"
-            onClick={() => setShowPassword((v) => !v)}
-            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-600/40 hover:text-ink-600"
+            onClick={onClose}
+            aria-label="Close"
+            className="grid h-9 w-9 place-items-center rounded-lg text-slate-700 transition hover:bg-slate-100"
           >
-            {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+            <Icons.X size={18} />
           </button>
         </div>
-        <p className="text-xs text-ink-600/45 mt-1">
-          ផ្តល់ password នេះទៅ staff ដោយផ្ទាល់ (SMS/Telegram) — កុំផ្ញើតាម email
-          ធម្មតា។
-        </p>
-      </div>
 
-      <div>
-        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-          Status
-        </label>
-        <select
-          value={values.status ?? "Active"}
-          onChange={(e) => set("status", e.target.value)}
-          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
-        >
-          {(statusOptions.length ? statusOptions : ["Active", "Suspended"]).map(
-            (opt) => (
-              <option key={opt} value={opt}>
-                {opt}
-              </option>
-            ),
+        <div className="overflow-y-auto px-7 py-6">
+          <div>
+            <label className={label} htmlFor="nu-name">
+              Name <Req />
+            </label>
+            <input
+              id="nu-name"
+              required
+              autoFocus
+              className={field}
+              style={WTU_NO_RING}
+              value={values.name ?? ""}
+              onChange={(e) => set("name", e.target.value)}
+            />
+          </div>
+
+          <div className="mt-5 grid gap-5 sm:grid-cols-2">
+            <div>
+              <label className={label} htmlFor="nu-role">
+                Role <Req />
+              </label>
+              <CbSelect
+                id="nu-role"
+                value={values.role ?? ""}
+                onChange={(v) => set("role", v)}
+                options={roleOpts}
+              />
+            </div>
+
+            <div>
+              <label className={label} htmlFor="nu-dept">
+                Department {deptRequired && <Req />}
+              </label>
+              <CbSelect
+                id="nu-dept"
+                value={values.department ?? ""}
+                allowClear
+                options={deptOpts}
+                placeholder="—"
+                onChange={(name) => {
+                  const d = DEPARTMENTS.find((x) => x.name === name);
+                  setValues((v) => ({
+                    ...v,
+                    department: name,
+                    // drop a warehouse that no longer matches the department
+                    warehouse_code:
+                      d?.country &&
+                      whRows.find((w) => w.code === v.warehouse_code)?.type !==
+                        d.country
+                        ? ""
+                        : v.warehouse_code,
+                  }));
+                }}
+              />
+            </div>
+          </div>
+          {selectedRole && (
+            <p className="mt-2 text-sm text-slate-600">
+              Data scope: {selectedRole.scope} —{" "}
+              {SCOPE_HINT[selectedRole.scope]}
+            </p>
           )}
-        </select>
-      </div>
-    </AppModal>
+
+          <div className="mt-5 grid gap-5 sm:grid-cols-2">
+            <div>
+              <label className={label} htmlFor="nu-wh">
+                Warehouse / Branch {whRequired && <Req />}
+              </label>
+              <CbSelect
+                id="nu-wh"
+                value={values.warehouse_code ?? ""}
+                allowClear
+                options={whOpts}
+                placeholder="—"
+                onChange={(v) => set("warehouse_code", v)}
+              />
+            </div>
+
+            <div>
+              <label className={label} htmlFor="nu-status">
+                Status
+              </label>
+              <CbSelect
+                id="nu-status"
+                value={values.status ?? "Active"}
+                options={statusOpts}
+                onChange={(v) => set("status", v)}
+              />
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <label className={label} htmlFor="nu-email">
+              Email <Req />
+            </label>
+            <input
+              id="nu-email"
+              required
+              type="email"
+              className={field}
+              style={WTU_NO_RING}
+              value={values.email ?? ""}
+              onChange={(e) => set("email", e.target.value)}
+            />
+          </div>
+
+          <div className="mt-5">
+            <label className={label} htmlFor="nu-password">
+              Password <Req />
+            </label>
+            <div className="relative">
+              <input
+                id="nu-password"
+                required
+                minLength={8}
+                type={showPassword ? "text" : "password"}
+                className={`${field} pr-11`}
+                style={WTU_NO_RING}
+                value={values.password ?? ""}
+                onChange={(e) => set("password", e.target.value)}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-800"
+              >
+                {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-slate-600">
+              Give this password to the staff member directly (SMS/Telegram) —
+              do not send it by regular email.
+            </p>
+          </div>
+
+          {error && (
+            <p className="mt-3 text-xs font-semibold text-red-600" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2 border-t border-slate-100 px-7 py-4">
+          <button
+            type="submit"
+            disabled={saving}
+            className="inline-flex h-11 items-center gap-1.5 rounded-lg bg-blue-600 px-7 text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40"
+          >
+            {saving ? "Creating..." : "Create User"}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-slate-300 px-5 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50"
+          >
+            <Icons.X size={14} />
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>,
+    document.body,
   );
 }
 
@@ -21812,6 +22153,91 @@ async function edgeFnErrorMessage(err, fallback = "") {
   return err?.message || fallback;
 }
 
+// Shared body for the customer / staff "Reset Password" dialogs.
+function PwResetBody({
+  pw,
+  setPw,
+  show,
+  setShow,
+  done,
+  copied,
+  copyPw,
+  onGenerate,
+  onEnter,
+  doneTitle,
+  notes,
+  hint,
+}) {
+  if (done)
+    return (
+      <div className="space-y-3 rounded-xl border border-emerald-100 bg-emerald-50 p-5">
+        <p className="text-[15px] font-semibold text-emerald-800">
+          {doneTitle}
+        </p>
+        <div className="flex items-center gap-2">
+          <code className="flex h-12 flex-1 select-all items-center rounded-lg border border-emerald-200 bg-white px-3.5 text-base font-bold tracking-wider text-slate-900">
+            {pw}
+          </code>
+          <button
+            type="button"
+            onClick={copyPw}
+            className="h-12 rounded-lg border border-emerald-200 bg-white px-4 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-50"
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+        {notes.map((n) => (
+          <p key={n} className="text-sm text-emerald-800/80">
+            {n}
+          </p>
+        ))}
+      </div>
+    );
+  return (
+    <>
+      <div>
+        <label className={CR_LABEL} htmlFor="pw-reset-input">
+          New Password
+        </label>
+        <div className="flex items-center gap-2">
+          <input
+            id="pw-reset-input"
+            autoFocus
+            type={show ? "text" : "password"}
+            value={pw}
+            onChange={(e) => setPw(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                onEnter();
+              }
+            }}
+            autoComplete="new-password"
+            style={WTU_NO_RING}
+            className={`${CR_FIELD} flex-1 font-mono`}
+          />
+          <button
+            type="button"
+            onClick={() => setShow((v) => !v)}
+            aria-label="Show / hide password"
+            className="grid h-12 w-12 shrink-0 place-items-center rounded-lg border border-slate-300 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50"
+          >
+            {show ? <Icons.EyeOff size={17} /> : <Icons.Eye size={17} />}
+          </button>
+          <button
+            type="button"
+            onClick={onGenerate}
+            className="h-12 shrink-0 whitespace-nowrap rounded-lg border border-slate-300 bg-white px-4 text-[15px] font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50"
+          >
+            Generate
+          </button>
+        </div>
+      </div>
+      <p className={CR_HINT}>{hint}</p>
+    </>
+  );
+}
+
 function CustomerResetPasswordModal({ row, onClose }) {
   const [pw, setPw] = useState(() => generateTempPassword());
   const [show, setShow] = useState(true);
@@ -21822,13 +22248,14 @@ function CustomerResetPasswordModal({ row, onClose }) {
   if (!row) return null;
 
   async function submit(e) {
-    e.preventDefault();
+    e?.preventDefault?.();
     if (busy) return;
-    if (pw.length < 6) return setError("Password ត្រូវមានយ៉ាងតិច 6 តួអក្សរ");
+    if (pw.length < 6)
+      return setError("Password must be at least 6 characters");
     setBusy(true);
     setError("");
     try {
-      if (!supabase) throw new Error("Supabase មិនទាន់តភ្ជាប់");
+      if (!supabase) throw new Error("Supabase is not connected");
       const { data: session } = await supabase.auth.getSession();
       const { data, error: fnError } = await supabase.functions.invoke(
         RESET_PASSWORD_FUNCTION,
@@ -21857,10 +22284,10 @@ function CustomerResetPasswordModal({ row, onClose }) {
       emitCBToast(
         "ok",
         "Password reset",
-        `${row.name || row.id} អាចចូលប្រើដោយ Password ថ្មីបានភ្លាម។`,
+        `${row.name || row.id} can now sign in with the new password right away.`,
       );
     } catch (err) {
-      const msg = await edgeFnErrorMessage(err, "មិនអាច Reset Password បានទេ");
+      const msg = await edgeFnErrorMessage(err, "Unable to reset password");
       setError(msg);
       emitCBToast("err", "Reset failed", msg);
     } finally {
@@ -21877,92 +22304,63 @@ function CustomerResetPasswordModal({ row, onClose }) {
   }
 
   return (
-    <AppModal
+    <CrModalShell
       title="Reset Password"
       subtitle={`${row.id} · ${row.name}${row.phone ? ` · ${row.phone}` : ""}`}
-      maxW="max-w-md"
       onClose={onClose}
-      onSubmit={submit}
       busy={busy}
       error={error}
-      submitLabel="Reset Password"
-      busyLabel="Resetting…"
       footer={
         done ? (
-          <button
-            type="button"
-            className="cbx-btn cbx-btn-primary"
-            onClick={onClose}
-          >
+          <button type="button" className={CR_BTN_PRIMARY} onClick={onClose}>
             Close
           </button>
-        ) : undefined
-      }
-    >
-      {done ? (
-        <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4 space-y-2">
-          <p className="text-sm font-semibold text-emerald-800">
-            Reset បានជោគជ័យ — សូមផ្តល់ Password ថ្មីនេះទៅអតិថិជន
-          </p>
-          <div className="flex items-center gap-2">
-            <code className="flex-1 rounded-lg bg-white border border-emerald-200 px-3 py-2 text-base font-bold tracking-wider text-slate-900 select-all">
-              {pw}
-            </code>
+        ) : (
+          <>
             <button
               type="button"
-              onClick={copyPw}
-              className="h-10 px-3 rounded-xl border border-emerald-200 bg-white text-sm font-semibold text-emerald-700"
+              className={CR_BTN_PRIMARY}
+              onClick={submit}
+              disabled={busy}
             >
-              {copied ? "Copied" : "Copy"}
+              {busy ? (
+                <Icons.Loader2 size={15} className="animate-spin" />
+              ) : (
+                <Icons.Check size={15} />
+              )}
+              {busy ? "Resetting…" : "Reset Password"}
             </button>
-          </div>
-          <p className="text-xs text-emerald-700/80">
-            Password នេះនឹងមិនបង្ហាញម្តងទៀតទេ បន្ទាប់ពីបិទផ្ទាំងនេះ។
-          </p>
-          <p className="text-xs text-emerald-700/80">
-            ពេលភ្ញៀវ login ដំបូង app នឹងបង្ខំឱ្យគាត់ប្តូរទៅ Password ផ្ទាល់ខ្លួន
-            ដូច្នេះ staff នឹងលែងដឹង Password របស់គាត់។
-          </p>
-        </div>
-      ) : (
-        <>
-          <label className="block">
-            <span className="text-xs font-semibold text-slate-500">
-              New Password
-            </span>
-            <div className="mt-1 flex items-center gap-2">
-              <input
-                autoFocus
-                type={show ? "text" : "password"}
-                value={pw}
-                onChange={(e) => setPw(e.target.value)}
-                className={`${INPUT_CLS} flex-1 font-mono`}
-                autoComplete="new-password"
-              />
-              <button
-                type="button"
-                onClick={() => setShow((v) => !v)}
-                className="h-10 w-10 rounded-xl border border-slate-200 grid place-items-center text-slate-500"
-                aria-label="Show / hide password"
-              >
-                {show ? <Icons.EyeOff size={16} /> : <Icons.Eye size={16} />}
-              </button>
-              <button
-                type="button"
-                onClick={() => setPw(generateTempPassword())}
-                className="h-10 px-3 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 whitespace-nowrap"
-              >
-                Generate
-              </button>
-            </div>
-          </label>
-          <p className="text-xs text-slate-500">
-            អតិថិជននឹងចូលប្រើដោយលេខទូរស័ព្ទ និង Password ថ្មីនេះភ្លាមៗ ហើយ
-            Password ចាស់លែងប្រើបាន។
-          </p>
-        </>
-      )}
-    </AppModal>
+            <button
+              type="button"
+              className={CR_BTN_GHOST}
+              onClick={onClose}
+              disabled={busy}
+            >
+              <Icons.X size={14} />
+              Cancel
+            </button>
+          </>
+        )
+      }
+    >
+      <PwResetBody
+        pw={pw}
+        setPw={setPw}
+        show={show}
+        setShow={setShow}
+        done={done}
+        copied={copied}
+        copyPw={copyPw}
+        onGenerate={() => setPw(generateTempPassword())}
+        onEnter={submit}
+        doneTitle="Reset successful — give this new password to the customer"
+        notes={[
+          "This password will not be shown again after you close this window.",
+          "On first login the app will force the customer to choose their own password, so staff will no longer know it.",
+        ]}
+        hint="The customer signs in with their phone number and this new password right away; the old password no longer works."
+      />
+    </CrModalShell>
   );
 }
 
@@ -21985,13 +22383,14 @@ function StaffResetPasswordModal({ row, onClose }) {
   if (!row) return null;
 
   async function submit(e) {
-    e.preventDefault();
+    e?.preventDefault?.();
     if (busy) return;
-    if (pw.length < 6) return setError("Password ត្រូវមានយ៉ាងតិច 6 តួអក្សរ");
+    if (pw.length < 6)
+      return setError("Password must be at least 6 characters");
     setBusy(true);
     setError("");
     try {
-      if (!supabase) throw new Error("Supabase មិនទាន់តភ្ជាប់");
+      if (!supabase) throw new Error("Supabase is not connected");
       const { data: session } = await supabase.auth.getSession();
       const { data, error: fnError } = await supabase.functions.invoke(
         RESET_STAFF_PASSWORD_FUNCTION,
@@ -22008,10 +22407,10 @@ function StaffResetPasswordModal({ row, onClose }) {
       emitCBToast(
         "ok",
         "Password reset",
-        `${row.name || row.email} អាចចូលប្រើដោយ Password ថ្មីបានភ្លាម។`,
+        `${row.name || row.email} can now sign in with the new password right away.`,
       );
     } catch (err) {
-      const msg = await edgeFnErrorMessage(err, "មិនអាច Reset Password បានទេ");
+      const msg = await edgeFnErrorMessage(err, "Unable to reset password");
       setError(msg);
       emitCBToast("err", "Reset failed", msg);
     } finally {
@@ -22028,89 +22427,62 @@ function StaffResetPasswordModal({ row, onClose }) {
   }
 
   return (
-    <AppModal
+    <CrModalShell
       title="Reset Staff Password"
       subtitle={`${row.name} · ${row.email}`}
-      maxW="max-w-md"
       onClose={onClose}
-      onSubmit={submit}
       busy={busy}
       error={error}
-      submitLabel="Reset Password"
-      busyLabel="Resetting…"
       footer={
         done ? (
-          <button
-            type="button"
-            className="cbx-btn cbx-btn-primary"
-            onClick={onClose}
-          >
+          <button type="button" className={CR_BTN_PRIMARY} onClick={onClose}>
             Close
           </button>
-        ) : undefined
-      }
-    >
-      {done ? (
-        <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-4 space-y-2">
-          <p className="text-sm font-semibold text-emerald-800">
-            Reset បានជោគជ័យ — សូមផ្តល់ Password ថ្មីនេះទៅ Staff
-          </p>
-          <div className="flex items-center gap-2">
-            <code className="flex-1 rounded-lg bg-white border border-emerald-200 px-3 py-2 text-base font-bold tracking-wider text-slate-900 select-all">
-              {pw}
-            </code>
+        ) : (
+          <>
             <button
               type="button"
-              onClick={copyPw}
-              className="h-10 px-3 rounded-xl border border-emerald-200 bg-white text-sm font-semibold text-emerald-700"
+              className={CR_BTN_PRIMARY}
+              onClick={submit}
+              disabled={busy}
             >
-              {copied ? "Copied" : "Copy"}
+              {busy ? (
+                <Icons.Loader2 size={15} className="animate-spin" />
+              ) : (
+                <Icons.Check size={15} />
+              )}
+              {busy ? "Resetting…" : "Reset Password"}
             </button>
-          </div>
-          <p className="text-xs text-emerald-700/80">
-            Password នេះនឹងមិនបង្ហាញម្តងទៀតទេ។ សូមណែនាំ Staff ឱ្យប្តូរទៅ
-            Password ផ្ទាល់ខ្លួនតាម Profile → Change Password។
-          </p>
-        </div>
-      ) : (
-        <>
-          <label className="block">
-            <span className="text-xs font-semibold text-slate-500">
-              New Password
-            </span>
-            <div className="mt-1 flex items-center gap-2">
-              <input
-                autoFocus
-                type={show ? "text" : "password"}
-                value={pw}
-                onChange={(e) => setPw(e.target.value)}
-                className={`${INPUT_CLS} flex-1 font-mono`}
-                autoComplete="new-password"
-              />
-              <button
-                type="button"
-                onClick={() => setShow((v) => !v)}
-                className="h-10 w-10 rounded-xl border border-slate-200 grid place-items-center text-slate-500"
-                aria-label="Show / hide password"
-              >
-                {show ? <Icons.EyeOff size={16} /> : <Icons.Eye size={16} />}
-              </button>
-              <button
-                type="button"
-                onClick={() => setPw(generateTempPassword(10))}
-                className="h-10 px-3 rounded-xl border border-slate-200 text-sm font-semibold text-slate-700 whitespace-nowrap"
-              >
-                Generate
-              </button>
-            </div>
-          </label>
-          <p className="text-xs text-slate-500">
-            Staff នឹងចូលប្រើដោយ Email និង Password ថ្មីនេះភ្លាមៗ ហើយ Password
-            ចាស់លែងប្រើបាន។
-          </p>
-        </>
-      )}
-    </AppModal>
+            <button
+              type="button"
+              className={CR_BTN_GHOST}
+              onClick={onClose}
+              disabled={busy}
+            >
+              <Icons.X size={14} />
+              Cancel
+            </button>
+          </>
+        )
+      }
+    >
+      <PwResetBody
+        pw={pw}
+        setPw={setPw}
+        show={show}
+        setShow={setShow}
+        done={done}
+        copied={copied}
+        copyPw={copyPw}
+        onGenerate={() => setPw(generateTempPassword(10))}
+        onEnter={submit}
+        doneTitle="Reset successful — give this new password to the staff member"
+        notes={[
+          "This password will not be shown again. Ask the staff member to change it to their own via Profile → Change Password.",
+        ]}
+        hint="The staff member signs in with their email and this new password right away; the old password no longer works."
+      />
+    </CrModalShell>
   );
 }
 
@@ -22230,7 +22602,8 @@ function RowDeleteModal({
   if (!label) return null;
 
   async function go(e) {
-    e.preventDefault();
+    e?.preventDefault?.();
+    if (busy) return;
     setBusy(true);
     setError("");
     try {
@@ -22246,43 +22619,79 @@ function RowDeleteModal({
   }
 
   return (
-    <AppModal
+    <CrModalShell
       title={archive ? "Archive customer" : "Delete"}
       danger
-      maxW="max-w-sm"
+      maxW="max-w-[520px]"
       onClose={onClose}
-      onSubmit={go}
       busy={busy}
       error={error}
-      submitTone="danger"
-      submitLabel={archive ? "Archive" : "Delete"}
-      busyLabel={archive ? "Archiving..." : "Deleting..."}
+      footer={
+        <>
+          <button
+            type="button"
+            onClick={go}
+            disabled={busy}
+            className="inline-flex h-11 items-center gap-1.5 rounded-lg bg-red-600 px-7 text-sm font-bold text-white transition hover:bg-red-700 disabled:opacity-40"
+          >
+            {busy && <Icons.Loader2 size={15} className="animate-spin" />}
+            {busy
+              ? archive
+                ? "Archiving..."
+                : "Deleting..."
+              : archive
+                ? "Archive"
+                : "Delete"}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className={CR_BTN_GHOST}
+          >
+            <Icons.X size={14} />
+            Cancel
+          </button>
+        </>
+      }
     >
       {archive ? (
         <>
-          <p className="cbx-modal-text">
-            Archive <b>{label}</b>? គណនីនឹងត្រូវផ្អាក មិនអាចចូលប្រើបានទេ ប៉ុន្តែ
-            Orders, Wallet, Address និងប្រវត្តិទាំងអស់ត្រូវបានរក្សា
-            ហើយអាចស្តារឡើងវិញបានពី Customer Recovery។
+          <p className="text-[15px] leading-relaxed text-slate-700">
+            Archive <b className="text-slate-900">{label}</b>? The account will
+            be suspended and can no longer sign in, but all Orders, Wallet,
+            Address and history are kept and can be restored from Customer
+            Recovery.
           </p>
-          <FormField label="Reason (optional)">
+          <div>
+            <label className={CR_LABEL} htmlFor="row-archive-reason">
+              Reason{" "}
+              <span className="font-normal text-slate-500">(optional)</span>
+            </label>
             <textarea
+              id="row-archive-reason"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               maxLength={300}
-              rows={2}
-              className="cbx-input"
+              rows={3}
+              style={WTU_NO_RING}
+              className="w-full resize-none rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-[15px] font-medium text-slate-900 shadow-sm transition placeholder:font-normal placeholder:text-slate-500 focus:border-slate-500"
             />
-          </FormField>
+          </div>
         </>
       ) : (
-        <p className="cbx-modal-text">
-          Are you sure you want to permanently delete <b>{label}</b>{" "}
-          ជាអចិន្ត្រៃយ៍មែនទេ? This action cannot be undone.
+        <p className="text-[15px] leading-relaxed text-slate-700">
+          Are you sure you want to permanently delete{" "}
+          <b className="text-slate-900">{label}</b>? This action cannot be
+          undone.
         </p>
       )}
-      {notice && <div className="cbx-alert is-warn">{notice}</div>}
-    </AppModal>
+      {notice && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {notice}
+        </div>
+      )}
+    </CrModalShell>
   );
 }
 
@@ -23781,7 +24190,7 @@ function ListPage({
             archive={path === "/customers"}
             notice={
               path === "/customers" && deletingOrderCount?.total > 0
-                ? `Order សរុប ${deletingOrderCount.total} (China ${deletingOrderCount.tk} · Indo ${deletingOrderCount.air}) នៅតែភ្ជាប់ជាមួយគណនីនេះ ហើយនឹងមិនបាត់ឡើយ។ (These orders stay linked to the archived account.)`
+                ? `${deletingOrderCount.total} orders in total (China ${deletingOrderCount.tk} · Indo ${deletingOrderCount.air}) stay linked to the archived account and will not be lost.`
                 : null
             }
             onConfirm={async (reason) => {
@@ -28953,34 +29362,66 @@ function DeletePackageModal({ open, tk, onClose, onDeleted }) {
     }
   }
 
+  const matches = typed.trim() === tk;
   return (
-    <AppModal
+    <CrModalShell
       title="Delete Package"
       danger
+      maxW="max-w-[520px]"
       onClose={onClose}
-      onSubmit={(e) => {
-        e.preventDefault();
-        confirm();
-      }}
       busy={busy}
       error={error}
-      submitTone="danger"
-      submitLabel="Delete"
-      busyLabel="Deleting..."
-      submitDisabled={typed.trim() !== tk}
+      footer={
+        <>
+          <button
+            type="submit"
+            form="delete-package-form"
+            disabled={busy || !matches}
+            className="inline-flex h-11 items-center gap-1.5 rounded-lg bg-red-600 px-7 text-sm font-bold text-white transition hover:bg-red-700 disabled:opacity-40"
+          >
+            {busy && <Icons.Loader2 size={15} className="animate-spin" />}
+            {busy ? "Deleting..." : "Delete"}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className={CR_BTN_GHOST}
+          >
+            <Icons.X size={14} />
+            Cancel
+          </button>
+        </>
+      }
     >
-      <p className="cbx-modal-text">
-        Are you sure you want to permanently delete <b>{tk}</b>{" "}
-        ជាអចិន្ត្រៃយ៍មែនទេ? This action cannot be undone.
-      </p>
-      <FormField label="Enter TK to confirm" required>
-        <input
-          className="cbx-input"
-          value={typed}
-          onChange={(e) => setTyped(e.target.value)}
-        />
-      </FormField>
-    </AppModal>
+      <form
+        id="delete-package-form"
+        className="space-y-5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (matches && !busy) confirm();
+        }}
+      >
+        <p className="text-[15px] leading-relaxed text-slate-700">
+          Are you sure you want to permanently delete{" "}
+          <b className="text-slate-900">{tk}</b>? This action cannot be undone.
+        </p>
+        <div>
+          <label className={CR_LABEL} htmlFor="del-pkg-tk">
+            Enter TK to confirm <span className="text-red-500">*</span>
+          </label>
+          <input
+            id="del-pkg-tk"
+            autoFocus
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            autoComplete="off"
+            style={WTU_NO_RING}
+            className={CR_FIELD}
+          />
+        </div>
+      </form>
+    </CrModalShell>
   );
 }
 
@@ -53302,7 +53743,7 @@ function GlobalConfirmHost() {
   }
   return (
     <div
-      className="fixed inset-0 z-[200] bg-slate-950/45 backdrop-blur-sm flex items-center justify-center p-4"
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[3px]"
       onClick={() => close(false)}
       role="presentation"
     >
@@ -53311,47 +53752,47 @@ function GlobalConfirmHost() {
         aria-modal="true"
         aria-labelledby="cb-confirm-title"
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-sm rounded-2xl bg-white shadow-2xl overflow-hidden"
+        className="flex max-h-[92vh] w-full max-w-[560px] flex-col rounded-2xl bg-white shadow-2xl"
       >
-        <div className="p-5 flex gap-3.5">
-          <div
-            className={`w-11 h-11 rounded-xl grid place-items-center shrink-0 ${danger ? "bg-red-50 text-red-600" : "bg-blue-50 text-blue-600"}`}
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-7 py-5">
+          <h3
+            id="cb-confirm-title"
+            className={`text-xl font-bold leading-snug ${danger ? "text-red-700" : "text-slate-950"}`}
           >
-            {danger ? (
-              <Icons.Trash2 size={20} />
-            ) : (
-              <Icons.AlertTriangle size={20} />
-            )}
-          </div>
-          <div className="min-w-0">
-            <h3
-              id="cb-confirm-title"
-              className="font-bold text-base text-slate-900"
-            >
-              {req.title || "Are you sure?"}
-            </h3>
-            {req.message && (
-              <p className="text-sm text-slate-500 mt-1 break-words">
-                {req.message}
-              </p>
-            )}
-          </div>
+            {req.title || "Are you sure?"}
+          </h3>
+          <button
+            type="button"
+            onClick={() => close(false)}
+            aria-label="Close"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-700 transition hover:bg-slate-100"
+          >
+            <Icons.X size={18} />
+          </button>
         </div>
-        <div className="px-5 py-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-2">
+        {req.message && (
+          <div className="overflow-y-auto px-7 py-6">
+            <p className="break-words text-[15px] leading-relaxed text-slate-700">
+              {req.message}
+            </p>
+          </div>
+        )}
+        <div className="flex justify-end gap-2 border-t border-slate-100 px-7 py-4">
+          <button
+            type="button"
+            onClick={() => close(true)}
+            className={`inline-flex h-11 items-center gap-1.5 rounded-lg px-7 text-sm font-bold text-white transition ${danger ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700"}`}
+          >
+            {req.confirmText || "Delete"}
+          </button>
           <button
             type="button"
             autoFocus
             onClick={() => close(false)}
-            className="h-10 px-4 rounded-xl border border-slate-200 bg-white text-sm font-semibold text-slate-700"
+            className={CR_BTN_GHOST}
           >
+            <Icons.X size={14} />
             {req.cancelText || "Cancel"}
-          </button>
-          <button
-            type="button"
-            onClick={() => close(true)}
-            className={`h-10 px-5 rounded-xl text-white text-sm font-bold ${danger ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700"}`}
-          >
-            {req.confirmText || "Delete"}
           </button>
         </div>
       </div>
@@ -68678,8 +69119,6 @@ function SlaNotifIcon({ level }) {
 }
 
 function NotificationCenterPage() {
-  const navigate = useNavigate();
-  const { user: authUser } = useAuth();
   const { items, loading, error } = useSlaNotifications({
     includeResolved: true,
     limit: 500,
@@ -68812,23 +69251,9 @@ function NotificationCenterPage() {
                         Resolved
                       </span>
                     )}
-                    {slaNotifCanOpen(authUser, n) ? (
-                      <button
-                        type="button"
-                        className="font-semibold text-blue-600 hover:underline"
-                        onClick={() => {
-                          if (!n.read_at)
-                            slaNotifMarkRead([n.id]).catch(() => {});
-                          navigate(slaNotifPath(n));
-                        }}
-                      >
-                        {slaNotifRef(n)}
-                      </button>
-                    ) : (
-                      <span className="font-semibold text-slate-600">
-                        {slaNotifRef(n)}
-                      </span>
-                    )}
+                    <span className="font-semibold text-slate-600">
+                      {slaNotifRef(n)}
+                    </span>
                     <span>{timeAgoLabel(n.created_at)}</span>
                   </div>
                 </div>
@@ -74456,46 +74881,39 @@ function StaffDetailPage() {
                   className={STAFF_INPUT}
                 />
               </label>
-              <label className="block">
+              <div className="block">
                 <div className="text-xs font-semibold text-slate-500 mb-1.5">
                   Department
                 </div>
-                <select
+                <CbSelect
+                  compact
                   value={form.department}
                   disabled={!canEdit}
-                  onChange={(e) =>
-                    setForm({ ...form, department: e.target.value })
-                  }
-                  className={STAFF_INPUT}
-                >
-                  <option value="">— None —</option>
-                  {deptOptions.map((d) => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="block">
+                  allowClear
+                  clearLabel="— None —"
+                  placeholder="— None —"
+                  options={deptOptions.map((d) => ({ value: d, label: d }))}
+                  onChange={(v) => setForm({ ...form, department: v })}
+                />
+              </div>
+              <div className="block">
                 <div className="text-xs font-semibold text-slate-500 mb-1.5">
                   Warehouse
                 </div>
-                <select
+                <CbSelect
+                  compact
                   value={form.warehouse_code}
                   disabled={!canEdit}
-                  onChange={(e) =>
-                    setForm({ ...form, warehouse_code: e.target.value })
-                  }
-                  className={STAFF_INPUT}
-                >
-                  <option value="">— None —</option>
-                  {whOptions.map((w) => (
-                    <option key={w.code} value={w.code}>
-                      {w.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  allowClear
+                  clearLabel="— None —"
+                  placeholder="— None —"
+                  options={whOptions.map((w) => ({
+                    value: w.code,
+                    label: w.label,
+                  }))}
+                  onChange={(v) => setForm({ ...form, warehouse_code: v })}
+                />
+              </div>
             </div>
           </section>
           <section className="pt-6 border-t border-slate-100">
@@ -74504,23 +74922,18 @@ function StaffDetailPage() {
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <StaffField label="Login Account (Email)">{row.email}</StaffField>
-              <label className="block">
+              <div className="block">
                 <div className="text-xs font-semibold text-slate-500 mb-1.5">
                   Role
                 </div>
-                <select
+                <CbSelect
+                  compact
                   value={form.role}
                   disabled={!canEdit}
-                  onChange={(e) => setForm({ ...form, role: e.target.value })}
-                  className={STAFF_INPUT}
-                >
-                  {roleOptions.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  options={roleOptions.map((r) => ({ value: r, label: r }))}
+                  onChange={(v) => setForm({ ...form, role: v })}
+                />
+              </div>
               <StaffField label="Account Status">
                 <StatusBadge label={row.status || "Active"} />
               </StaffField>
@@ -82617,18 +83030,26 @@ function CustomerRecoveryDetail({ row, user, onClose, onChanged }) {
   const canPhone =
     !isArchived && !isPurged && hasPermission(user, "customer.phone_change");
 
+  // Esc closes the detail, but not while Restore / Change Phone is open on top
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && !modal && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [modal, onClose]);
+
+  const caption = "mb-2 block text-sm font-semibold text-slate-600";
   const Field = ({ label, children }) => (
     <div>
-      <div className="text-[11px] uppercase text-slate-400">{label}</div>
-      <div className="text-sm text-slate-800">{children || "—"}</div>
+      <span className={caption}>{label}</span>
+      <div className="flex min-h-12 items-center rounded-lg border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-[15px] font-medium text-slate-900">
+        {children || "—"}
+      </div>
     </div>
   );
+  const hasActions = canRestore || canPhone;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-ink-900/40 px-4"
-      onClick={onClose}
-    >
+    <>
       {modal === "restore" && (
         <CustomerRestoreModal
           row={row}
@@ -82644,77 +83065,102 @@ function CustomerRecoveryDetail({ row, user, onClose, onChanged }) {
           onDone={onChanged}
         />
       )}
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-md bg-white shadow-lg"
-      >
-        <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-          <h3 className="font-display text-lg font-bold">{row.name || "—"}</h3>
-          <button type="button" onClick={onClose} className="text-slate-400">
-            ✕
-          </button>
-        </div>
-        <div className="space-y-4 px-5 py-4">
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Customer ID">
-              {fmtCustomerId(row.customer_code)}
-            </Field>
-            <Field label="Status">{row.status}</Field>
-            <Field label="Phone">{row.phone}</Field>
-            <Field label="Email">{row.email}</Field>
-            <Field label="Archived on">{cdDate(row.archived_at)}</Field>
-            <Field label="Archived by">{row.archived_by_name}</Field>
-            <Field label="Reason">{row.archive_reason}</Field>
-            <Field label="Status before archive">
-              {row.status_before_archive}
-            </Field>
-          </div>
-          <div>
-            <div className="mb-1 text-[11px] uppercase text-slate-400">
-              Preserved records
+      {createPortal(
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[3px]"
+          role="dialog"
+          aria-modal="true"
+          aria-label={row.name || "Customer"}
+          onClick={onClose}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="flex max-h-[92vh] w-full max-w-[640px] flex-col rounded-2xl bg-white shadow-2xl"
+          >
+            <div className="flex items-center justify-between border-b border-slate-200 px-7 py-5">
+              <h3 className="truncate text-xl font-bold text-slate-950">
+                {row.name || "—"}
+              </h3>
+              <button
+                type="button"
+                onClick={onClose}
+                aria-label="Close"
+                className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-700 transition hover:bg-slate-100"
+              >
+                <Icons.X size={18} />
+              </button>
             </div>
-            <div className="grid grid-cols-4 gap-2 text-center text-xs">
-              {[
-                ["TK / Packages", counts?.tk],
-                ["CN Orders", counts?.cn],
-                ["Wallet tx", counts?.wallet],
-                ["Addresses", counts?.addr],
-              ].map(([label, v]) => (
-                <div
-                  key={label}
-                  className="rounded-md border border-slate-200 px-2 py-2"
-                >
-                  <div className="text-base font-semibold text-slate-800">
-                    {counts ? v : "…"}
-                  </div>
-                  <div className="text-slate-500">{label}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-          {audit.length > 0 && (
-            <div>
-              <div className="mb-1 text-[11px] uppercase text-slate-400">
-                Audit trail
+
+            <div className="overflow-y-auto px-7 py-6">
+              <div className="grid gap-5 sm:grid-cols-2">
+                <Field label="Customer ID">
+                  {fmtCustomerId(row.customer_code)}
+                </Field>
+                <Field label="Status">{row.status}</Field>
+                <Field label="Phone">{row.phone}</Field>
+                <Field label="Email">{row.email}</Field>
+                <Field label="Archived on">{cdDate(row.archived_at)}</Field>
+                <Field label="Archived by">{row.archived_by_name}</Field>
+                <Field label="Reason">{row.archive_reason}</Field>
+                <Field label="Status before archive">
+                  {row.status_before_archive}
+                </Field>
               </div>
-              <ul className="space-y-1 text-xs text-slate-600">
-                {audit.map((a, i) => (
-                  <li key={i}>
-                    {cdDate(a.created_at)} · <b>{a.action}</b>
-                    {a.actor_name ? ` · ${a.actor_name}` : ""}
-                    {a.reason ? ` · ${a.reason}` : ""}
-                  </li>
-                ))}
-              </ul>
+
+              <div className="mt-6">
+                <span className={caption}>Preserved records</span>
+                <div className="grid grid-cols-2 gap-3 text-center sm:grid-cols-4">
+                  {[
+                    ["TK / Packages", counts?.tk],
+                    ["CN Orders", counts?.cn],
+                    ["Wallet tx", counts?.wallet],
+                    ["Addresses", counts?.addr],
+                  ].map(([label, v]) => (
+                    <div
+                      key={label}
+                      className="rounded-xl border border-slate-200 bg-white px-2 py-3 shadow-sm"
+                    >
+                      <div className="text-xl font-bold text-slate-900">
+                        {counts ? v : "…"}
+                      </div>
+                      <div className="text-sm text-slate-600">{label}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {audit.length > 0 && (
+                <div className="mt-6">
+                  <span className={caption}>Audit trail</span>
+                  <ul className="space-y-1.5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                    {audit.map((a, i) => (
+                      <li key={i}>
+                        {cdDate(a.created_at)} · <b>{a.action}</b>
+                        {a.actor_name ? ` · ${a.actor_name}` : ""}
+                        {a.reason ? ` · ${a.reason}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <p className="mt-5 text-sm text-slate-600">
+                {isArchived
+                  ? "Restore the account first; then use Reset Password on the Customers page if the customer forgot it. Phone changes need an active account."
+                  : `Password reset: use Reset Password on the Customers page. ${
+                      isSuperUser
+                        ? "As Super Admin you can change the phone number directly after verifying the customer."
+                        : "Changing the phone number needs an OTP sent to the new number."
+                    }`}
+              </p>
             </div>
-          )}
-          <div>
-            <div className="flex flex-wrap gap-2">
+
+            <div className="flex justify-end gap-2 border-t border-slate-100 px-7 py-4">
               {canRestore && (
                 <button
                   type="button"
                   onClick={() => setModal("restore")}
-                  className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-medium text-white"
+                  className="h-11 rounded-lg bg-blue-600 px-6 text-sm font-bold text-white transition hover:bg-blue-700"
                 >
                   Restore Account
                 </button>
@@ -82723,25 +83169,112 @@ function CustomerRecoveryDetail({ row, user, onClose, onChanged }) {
                 <button
                   type="button"
                   onClick={() => setModal("phone")}
-                  className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-800"
+                  className={`h-11 rounded-lg px-6 text-sm font-bold transition ${
+                    canRestore
+                      ? "border border-slate-300 text-slate-900 shadow-sm hover:bg-slate-50"
+                      : "bg-blue-600 text-white hover:bg-blue-700"
+                  }`}
                 >
                   Change Phone Number
                 </button>
               )}
+              <button
+                type="button"
+                onClick={onClose}
+                className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-slate-300 px-5 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50"
+              >
+                <Icons.X size={14} />
+                {hasActions ? "Cancel" : "Close"}
+              </button>
             </div>
-            <p className="mt-2 text-[11px] text-slate-400">
-              {isArchived
-                ? "Restore the account first; then use Reset Password on the Customers page if the customer forgot it. Phone changes need an active account."
-                : `Password reset: use Reset Password on the Customers page. ${
-                    isSuperUser
-                      ? "As Super Admin you can change the phone number directly after verifying the customer."
-                      : "Changing the phone number needs an OTP sent to the new number."
-                  }`}
-            </p>
           </div>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
+// Shared look for the customer-recovery dialogs (Restore / Change phone) —
+// same shell as the Finance "Service Charge Request" form.
+const CR_LABEL = "mb-2 block text-[15px] font-semibold text-slate-900";
+const CR_FIELD =
+  "h-12 w-full rounded-lg border border-slate-300 bg-white px-3.5 text-[15px] font-medium text-slate-900 shadow-sm transition placeholder:font-normal placeholder:text-slate-500 focus:border-slate-500";
+const CR_BOX = "space-y-3 rounded-xl border border-slate-200 p-4";
+const CR_BOX_TITLE = "text-[15px] font-semibold text-slate-900";
+const CR_HINT = "text-sm leading-relaxed text-slate-600";
+const CR_BTN_PRIMARY =
+  "inline-flex h-11 items-center gap-1.5 rounded-lg bg-blue-600 px-7 text-sm font-bold text-white transition hover:bg-blue-700 disabled:opacity-40";
+const CR_BTN_GHOST =
+  "inline-flex h-11 items-center gap-1.5 rounded-lg border border-slate-300 px-5 text-sm font-semibold text-slate-900 shadow-sm transition hover:bg-slate-50 disabled:opacity-50";
+
+function CrModalShell({
+  title,
+  subtitle,
+  maxW = "max-w-[640px]",
+  danger = false,
+  onClose,
+  busy = false,
+  error,
+  children,
+  footer,
+}) {
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && !busy && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-[3px]"
+      role="dialog"
+      aria-modal="true"
+      aria-label={typeof title === "string" ? title : undefined}
+      onClick={() => !busy && onClose()}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className={`flex max-h-[92vh] w-full ${maxW} flex-col rounded-2xl bg-white shadow-2xl`}
+      >
+        <div className="flex items-center justify-between border-b border-slate-200 px-7 py-5">
+          <div className="min-w-0">
+            <h3
+              className={`truncate text-xl font-bold ${danger ? "text-red-700" : "text-slate-950"}`}
+            >
+              {title}
+            </h3>
+            {subtitle && (
+              <p className="mt-0.5 truncate text-sm text-slate-600">
+                {subtitle}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            aria-label="Close"
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-700 transition hover:bg-slate-100"
+          >
+            <Icons.X size={18} />
+          </button>
         </div>
+        <div className="space-y-5 overflow-y-auto px-7 py-6">
+          {children}
+          {error && (
+            <p className="text-sm font-semibold text-red-600" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+        {footer && (
+          <div className="flex justify-end gap-2 border-t border-slate-100 px-7 py-4">
+            {footer}
+          </div>
+        )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -82749,36 +83282,34 @@ function CustomerRecoveryDetail({ row, user, onClose, onChanged }) {
 // attests the check; the attestation is stored in the audit trail.
 function CrVerifyFields({ v, setV }) {
   return (
-    <div className="space-y-2 rounded-md border border-slate-200 p-3">
-      <div className="text-xs font-semibold text-slate-700">
+    <div className={CR_BOX}>
+      <div className={CR_BOX_TITLE}>
         Customer identity verification (required)
       </div>
-      <select
+      <CbSelect
         value={v.method}
-        onChange={(e) => setV({ ...v, method: e.target.value })}
-        className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
-      >
-        <option value="">How was the customer verified?</option>
-        {CR_VERIFY_METHODS.map(([k, label]) => (
-          <option key={k} value={k}>
-            {label}
-          </option>
-        ))}
-      </select>
+        onChange={(m) => setV({ ...v, method: m })}
+        options={CR_VERIFY_METHODS.map(([k, label]) => ({
+          value: k,
+          label,
+        }))}
+        placeholder="How was the customer verified?"
+      />
       <textarea
         value={v.note}
         onChange={(e) => setV({ ...v, note: e.target.value })}
-        rows={2}
+        rows={3}
         maxLength={500}
         placeholder="What did you check? (e.g. matched ID card, last order, address)"
-        className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
+        style={WTU_NO_RING}
+        className="w-full resize-none rounded-lg border border-slate-300 bg-white px-3.5 py-3 text-[15px] font-medium text-slate-900 shadow-sm transition placeholder:font-normal placeholder:text-slate-500 focus:border-slate-500"
       />
-      <label className="flex items-start gap-2 text-xs text-slate-700">
+      <label className="flex cursor-pointer items-start gap-2.5 text-[15px] text-slate-800">
         <input
           type="checkbox"
           checked={v.confirmed}
           onChange={(e) => setV({ ...v, confirmed: e.target.checked })}
-          className="mt-0.5"
+          className="mt-1 h-4 w-4 accent-blue-600"
         />
         I confirm this person is the owner of the account.
       </label>
@@ -82813,38 +83344,34 @@ function CustomerRestoreModal({ row, onClose, onDone }) {
     }
   };
   return (
-    <AppModal
+    <CrModalShell
       title={`Restore ${fmtCustomerId(row.customer_code)}`}
-      maxW="max-w-md"
       onClose={result ? onDone : onClose}
       busy={busy}
       error={result ? "" : error}
       footer={
         result ? (
-          <button
-            type="button"
-            className="cbx-btn cbx-btn-primary"
-            onClick={onDone}
-          >
+          <button type="button" className={CR_BTN_PRIMARY} onClick={onDone}>
             Done
           </button>
         ) : (
           <>
             <button
               type="button"
-              className="cbx-btn"
-              onClick={onClose}
-              disabled={busy}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="cbx-btn cbx-btn-primary"
+              className={CR_BTN_PRIMARY}
               onClick={submit}
               disabled={busy}
             >
               {busy ? "Restoring..." : "Restore"}
+            </button>
+            <button
+              type="button"
+              className={CR_BTN_GHOST}
+              onClick={onClose}
+              disabled={busy}
+            >
+              <Icons.X size={14} />
+              Cancel
             </button>
           </>
         )
@@ -82852,11 +83379,11 @@ function CustomerRestoreModal({ row, onClose, onDone }) {
     >
       {result ? (
         <>
-          <p className="cbx-modal-text">
+          <p className="text-[15px] text-slate-700">
             Account restored. Orders, wallet and history are unchanged.
           </p>
           {result.needs_password_reset && (
-            <div className="cbx-alert is-warn">
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
               The login account had to be re-created. Set a new password with
               Reset Password on the Customers page before the customer logs in.
             </div>
@@ -82864,14 +83391,14 @@ function CustomerRestoreModal({ row, onClose, onDone }) {
         </>
       ) : (
         <>
-          <p className="cbx-modal-text">
+          <p className="text-[15px] text-slate-700">
             Restores {row.name || "this customer"} with the original ID and all
             records. Nothing is re-created or replayed.
           </p>
           <CrVerifyFields v={v} setV={setV} />
         </>
       )}
-    </AppModal>
+    </CrModalShell>
   );
 }
 
@@ -82956,79 +83483,85 @@ function CustomerPhoneChangeModal({ row, onClose, onDone, isSuper = false }) {
           onClick: confirm,
           disabled: code.length !== 6,
         };
+
+  const phoneBlock = (
+    <>
+      <div className="text-[15px] text-slate-600">
+        Current number:{" "}
+        <b className="font-semibold text-slate-900">{row.phone || "—"}</b>
+      </div>
+      <div>
+        <label className={CR_LABEL} htmlFor="cr-new-phone">
+          New phone number
+        </label>
+        <input
+          id="cr-new-phone"
+          value={newPhone}
+          onChange={(e) => setNewPhone(e.target.value)}
+          placeholder="New phone number"
+          style={WTU_NO_RING}
+          className={CR_FIELD}
+        />
+      </div>
+      <CrVerifyFields v={v} setV={setV} />
+    </>
+  );
+
   return (
-    <AppModal
+    <CrModalShell
       title={`Change phone · ${fmtCustomerId(row.customer_code)}`}
-      maxW="max-w-md"
       onClose={done ? onDone : onClose}
       busy={busy}
       error={done ? "" : error}
       footer={
         done ? (
-          <button
-            type="button"
-            className="cbx-btn cbx-btn-primary"
-            onClick={onDone}
-          >
+          <button type="button" className={CR_BTN_PRIMARY} onClick={onDone}>
             Done
           </button>
         ) : (
           <>
             <button
               type="button"
-              className="cbx-btn"
-              onClick={onClose}
-              disabled={busy}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="cbx-btn cbx-btn-primary"
+              className={CR_BTN_PRIMARY}
               onClick={primary.onClick}
               disabled={busy || primary.disabled}
             >
               {busy ? primary.busyLabel : primary.label}
+            </button>
+            <button
+              type="button"
+              className={CR_BTN_GHOST}
+              onClick={onClose}
+              disabled={busy}
+            >
+              <Icons.X size={14} />
+              Cancel
             </button>
           </>
         )
       }
     >
       {done ? (
-        <p className="cbx-modal-text">
+        <p className="text-[15px] text-slate-700">
           Phone number updated. The customer now logs in with the new number and
           the same password.
         </p>
       ) : isSuper ? (
         <>
-          <div className="text-xs text-slate-500">
-            Current number: <b>{row.phone || "—"}</b>
-          </div>
-          <input
-            value={newPhone}
-            onChange={(e) => setNewPhone(e.target.value)}
-            placeholder="New phone number"
-            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
-          />
-          <CrVerifyFields v={v} setV={setV} />
-          <div className="space-y-2 rounded-md border border-slate-200 p-3">
-            <div className="text-xs font-semibold text-slate-700">
-              New number check (required)
-            </div>
-            <select
+          {phoneBlock}
+          <div className={CR_BOX}>
+            <div className={CR_BOX_TITLE}>New number check (required)</div>
+            <CbSelect
               value={nc}
-              onChange={(e) => setNc(e.target.value)}
-              className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
-            >
-              <option value="">How did you check the new number?</option>
-              {CR_NEW_NUMBER_CHECKS.map(([k, label]) => (
-                <option key={k} value={k}>
-                  {label}
-                </option>
-              ))}
-            </select>
+              onChange={setNc}
+              options={CR_NEW_NUMBER_CHECKS.map(([k, label]) => ({
+                value: k,
+                label,
+              }))}
+              placeholder="How did you check the new number?"
+            />
           </div>
-          <p className="text-[11px] text-slate-400">
+          <p className={CR_HINT}>
             Super Admin change: no SMS code is sent. The customer logs in with
             the new number and the same password. Your name, both checks and the
             masked numbers are saved in the audit trail.
@@ -83036,38 +83569,36 @@ function CustomerPhoneChangeModal({ row, onClose, onDone, isSuper = false }) {
         </>
       ) : !challenge ? (
         <>
-          <div className="text-xs text-slate-500">
-            Current number: <b>{row.phone || "—"}</b>
-          </div>
-          <input
-            value={newPhone}
-            onChange={(e) => setNewPhone(e.target.value)}
-            placeholder="New phone number"
-            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm"
-          />
-          <CrVerifyFields v={v} setV={setV} />
-          <p className="text-[11px] text-slate-400">
+          {phoneBlock}
+          <p className={CR_HINT}>
             A 6-digit code is sent to the new number. Enter it on the next step
             to prove the customer controls that number.
           </p>
         </>
       ) : (
         <>
-          <p className="cbx-modal-text">
+          <p className="text-[15px] text-slate-700">
             Code sent to <b>{challenge.sent_to}</b>. It expires in 10 minutes.
           </p>
-          <input
-            value={code}
-            onChange={(e) =>
-              setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
-            }
-            inputMode="numeric"
-            placeholder="6-digit code"
-            className="w-full rounded-md border border-slate-200 px-3 py-2 text-sm tracking-widest"
-          />
+          <div>
+            <label className={CR_LABEL} htmlFor="cr-code">
+              Verification code
+            </label>
+            <input
+              id="cr-code"
+              value={code}
+              onChange={(e) =>
+                setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+              }
+              inputMode="numeric"
+              placeholder="6-digit code"
+              style={WTU_NO_RING}
+              className={`${CR_FIELD} tracking-widest`}
+            />
+          </div>
         </>
       )}
-    </AppModal>
+    </CrModalShell>
   );
 }
 
