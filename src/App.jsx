@@ -5556,6 +5556,12 @@ const DATE_PRESETS = [
   { key: "thisMonth", label: "This month" },
   { key: "lastMonth", label: "Last month" },
 ];
+// Longer windows, offered only where a picker opts in (Monthly Overview).
+const DATE_PRESETS_LONG = [
+  { key: "m6", label: "6 months" },
+  { key: "m12", label: "12 months" },
+  { key: "thisYear", label: "This year" },
+];
 
 // "YYYY-MM-DD" in the viewer's LOCAL time zone (slice(0,10) of an ISO string
 // is UTC, which would shift rows registered 12am-7am in Cambodia by a day).
@@ -5592,6 +5598,12 @@ function resolveDateRange({ preset, from, to }) {
       return { from: day(y, m, 1), to: day(y, m, d) };
     case "lastMonth":
       return { from: day(y, m - 1, 1), to: day(y, m, 0) };
+    case "m6":
+      return { from: day(y, m - 5, 1), to: day(y, m, d) };
+    case "m12":
+      return { from: day(y, m - 11, 1), to: day(y, m, d) };
+    case "thisYear":
+      return { from: day(y, 0, 1), to: day(y, m, d) };
     default:
       return { from: from || "", to: to || "" };
   }
@@ -5606,7 +5618,9 @@ function dateInRange(iso, range) {
 }
 
 function dateRangeLabel(range) {
-  const preset = DATE_PRESETS.find((p) => p.key === range.preset);
+  const preset = [...DATE_PRESETS, ...DATE_PRESETS_LONG].find(
+    (p) => p.key === range.preset,
+  );
   if (preset) return preset.label;
   if (range.from || range.to)
     return `${range.from || "…"} → ${range.to || "…"}`;
@@ -5653,7 +5667,12 @@ function CreatedAtCell({ iso }) {
   );
 }
 
-function DateRangeFilter({ label = "Created At", value, onChange }) {
+function DateRangeFilter({
+  label = "Created At",
+  value,
+  onChange,
+  presets = DATE_PRESETS,
+}) {
   const val = value || EMPTY_DATE_RANGE;
   const [open, setOpen] = useState(false);
   const [calOpen, setCalOpen] = useState(false);
@@ -5901,7 +5920,7 @@ function DateRangeFilter({ label = "Created At", value, onChange }) {
         >
           <div className="flex w-[min(92vw,420px)] rounded-xl border border-mist-200 bg-white shadow-xl">
             <div className="w-[130px] shrink-0 border-r border-mist-100 p-2">
-              {DATE_PRESETS.map((pr) => (
+              {presets.map((pr) => (
                 <button
                   key={pr.key}
                   type="button"
@@ -25174,7 +25193,7 @@ function Login() {
             <span>
               Developed by{" "}
               <span className="font-semibold tracking-tight text-ink-900">
-                Thon KH
+                JZE-Team Dev
               </span>
             </span>
           </div>
@@ -25681,6 +25700,18 @@ function finMoney(value, currency = "USD") {
     maximumFractionDigits: 2,
   }).format(Number(value) || 0);
 }
+// The day a CN order was REFUNDED (not the day it was created / paid).
+// Source: the latest cn_order_history row whose status/event is a refund,
+// then refunded_at, then updated_at as a last resort.
+function finRefundDate(row, refundDates) {
+  return (
+    refundDates?.get(String(row?.id)) ||
+    row?.refunded_at ||
+    row?.updated_at ||
+    row?.created_at ||
+    null
+  );
+}
 function finIsRefunded(row) {
   const s = String(row?.status || row?.payment_status || "").toLowerCase();
   return (
@@ -25945,6 +25976,8 @@ const FIN_MONTHLY_SERIES = [
   { key: "refund", label: "Order Refund", color: "#f43f5e" },
 ];
 
+const FIN_MONTHLY_PRESETS = [...DATE_PRESETS, ...DATE_PRESETS_LONG];
+
 function finMonthKey(raw) {
   if (!raw) return null;
   const d = new Date(raw);
@@ -25959,11 +25992,12 @@ function finNiceStep(v) {
   return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * pow;
 }
 
-function FinancialMonthlyChart({ cn, wallet, loading }) {
+function FinancialMonthlyChart({ cn, wallet, refundDates, loading }) {
   const [mode, setMode] = useState("amount"); // "amount" | "count"
-  // Same date picker as every list page (presets + two-month calendar). Empty
-  // = the default view: the last 6 calendar months.
-  const [range, setRange] = useState(EMPTY_DATE_RANGE);
+  // Same date picker as every list page (presets + two-month calendar), with
+  // 6 months / 12 months / This year added. Opens on Today; clearing the
+  // filter falls back to the last 6 calendar months.
+  const [range, setRange] = useState({ preset: "today", from: "", to: "" });
   const [hidden, setHidden] = useState([]);
   const [hovered, setHovered] = useState(null);
   // Real plot width, so the value labels can adapt to the room each bar has.
@@ -26045,22 +26079,28 @@ function FinancialMonthlyChart({ cn, wallet, loading }) {
       m[k].count += 1;
     };
     (cn || []).forEach((r) => {
+      const refunded = finIsRefunded(r);
+      // Order Refund is counted on the day the refund was made.
+      if (refunded) {
+        const rd = finRefundDate(r, refundDates);
+        const rm = byKey.get(finMonthKey(rd));
+        if (rm && inDays(rd))
+          add(
+            rm,
+            "refund",
+            finNum(
+              r.refund_amount_usd,
+              r.refunded_amount_usd,
+              r.amount_refunded_usd,
+              r.amount_paid_usd,
+            ) ?? 0,
+          );
+      }
+      // Orders / Sales / Complete stay on the day the order was created.
       const m = byKey.get(finMonthKey(r.created_at));
       if (!m || !inDays(r.created_at)) return;
-      const refunded = finIsRefunded(r);
       add(m, "orders", finCharge(r));
-      if (refunded) {
-        add(
-          m,
-          "refund",
-          finNum(
-            r.refund_amount_usd,
-            r.refunded_amount_usd,
-            r.amount_refunded_usd,
-            r.amount_paid_usd,
-          ) ?? 0,
-        );
-      } else {
+      if (!refunded) {
         // Order Sales = the customer has paid: every stage from Approve
         // Purchase onward (anything except Waiting Order Payment).
         if (cnOrderTableStatus(r) !== "Waiting Order Payment") {
@@ -26088,21 +26128,7 @@ function FinancialMonthlyChart({ cn, wallet, loading }) {
       }
     });
     return list;
-  }, [cn, wallet, rangeFrom, rangeTo]);
-
-  const quickRanges = (() => {
-    const t = new Date();
-    const y = t.getFullYear();
-    const mo = t.getMonth();
-    const day = (a, b, c) => localDayKey(new Date(a, b, c));
-    const to = day(y, mo, t.getDate());
-    return [
-      { key: "m6", label: "6 months", from: day(y, mo - 5, 1), to },
-      { key: "m12", label: "12 months", from: day(y, mo - 11, 1), to },
-      { key: "year", label: "This year", from: day(y, 0, 1), to },
-    ];
-  })();
-  const noRange = !range.preset && !range.from && !range.to;
+  }, [cn, wallet, refundDates, rangeFrom, rangeTo]);
 
   const visible = FIN_MONTHLY_SERIES.filter((s) => !hidden.includes(s.key));
   const maxVal = Math.max(
@@ -26156,30 +26182,12 @@ function FinancialMonthlyChart({ cn, wallet, loading }) {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-lg border border-mist-200 p-1">
-            {quickRanges.map((q) => {
-              const on =
-                (!range.preset && range.from === q.from && range.to === q.to) ||
-                (q.key === "m6" && noRange);
-              return (
-                <button
-                  key={q.key}
-                  type="button"
-                  onClick={() =>
-                    setRange(
-                      q.key === "m6"
-                        ? EMPTY_DATE_RANGE
-                        : { preset: "", from: q.from, to: q.to },
-                    )
-                  }
-                  className={`rounded-md px-3 py-1.5 text-xs font-semibold ${on ? "bg-blue-600 text-white" : "text-ink-600"}`}
-                >
-                  {q.label}
-                </button>
-              );
-            })}
-          </div>
-          <DateRangeFilter label="Date" value={range} onChange={setRange} />
+          <DateRangeFilter
+            label="Date"
+            value={range}
+            onChange={setRange}
+            presets={FIN_MONTHLY_PRESETS}
+          />
           <div className="inline-flex rounded-lg border border-mist-200 p-1">
             {[
               ["amount", "Amount (USD)"],
@@ -26472,6 +26480,7 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
     packages: [],
     wallet: [],
     costs: [],
+    refundHist: [],
   });
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState([]);
@@ -26516,6 +26525,15 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
             .select("cn_order_id,actual_cost_usd")
             .limit(20000)
         : Promise.resolve({ data: [], error: null }),
+      // When each CN order was refunded (history rows that record the refund).
+      showChina
+        ? supabase
+            .from("cn_order_history")
+            .select("cn_order_id,event,status,created_at")
+            .or("status.ilike.%refund%,event.ilike.%refund%")
+            .order("created_at", { ascending: true })
+            .limit(20000)
+        : Promise.resolve({ data: [], error: null }),
     ]);
     const labels = [
       "CN Purchase Orders",
@@ -26525,7 +26543,7 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
     ];
     const nextErrors = tasks
       .map((r, i) =>
-        r?.error && i !== 3
+        r?.error && i < 3
           ? `${labels[i]}: ${r.error.message || "Unable to load data"}`
           : null,
       )
@@ -26535,6 +26553,7 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
       packages: tasks[1]?.data || [],
       wallet: tasks[2]?.data || [],
       costs: tasks[3]?.error ? [] : tasks[3]?.data || [],
+      refundHist: tasks[4]?.error ? [] : tasks[4]?.data || [],
     });
     setErrors(nextErrors);
     setLastUpdated(new Date());
@@ -26588,8 +26607,25 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
         0,
       ),
   );
-  const refundedCn = cn
-    .filter(finIsRefunded)
+  // Latest refund day per CN order (history is loaded oldest → newest).
+  const refundDates = useMemo(() => {
+    const m = new Map();
+    (rows.refundHist || []).forEach((h) => {
+      if (h?.cn_order_id != null && h.created_at)
+        m.set(String(h.cn_order_id), h.created_at);
+    });
+    return m;
+  }, [rows.refundHist]);
+  const refundedCn = (rows.cn || [])
+    .filter(
+      (r) =>
+        finIsRefunded(r) &&
+        finDateInRange(
+          { created_at: finRefundDate(r, refundDates) },
+          start,
+          end,
+        ),
+    )
     .reduce(
       (s, r) =>
         s +
@@ -26921,6 +26957,7 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
       <FinancialMonthlyChart
         cn={rows.cn}
         wallet={rows.wallet}
+        refundDates={refundDates}
         loading={loading}
       />
 
@@ -38038,6 +38075,13 @@ const CUSTOMER_FEATURES = [
   },
   {
     group: "Profile menu",
+    key: "profile_search_tk",
+    label: "Search Tracking Number",
+    kh: "ស្វែងរកលេខតាមដាន",
+    desc: "Link in Profile. Customers search their own tracking numbers (Parse Link / Shipment).",
+  },
+  {
+    group: "Profile menu",
     key: "profile_help",
     label: "Help & Support",
     kh: "ជំនួយ",
@@ -40926,7 +40970,7 @@ const CustomerApp = (() => {
               <span>
                 Developed by{" "}
                 <span className="font-semibold tracking-tight text-slate-800">
-                  Thon KH
+                  JZE-Team
                 </span>
               </span>
             </div>
@@ -41490,10 +41534,15 @@ const CustomerApp = (() => {
       return to === P() ? cur === t : cur === t || cur.startsWith(t + "/");
     };
     // DRSB-style focus pages: product detail, cart and checkout hide the bottom
-    // menu so the only thing on screen is the order bar.
+    // menu so the only thing on screen is the order bar. Pages opened from the
+    // Profile menu (wallet, points, addresses, notifications, settings, help,
+    // China warehouse, change password / PIN) are detail pages too: no dock.
     const hideNav =
       /\/shop\/(p\/[^/]+|cart|checkout|orders\/[^/]+)\/?$/.test(pathname) ||
-      /\/(shipments|cn-orders)\/[^/]+\/?$/.test(pathname);
+      /\/(shipments|cn-orders)\/[^/]+\/?$/.test(pathname) ||
+      /\/(wallet(\/[^/]+)?|points|addresses|notifications|warehouse|change-password|change-pin|profile\/(settings|help))\/?$/.test(
+        pathname,
+      );
     // Use the actual dock height: language, enabled tabs and screen size can
     // change it. This shared clearance keeps every shop action above the dock.
     useLayoutEffect(() => {
@@ -46223,6 +46272,16 @@ const CustomerApp = (() => {
             ],
           ]
         : []),
+      ...(feat("profile_search_tk")
+        ? [
+            [
+              Icons.PackageSearch || Search,
+              "amber",
+              tr("Search Tracking Number", "ស្វែងរកលេខតាមដាន", "搜索运单号"),
+              () => nav(P("/search-tracking")),
+            ],
+          ]
+        : []),
     ];
     const support = [
       [
@@ -46695,6 +46754,333 @@ const CustomerApp = (() => {
 
   // ---------- Feature gate ----------
   // A switched-off feature (Customers › Customer Features) bounces to Home.
+  // ---------- Search Tracking Number (Profile → Search Tracking Number) ----------
+  // Customers look up ANY tracking number (exact match, tracking number only).
+  //  • Parse Link (CN Order, we bought it)   → days count from "Purchased"
+  //  • Shipment (customer bought it, sent to us) → days count from "Inbound Origin"
+  // Counting stops at the completion date once the order/TK is Completed.
+  // TRK_DAY_BASE = 1 → the start day itself is day 1. Change to 0 to start at 0.
+  const TRK_DAY_BASE = 1;
+  const trkKey = (v) =>
+    String(v || "")
+      .replace(/[\s-]/g, "")
+      .toLowerCase();
+  const trkDays = (fromIso, toIso) => {
+    const a = fromIso ? new Date(fromIso) : null;
+    if (!a || Number.isNaN(a.getTime())) return null;
+    let b = toIso ? new Date(toIso) : new Date();
+    if (Number.isNaN(b.getTime())) b = new Date();
+    const d = (x) => Date.UTC(x.getFullYear(), x.getMonth(), x.getDate());
+    return Math.max(0, Math.round((d(b) - d(a)) / 86400000)) + TRK_DAY_BASE;
+  };
+
+  // Public tracking lookup — a customer may check ANY tracking number (like
+  // the DRSB app / staff) and sees the same card details, but only searches by
+  // the exact tracking number (no Order ID, no partial match). Only the owner
+  // can open the detail page.
+  // Backed by the SECURITY DEFINER RPC `customer_search_tracking` (see SQL).
+  async function trkSearch(needle, { ships, cnOrders }) {
+    const mineShips = ships || [];
+    const mineCn = cnOrders || [];
+    const ownShip = (tk) => mineShips.find((s) => trkKey(s.tk) === trkKey(tk));
+    const out = [];
+    let rows = null;
+    if (supabase) {
+      const { data, error } = await supabase.rpc("customer_search_tracking", {
+        p_q: needle,
+      });
+      if (error) console.warn("[customer_search_tracking]", error.message);
+      else rows = data || [];
+    }
+    if (rows === null) {
+      // RPC not installed yet → fall back to the customer's own shipments.
+      rows = mineShips
+        .filter((s) => trkKey(s.tk) === needle)
+        .map((s) => ({
+          source: "package",
+          tk: s.tk,
+          status: STEPS[Math.max(0, Math.min(s.step, 4))][0],
+          created_at: s.createdAt,
+          order_id: s.orderNo || "",
+          customer_code: "",
+          reached: {},
+        }));
+    }
+    // Service type decides the card, not the warehouse stage:
+    //  • tracking belongs to a CN order (Parse Link) → "Parse Link" card
+    //  • otherwise                                   → "Shipment" card
+    // The same tracking can exist as a Package AND a CN parcel → shown once;
+    // status comes from the Package (real stage), dates from the CN order.
+    const normReached = (r) => {
+      const m = {};
+      Object.entries(r.reached || {}).forEach(([k, v]) => {
+        m[r.source === "cn" ? cnNormalizeStatus(k) : normStep(k)] = v;
+      });
+      return m;
+    };
+    const cnRows = rows.filter((r) => r.source === "cn");
+    const pkgRows = rows.filter((r) => r.source !== "cn");
+    const cnByTk = new Map(cnRows.map((r) => [trkKey(r.tk), r]));
+    const usedCn = new Set();
+    const ownCnLink = (orderId) =>
+      mineCn.some((o) => o.order_id === orderId)
+        ? P(`/cn-orders/${encodeURIComponent(orderId)}`)
+        : null;
+    pkgRows.forEach((r) => {
+      const reached = normReached(r);
+      const step = stepOf(r.status);
+      const cn = cnByTk.get(trkKey(r.tk));
+      if (cn || r.is_cn) {
+        if (cn) usedCn.add(trkKey(r.tk));
+        const cr = cn ? normReached(cn) : {};
+        const orderId = cn?.order_id || r.order_id || "";
+        out.push({
+          key: `p-${r.tk}`,
+          kind: "parse",
+          orderId: orderId || "—",
+          customerCode: r.customer_code || cn?.customer_code,
+          cnStatus: cnStageLabel(TK_TO_CN_STATUS[r.status] || r.status),
+          tracking: r.tk,
+          orderDate: cn?.created_at || r.created_at,
+          days: trkDays(
+            cr.Purchased || cn?.created_at || r.created_at,
+            step >= 4 ? reached.Completed || null : null,
+          ),
+          to: orderId ? ownCnLink(orderId) : null,
+        });
+        return;
+      }
+      out.push({
+        key: `s-${r.tk}`,
+        kind: "shipment",
+        orderId: r.order_id || "—",
+        customerCode: r.customer_code,
+        step,
+        tracking: r.tk,
+        orderDate: r.created_at,
+        days: trkDays(
+          reached["Inbound Origin"] || (step >= 0 ? r.created_at : null),
+          step >= 4 ? reached.Completed || null : null,
+        ),
+        // Only the owner can open the full shipment detail page.
+        to: ownShip(r.tk) ? P(`/shipments/${encodeURIComponent(r.tk)}`) : null,
+      });
+    });
+    // CN parcels with no Package yet (still before warehouse intake).
+    cnRows.forEach((r) => {
+      if (usedCn.has(trkKey(r.tk))) return;
+      const reached = normReached(r);
+      const st = cnNormalizeStatus(r.status);
+      out.push({
+        key: `c-${trkKey(r.tk)}-${r.created_at}`,
+        kind: "parse",
+        orderId: r.order_id || "—",
+        customerCode: r.customer_code,
+        cnStatus: cnStageLabel(TK_TO_CN_STATUS[r.status] || st),
+        tracking: r.tk,
+        orderDate: r.created_at,
+        days: trkDays(
+          reached.Purchased || r.created_at,
+          st === "Complete Order" ? reached["Complete Order"] || null : null,
+        ),
+        to: r.order_id ? ownCnLink(r.order_id) : null,
+      });
+    });
+    return out.sort(
+      (a, b) => new Date(b.orderDate || 0) - new Date(a.orderDate || 0),
+    );
+  }
+
+  function SearchTracking() {
+    const { me, ships, cnOrders, tr, say } = useApp();
+    const nav = useNavigate();
+    const [q, setQ] = useState("");
+    const [res, setRes] = useState({ busy: false, rows: null, err: "" });
+    const seq = useRef(0);
+    const live = useRef({});
+    live.current = { ships, cnOrders };
+    const needle = trkKey(q);
+    // Manual search: runs only on the Search button / Enter key.
+    const runSearch = async () => {
+      if (res.busy) return;
+      const id = ++seq.current;
+      if (needle.length < 4) {
+        setRes({ busy: false, rows: null, err: "" });
+        return;
+      }
+      setRes((r) => ({ ...r, busy: true, err: "" }));
+      try {
+        const rows = await trkSearch(needle, live.current);
+        if (id === seq.current) setRes({ busy: false, rows, err: "" });
+      } catch (e) {
+        if (id === seq.current)
+          setRes({ busy: false, rows: [], err: e?.message || "Error" });
+      }
+    };
+
+    const InfoRow = ({ k, children }) => (
+      <div className="flex items-center justify-between gap-4 py-3 text-sm border-b border-slate-100 last:border-0">
+        <span className="text-slate-500 shrink-0">{k}</span>
+        <span className="font-medium text-right min-w-0 break-all">
+          {children}
+        </span>
+      </div>
+    );
+    const renderRow = (r) => {
+      const parse = r.kind === "parse";
+      return (
+        <Card
+          key={r.key}
+          onClick={r.to ? () => nav(r.to) : undefined}
+          className={`p-4 ${r.to ? "cursor-pointer active:bg-slate-50" : ""}`}
+        >
+          <div className="flex items-center gap-3 pb-3 border-b border-slate-100">
+            <IconTile i={Icons.Truck} tone={parse ? "violet" : "blue"} />
+            <div className="flex-1 min-w-0">
+              <b className="block truncate">{r.tracking}</b>
+              <span className="text-xs text-slate-400">
+                {parse
+                  ? tr("Parse Link", "Parse Link", "代购订单")
+                  : tr("Shipment", "ការដឹកជញ្ជូន", "运单")}
+              </span>
+            </div>
+            {r.to && <ChevronRight size={18} className="text-slate-300" />}
+          </div>
+          <InfoRow k={tr("Status", "ស្ថានភាព", "状态")}>
+            {parse ? (
+              <CnCustomerBadge status={r.cnStatus} cancelled={r.cancelled} />
+            ) : (
+              <Badge n={r.step} />
+            )}
+          </InfoRow>
+          <InfoRow k={tr("Order ID", "លេខ Order", "订单号")}>
+            {r.orderId}
+          </InfoRow>
+          <InfoRow k={tr("Customer ID", "លេខសម្គាល់អតិថិជន", "客户编号")}>
+            {fmtCustomerId(r.customerCode) || "—"}
+          </InfoRow>
+          <InfoRow k={tr("Tracking Number", "លេខតាមដាន", "运单号")}>
+            <span className="inline-flex items-center gap-2">
+              {r.tracking}
+              {r.tracking !== "—" && (
+                <button
+                  type="button"
+                  aria-label={tr("Copy", "ចម្លង", "复制")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    copy(r.tracking);
+                    say(tr("Copied", "បានចម្លង", "已复制"));
+                  }}
+                  className="text-slate-400 active:text-blue-600"
+                >
+                  <Copy size={15} />
+                </button>
+              )}
+            </span>
+          </InfoRow>
+          <InfoRow k={tr("Order Date", "ថ្ងៃបញ្ជាទិញ", "下单时间")}>
+            {fmtStamp(r.orderDate)}
+          </InfoRow>
+          <div className="mt-2 rounded-xl bg-blue-50 text-blue-700 px-3 py-2.5 flex items-center justify-between gap-3 text-sm">
+            <span>
+              {parse
+                ? tr(
+                    "Days since Purchased",
+                    "រាប់ពីថ្ងៃ Purchased",
+                    "自已采购起天数",
+                  )
+                : tr(
+                    "Days since Inbound Origin",
+                    "រាប់ពីថ្ងៃ Inbound Origin",
+                    "自入库起天数",
+                  )}
+            </span>
+            <b>
+              {r.days == null
+                ? "—"
+                : tr(`${r.days} days`, `${r.days} ថ្ងៃ`, `${r.days} 天`)}
+            </b>
+          </div>
+        </Card>
+      );
+    };
+
+    return (
+      <>
+        <Top
+          title={tr("Search Tracking Number", "ស្វែងរកលេខតាមដាន", "搜索运单号")}
+          back
+        />
+        <div className="px-4 pt-4 space-y-4">
+          <div className="flex items-center gap-2 h-12 bg-white rounded-xl px-3.5 text-slate-900 shadow-[0_2px_12px_-4px_rgba(15,40,90,.12)]">
+            <Search size={18} className="text-slate-400" />
+            <input
+              value={q}
+              onChange={(e) => {
+                setQ(e.target.value);
+                if (!e.target.value.trim()) {
+                  seq.current++;
+                  setRes({ busy: false, rows: null, err: "" });
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  runSearch();
+                }
+              }}
+              enterKeyHint="search"
+              placeholder={tr(
+                "Enter tracking number",
+                "បញ្ចូលលេខតាមដាន",
+                "输入运单号",
+              )}
+              inputMode="search"
+              autoCapitalize="off"
+              autoCorrect="off"
+              className="flex-1 outline-none text-[15px] bg-transparent"
+            />
+            <button
+              type="button"
+              onClick={runSearch}
+              disabled={res.busy}
+              className="shrink-0 h-9 px-4 rounded-lg bg-blue-600 text-white text-sm font-semibold active:bg-blue-700 disabled:opacity-60 inline-flex items-center gap-2"
+            >
+              {res.busy ? (
+                <AuthSpinner size={14} />
+              ) : (
+                tr("Search", "ស្វែងរក", "搜索")
+              )}
+            </button>
+          </div>
+          {res.rows === null ? (
+            <p className="text-center text-sm text-slate-400 py-10">
+              {tr(
+                "Enter the full tracking number to check its status.",
+                "សូមបញ្ចូលលេខតាមដានឲ្យពេញ ដើម្បីឆែកស្ថានភាព។",
+                "请输入完整运单号以查询状态。",
+              )}
+            </p>
+          ) : res.err ? (
+            <p className="text-center text-sm text-red-500 py-10">{res.err}</p>
+          ) : res.rows.length ? (
+            <div className="space-y-3">{res.rows.map(renderRow)}</div>
+          ) : (
+            !res.busy && (
+              <p className="text-center text-sm text-slate-400 py-10">
+                {tr(
+                  "No matching tracking number found.",
+                  "រកមិនឃើញលេខតាមដានដែលត្រូវគ្នាទេ។",
+                  "未找到匹配的运单号。",
+                )}
+              </p>
+            )
+          )}
+        </div>
+      </>
+    );
+  }
+
   function Gate({ k, children }) {
     const feat = useCustomerFeatures();
     return feat(k) ? children : <Navigate to={P()} replace />;
@@ -50972,6 +51358,14 @@ const CustomerApp = (() => {
               element={
                 <Gate k="tab_address">
                   <Addresses />
+                </Gate>
+              }
+            />
+            <Route
+              path="search-tracking"
+              element={
+                <Gate k="profile_search_tk">
+                  <SearchTracking />
                 </Gate>
               }
             />
