@@ -2171,6 +2171,8 @@ html.cb-admin-dark .cbx-act.is-on{ background:rgba(74,222,128,.14); border-color
 .cbx-modal-fin .cbx-modal-foot .cbx-btn:hover:not(:disabled){ background:#f8fafc; }
 .cbx-modal-fin .cbx-modal-foot .cbx-btn.cbx-btn-primary{ background:#2563eb; border-color:#2563eb; color:#fff; font-weight:700; padding:0 28px; box-shadow:none; }
 .cbx-modal-fin .cbx-modal-foot .cbx-btn.cbx-btn-primary:hover:not(:disabled){ background:#1d4ed8; border-color:#1d4ed8; }
+.cbx-modal-fin .cbx-modal-foot .cbx-btn.cbx-btn-danger{ background:#dc2626; border-color:#dc2626; color:#fff; font-weight:700; padding:0 28px; box-shadow:none; }
+.cbx-modal-fin .cbx-modal-foot .cbx-btn.cbx-btn-danger:hover:not(:disabled){ background:#b91c1c; border-color:#b91c1c; }
 .cbx-modal-fin .cbx-modal-foot .cbx-btn:disabled{ opacity:.4; }
 /* Finance-style fields (Label / Input / Select) — wrap a modal body in .cbx-fin-form */
 .cbx-fin-form label.uppercase{ text-transform:none; letter-spacing:0; font-size:15px; font-weight:600; color:#0f172a; margin-bottom:8px; }
@@ -3355,6 +3357,7 @@ const PERMISSION_GROUPS = [
     perms: [
       ...crudPerms("customer", "Customer"),
       ["customer.reset_password", "Reset Customer Password"],
+      ["customer.reset_pin", "Reset Customer Payment PIN"],
       ["customer.recovery.view", "View Deleted Customers (Customer Recovery)"],
       ["customer.restore", "Restore Archived Customer"],
       ["customer.phone_change", "Change Customer Phone Number"],
@@ -3690,6 +3693,7 @@ function seedRoles() {
         "customer.create",
         "customer.edit",
         "customer.reset_password",
+        "customer.reset_pin",
         "order.edit",
         "order.change_branch",
         "air_order.view",
@@ -8699,7 +8703,7 @@ const ORDER_DETAILS = {}; // live data only — nothing hard-coded
 // a customer up by UID (Customer ID), Name, or Phone and get back the
 // same account, so both flows show the same Information card.
 const TRANSFER_TYPES = [
-  { value: "uid", label: "UID" },
+  { value: "uid", label: "Order ID" },
   { value: "name", label: "Name" },
   { value: "phone", label: "Phone" },
 ];
@@ -10839,7 +10843,7 @@ function TransferAccountLookup({
           </SkeletonRegion>
         ) : matched ? (
           <>
-            <InfoRow label="UID" value={matched.id} />
+            <InfoRow label="Order ID" value={matched.id} />
             <InfoRow label="Name" value={matched.name} />
             <InfoRow label="Phone Number" value={matched.phone} />
           </>
@@ -10847,7 +10851,7 @@ function TransferAccountLookup({
           <p className="text-xs text-ink-600/45">
             {query
               ? "រកមិនឃើញគណនីនេះទេ — សូមពិនិត្យម្តងទៀត"
-              : "សូមវាយបញ្ចូល UID, ឈ្មោះ ឬPhone number ដើម្បីSearchគណនី"}
+              : "សូមវាយបញ្ចូល Order ID, ឈ្មោះ ឬPhone number ដើម្បីSearchគណនី"}
           </p>
         )}
         {matched && !loading && noteText && (
@@ -21335,10 +21339,16 @@ async function moveTkToCustomer({
   if (supabase) {
     const { data: before, error: readErr } = await supabase
       .from("packages")
-      .select("order_no")
+      .select("order_no, cn_order_id")
       .eq("tk", tk)
       .maybeSingle();
     if (readErr) throw readErr;
+    // Parse Link (CN Order) TKs are bought by us for the customer — moving
+    // them would orphan the CN Order's data. Only Shipment TKs transfer.
+    if (before?.cn_order_id)
+      throw new Error(
+        "Parse Link orders cannot be transferred — only Shipment orders can be moved to another customer.",
+      );
     const patch = { customer: toLabel };
     if (newId) patch.customer_id = newId;
     const { error: updErr } = await supabase
@@ -21370,6 +21380,10 @@ async function moveTkToCustomer({
 
   // UI-only mode
   const pkg = (packages || []).find((x) => x.tk === tk);
+  if (pkg?.cn_order_id)
+    throw new Error(
+      "Parse Link orders cannot be transferred — only Shipment orders can be moved to another customer.",
+    );
   await upsertPackage({
     tk,
     customer: toLabel,
@@ -21397,6 +21411,7 @@ function CreateTransferModal({ open, onClose, onCreated }) {
   const [tk, setTk] = useState("");
   const [tkChecked, setTkChecked] = useState(false);
   const [fromLabel, setFromLabel] = useState(null);
+  const [tkParseLink, setTkParseLink] = useState(false);
   const [reason, setReason] = useState("");
   const [transferType, setTransferType] = useState("uid");
   const [query, setQuery] = useState("");
@@ -21410,6 +21425,7 @@ function CreateTransferModal({ open, onClose, onCreated }) {
       setTk("");
       setTkChecked(false);
       setFromLabel(null);
+      setTkParseLink(false);
       setReason("");
       setTransferType("uid");
       setQuery("");
@@ -21426,10 +21442,11 @@ function CreateTransferModal({ open, onClose, onCreated }) {
     if (supabase) {
       const { data } = await supabase
         .from("packages")
-        .select("customer")
+        .select("customer, cn_order_id")
         .eq("tk", tk.trim())
         .maybeSingle();
       setFromLabel(data?.customer || null);
+      setTkParseLink(!!data?.cn_order_id);
     } else {
       // Read from the live shared registry (same source Packages/TK and
       // Package Detail read from) instead of the static MODULES mock
@@ -21437,6 +21454,7 @@ function CreateTransferModal({ open, onClose, onCreated }) {
       // is never found here even though it's visible everywhere else.
       const record = findPackage(tk.trim());
       setFromLabel(record?.customer || null);
+      setTkParseLink(!!record?.cn_order_id);
     }
     setTkChecked(true);
   }
@@ -21451,6 +21469,7 @@ function CreateTransferModal({ open, onClose, onCreated }) {
   const canSubmit = Boolean(
     tkChecked &&
     fromLabel &&
+    !tkParseLink &&
     selectedCustomer &&
     !sameCustomer &&
     !customerLoading,
@@ -21532,6 +21551,7 @@ function CreateTransferModal({ open, onClose, onCreated }) {
             setTk(e.target.value);
             setTkChecked(false);
             setFromLabel(null);
+            setTkParseLink(false);
           }}
           onBlur={checkTk}
           className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
@@ -21543,6 +21563,13 @@ function CreateTransferModal({ open, onClose, onCreated }) {
             {fromLabel
               ? `From: ${fromLabel}`
               : "TK not found នេះទេ — សូមពិនិត្យលេខម្តងទៀត"}
+          </p>
+        )}
+        {tkChecked && fromLabel && tkParseLink && (
+          <p className="text-xs mt-1 text-signal-red">
+            {
+              "Parse Link orders cannot be transferred — only Shipment orders can be moved to another customer."
+            }
           </p>
         )}
       </div>
@@ -22211,6 +22238,88 @@ function PwResetBody({
       </div>
       <p className={CR_HINT}>{hint}</p>
     </>
+  );
+}
+
+// ------------------------------------------------------------
+// Reset a customer's payment PIN (admin). The PIN row is deleted server-side
+// (admin_reset_customer_pin); the customer just refreshes the app and is asked
+// to set a new 4-digit PIN. Staff never see or choose the PIN.
+// ------------------------------------------------------------
+function CustomerResetPinModal({ code, name, onClose, onDone }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function submit() {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      if (!supabase) throw new Error("Supabase is not connected");
+      const { error: e } = await supabase.rpc("admin_reset_customer_pin", {
+        p_customer_code: code,
+      });
+      if (e) throw e;
+      emitCBToast(
+        "ok",
+        "PIN reset",
+        `${name || code} will be asked to set a new PIN after refreshing the app.`,
+      );
+      onDone?.();
+      onClose();
+    } catch (err) {
+      const msg = /does not exist|schema cache/i.test(err?.message || "")
+        ? "Run payment_pin.sql in Supabase first."
+        : /permission_denied/.test(err?.message || "")
+          ? "You do not have permission to reset PINs."
+          : err?.message || "Unable to reset PIN";
+      setError(msg);
+      emitCBToast("err", "Reset failed", msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <CrModalShell
+      title="Reset Customer PIN"
+      subtitle={`${code}${name ? ` · ${name}` : ""}`}
+      maxW="max-w-[460px]"
+      danger
+      onClose={onClose}
+      busy={busy}
+      error={error}
+      footer={
+        <>
+          <button
+            type="button"
+            className={CR_BTN_PRIMARY}
+            onClick={submit}
+            disabled={busy}
+          >
+            {busy ? (
+              <Icons.Loader2 size={15} className="animate-spin" />
+            ) : (
+              <Icons.Check size={15} />
+            )}
+            {busy ? "Resetting…" : "Confirm"}
+          </button>
+          <button
+            type="button"
+            className={CR_BTN_GHOST}
+            onClick={onClose}
+            disabled={busy}
+          >
+            <Icons.X size={14} />
+            Cancel
+          </button>
+        </>
+      }
+    >
+      <p className="text-[15px] text-slate-700">
+        Are you sure you want to reset this customer's payment PIN? The customer
+        must refresh the app and set a new 4-digit PIN before they can pay
+        again.
+      </p>
+    </CrModalShell>
   );
 }
 
@@ -23168,6 +23277,7 @@ function ListPage({
   const [editingRow, setEditingRow] = useState(null);
   const [deletingRow, setDeletingRow] = useState(null);
   const [resetPwRow, setResetPwRow] = useState(null);
+  const [resetPinRow, setResetPinRow] = useState(null);
   // Customers only: how many Orders (TK + AIR) lose their owner if this
   // Customer is deleted (the DB trigger keeps them as "Deleted account").
   const [deletingOrderCount, setDeletingOrderCount] = useState(null);
@@ -23205,6 +23315,8 @@ function ListPage({
   }, [path, deletingRow]);
   const canResetPassword =
     path === "/customers" && hasPermission(user, "customer.reset_password");
+  const canResetPin =
+    path === "/customers" && hasPermission(user, "customer.reset_pin");
   // Staff accounts: only a Super Admin may reset someone else's password.
   const isUsersModule = path === "/users";
   const isTransferModule = path === "/customer-transfer";
@@ -24082,7 +24194,7 @@ function ListPage({
           }
           rowActions={
             !isUsersModule &&
-            (canEditRows || canDeleteRows || canResetPassword) &&
+            (canEditRows || canDeleteRows || canResetPassword || canResetPin) &&
             !isExceptionsModule &&
             !isTransferModule
               ? (row) => (
@@ -24094,6 +24206,15 @@ function ListPage({
                         icon="KeyRound"
                         tone="warn"
                         onClick={() => setResetPwRow(row)}
+                      />
+                    )}
+                    {canResetPin && (
+                      <RowAction
+                        label="Reset PIN"
+                        subject={row.id}
+                        icon="ShieldCheck"
+                        tone="warn"
+                        onClick={() => setResetPinRow(row)}
                       />
                     )}
                     {canDeleteRows && (
@@ -24115,6 +24236,14 @@ function ListPage({
             key={resetPwRow.id}
             row={resetPwRow}
             onClose={() => setResetPwRow(null)}
+          />
+        )}
+        {canResetPin && resetPinRow && (
+          <CustomerResetPinModal
+            key={resetPinRow.id}
+            code={resetPinRow.id}
+            name={resetPinRow.name}
+            onClose={() => setResetPinRow(null)}
           />
         )}
         {canEditRows && editingRow && (
@@ -32130,17 +32259,19 @@ function PackageDetail() {
                         Print Label
                       </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActionMenuOpen(false);
-                        setShowTransfer(true);
-                      }}
-                      className="w-full flex items-center gap-3 whitespace-nowrap px-4 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 text-left"
-                    >
-                      <Icons.ArrowLeftRight size={18} />
-                      Customer ID Transfer
-                    </button>
+                    {!data.cn_order_id && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActionMenuOpen(false);
+                          setShowTransfer(true);
+                        }}
+                        className="w-full flex items-center gap-3 whitespace-nowrap px-4 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 text-left"
+                      >
+                        <Icons.ArrowLeftRight size={18} />
+                        Customer ID Transfer
+                      </button>
+                    )}
                     {canChangeInternalWarehouse && data.customer_id && (
                       <button
                         type="button"
@@ -34744,6 +34875,7 @@ function ConfirmModal({
   confirmLabel = "Confirm",
   danger,
   askReason,
+  fin = false, // same look as the "Complete Order" modal
   onConfirm,
   onClose,
 }) {
@@ -34766,7 +34898,7 @@ function ConfirmModal({
       await onConfirm(reason);
       onClose();
     } catch (e) {
-      setErr(e.message || "មិនអាចធ្វើបានទេ");
+      setErr(e.message || "Unable to complete this action");
       setBusy(false);
     }
   }
@@ -34775,28 +34907,42 @@ function ConfirmModal({
     <AppModal
       title={title}
       onClose={onClose}
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (!busy) go();
+      }}
       busy={busy}
       error={err}
+      submitLabel={confirmLabel}
+      busyLabel="Processing..."
+      submitTone={danger ? "danger" : "primary"}
+      className={fin ? "cbx-modal-fin" : ""}
       footer={
-        <>
-          <button type="button" onClick={onClose} className="cbx-btn">
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={go}
-            className={`cbx-btn ${danger ? "cbx-btn-danger" : "cbx-btn-primary"}`}
-          >
-            {busy && <Icons.Loader2 size={15} className="animate-spin" />}
-            {busy ? "Processing..." : confirmLabel}
-          </button>
-        </>
+        fin ? (
+          <>
+            <button
+              type="button"
+              className="cbx-btn"
+              onClick={onClose}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={busy}
+              className={`cbx-btn ${danger ? "cbx-btn-danger" : "cbx-btn-primary"}`}
+            >
+              {busy && <Icons.Loader2 size={15} className="animate-spin" />}
+              {busy ? "Processing..." : confirmLabel}
+            </button>
+          </>
+        ) : undefined
       }
     >
       <p className="cbx-modal-text">{message}</p>
       {askReason && (
-        <FormField label="មូលហេតុ" required>
+        <FormField label="Reason" required>
           <textarea
             rows={3}
             value={reason}
@@ -39184,6 +39330,46 @@ const CustomerApp = (() => {
       setTimeout(() => setToast(""), 1800);
     };
 
+    // ----- Payment PIN (4 digits) -----
+    // pinStatus: null = unknown, { unavailable: true } = SQL not installed yet
+    // (never blocks the customer), otherwise { has_pin, locked_seconds }.
+    const [pinStatus, setPinStatus] = useState(null);
+    const [pinReq, setPinReq] = useState(null); // { amount, resolve }
+    const loadPinStatus = async () => {
+      if (!supabase) return;
+      const { data, error } = await supabase.rpc("customer_pin_status");
+      setPinStatus(error || !data ? { unavailable: true } : data);
+    };
+    useEffect(() => {
+      if (!me?.id) {
+        setPinStatus(null);
+        return;
+      }
+      loadPinStatus();
+      // Admin reset the PIN while the app was open → pick it up on return.
+      const onVis = () =>
+        document.visibilityState === "visible" && loadPinStatus();
+      document.addEventListener("visibilitychange", onVis);
+      window.addEventListener("focus", loadPinStatus);
+      return () => {
+        document.removeEventListener("visibilitychange", onVis);
+        window.removeEventListener("focus", loadPinStatus);
+      };
+    }, [me?.id]);
+    // Resolves true once the customer entered the right PIN, false on cancel.
+    const requestPin = (amount) =>
+      new Promise((resolve) => {
+        if (!pinStatus || pinStatus.unavailable) return resolve(true);
+        setPinReq({ amount, resolve });
+      });
+    const pinCancelledMsg = () =>
+      tr("Payment cancelled.", "បានបោះបង់ការបង់ប្រាក់។");
+    const pinMissingMsg = () =>
+      tr(
+        "Please enter your PIN to pay.",
+        "សូមបញ្ចូល PIN របស់អ្នកដើម្បីបង់ប្រាក់។",
+      );
+
     const loadMe = async (uid) => {
       const { data, error } = await supabase
         .from("customers")
@@ -39367,17 +39553,20 @@ const CustomerApp = (() => {
     const refreshMoney = () =>
       Promise.all([loadShips(), loadAirShips(), loadCnOrders(), loadWallet()]);
     const payShipping = async (tk) => {
+      if (!(await requestPin())) return pinCancelledMsg();
       const { error } = await supabase.rpc("pay_shipping_fee", {
         p_tk: tk,
         p_method: "wallet",
       });
       if (error)
-        return /insufficient/i.test(error.message)
-          ? tr(
-              "Your wallet balance is not enough.",
-              "សមតុល្យកាបូបមិនគ្រប់គ្រាន់ទេ។",
-            )
-          : error.message || tr("Payment failed.", "ការបង់ប្រាក់បរាជ័យ។");
+        return /pin_required/i.test(error.message)
+          ? pinMissingMsg()
+          : /insufficient/i.test(error.message)
+            ? tr(
+                "Your wallet balance is not enough.",
+                "សមតុល្យកាបូបមិនគ្រប់គ្រាន់ទេ។",
+              )
+            : error.message || tr("Payment failed.", "ការបង់ប្រាក់បរាជ័យ។");
       await refreshMoney();
       return null;
     };
@@ -39390,28 +39579,31 @@ const CustomerApp = (() => {
           "Payment service is unavailable.",
           "សេវាបង់ប្រាក់មិនអាចប្រើបានទេ។",
         );
+      if (!(await requestPin())) return pinCancelledMsg();
       const { error } = await supabase.rpc("pay_cn_order_from_wallet", {
         p_order_id: orderId,
       });
       if (error)
-        return /function .*pay_cn_order_from_wallet|does not exist|schema cache/i.test(
-          error.message || "",
-        )
-          ? tr(
-              "Wallet payment is not enabled yet. Please contact staff to finish setup.",
-              "មុខងារបង់ប្រាក់តាម Wallet មិនទាន់បើកប្រើទេ។ សូមទាក់ទងបុគ្គលិកដើម្បីបញ្ចប់ការដំឡើង។",
-            )
-          : /insufficient/i.test(error.message || "")
-            ? tr(
-                "Your wallet balance is not enough. Please contact staff to top up.",
-                "សមតុល្យកាបូបមិនគ្រប់គ្រាន់ទេ។ សូមទាក់ទងបុគ្គលិកដើម្បីបញ្ចូលប្រាក់។",
+        return /pin_required/i.test(error.message || "")
+          ? pinMissingMsg()
+          : /function .*pay_cn_order_from_wallet|does not exist|schema cache/i.test(
+                error.message || "",
               )
-            : /not awaiting payment|order status/i.test(error.message || "")
+            ? tr(
+                "Wallet payment is not enabled yet. Please contact staff to finish setup.",
+                "មុខងារបង់ប្រាក់តាម Wallet មិនទាន់បើកប្រើទេ។ សូមទាក់ទងបុគ្គលិកដើម្បីបញ្ចប់ការដំឡើង។",
+              )
+            : /insufficient/i.test(error.message || "")
               ? tr(
-                  "This order is no longer awaiting payment. Refresh the page and try again.",
-                  "Order នេះមិនមែនកំពុងរង់ចាំបង់ប្រាក់ទៀតទេ។ សូម Refresh ហើយព្យាយាមម្ដងទៀត។",
+                  "Your wallet balance is not enough. Please contact staff to top up.",
+                  "សមតុល្យកាបូបមិនគ្រប់គ្រាន់ទេ។ សូមទាក់ទងបុគ្គលិកដើម្បីបញ្ចូលប្រាក់។",
                 )
-              : error.message || tr("Payment failed.", "ការបង់ប្រាក់បរាជ័យ។");
+              : /not awaiting payment|order status/i.test(error.message || "")
+                ? tr(
+                    "This order is no longer awaiting payment. Refresh the page and try again.",
+                    "Order នេះមិនមែនកំពុងរង់ចាំបង់ប្រាក់ទៀតទេ។ សូម Refresh ហើយព្យាយាមម្ដងទៀត។",
+                  )
+                : error.message || tr("Payment failed.", "ការបង់ប្រាក់បរាជ័យ។");
       await refreshMoney();
       return null;
     };
@@ -40052,6 +40244,12 @@ const CustomerApp = (() => {
       refreshMoney,
       payShipping,
       payCnOrder,
+      pinStatus,
+      setPinStatus,
+      pinReq,
+      setPinReq,
+      requestPin,
+      loadPinStatus,
       addrs,
       branches,
       branchErr,
@@ -40071,6 +40269,7 @@ const CustomerApp = (() => {
           <style>{`.cb-km *{line-height:1.6 !important}.cb-km input,.cb-km select{line-height:normal !important}`}</style>
           {dark && <style>{CUST_DARK_CSS}</style>}
           {children}
+          <PinLayer />
         </div>
       </Ctx.Provider>
     );
@@ -42435,6 +42634,310 @@ const CustomerApp = (() => {
           )}
         </div>
       </>
+    );
+  }
+
+  // ---------- Payment PIN (4 digits) ----------
+  const PIN_LEN = 4;
+  const pinErrText = (d, tr) => {
+    if (d?.error === "wrong_pin")
+      return tr(
+        `Wrong PIN. ${d.attempts_left} attempt(s) left.`,
+        `PIN មិនត្រឹមត្រូវ។ នៅសល់ ${d.attempts_left} ដង។`,
+      );
+    if (d?.error === "pin_locked") {
+      const m = Math.max(1, Math.ceil((d.locked_seconds || 900) / 60));
+      return tr(
+        `Too many wrong tries. Try again in ${m} min.`,
+        `បញ្ចូលខុសច្រើនដងពេក។ សូមព្យាយាមម្តងទៀតក្នុង ${m} នាទី។`,
+      );
+    }
+    return tr("Unable to verify PIN.", "មិនអាចផ្ទៀងផ្ទាត់ PIN បានទេ។");
+  };
+  const isWeakPin = (p) =>
+    /^(\d)\1{3}$/.test(p) || ["1234", "4321", "0123", "3210"].includes(p);
+
+  // Full-screen keypad. onSubmit(pin) returns an error string (shake + clear)
+  // or null (success / go to next step).
+  function PinPad({ title, hint, amount, onSubmit, onCancel, cancelLabel }) {
+    const [val, setVal] = useState("");
+    const [err, setErr] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [shake, setShake] = useState(false);
+    const press = async (d) => {
+      if (busy || val.length >= PIN_LEN) return;
+      const next = val + d;
+      setVal(next);
+      setErr("");
+      if (next.length < PIN_LEN) return;
+      setBusy(true);
+      const e = await onSubmit(next);
+      setBusy(false);
+      setVal("");
+      if (e) {
+        setErr(e);
+        setShake(true);
+        setTimeout(() => setShake(false), 420);
+        try {
+          hapticPulse(45);
+        } catch {}
+      }
+    };
+    const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
+    const keyCls =
+      "h-[76px] w-[76px] rounded-full border border-white/80 text-[30px] font-medium text-white transition active:bg-white/25 disabled:opacity-60";
+    return (
+      <div
+        className="fixed inset-0 z-[200] flex flex-col items-center bg-slate-900/95 text-white backdrop-blur-xl"
+        style={{ fontFamily: "inherit" }}
+      >
+        <style>{`@keyframes jzPinShake{0%,100%{transform:translateX(0)}20%{transform:translateX(-10px)}40%{transform:translateX(10px)}60%{transform:translateX(-7px)}80%{transform:translateX(7px)}}`}</style>
+        <div className="flex w-full max-w-md items-center justify-start px-5 pt-[max(1.25rem,env(safe-area-inset-top))]">
+          {onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={busy}
+              className="rounded-full bg-white/20 px-4 py-2 text-[15px] font-semibold text-white active:bg-white/30"
+            >
+              {cancelLabel}
+            </button>
+          )}
+        </div>
+        <div className="flex w-full max-w-md flex-1 flex-col items-center justify-center px-6 pb-8">
+          <div className="grid h-[88px] w-[88px] place-items-center rounded-full bg-white">
+            <Icons.Lock
+              size={38}
+              className="text-violet-500"
+              strokeWidth={2.2}
+            />
+          </div>
+          {amount != null && (
+            <div className="mt-5 text-[26px] font-semibold">
+              {typeof amount === "number" ? `$${amount.toFixed(2)}` : amount}
+            </div>
+          )}
+          <p className="mt-3 text-center text-[15px] text-white/90">{title}</p>
+          {hint && (
+            <p className="mt-1 text-center text-[13px] text-white/60">{hint}</p>
+          )}
+          <div
+            className="mt-6 flex gap-4"
+            style={shake ? { animation: "jzPinShake .4s" } : undefined}
+          >
+            {Array.from({ length: PIN_LEN }).map((_, i) => (
+              <span
+                key={i}
+                className={`h-4 w-4 rounded-full transition ${i < val.length ? "bg-white" : "bg-white/30"}`}
+              />
+            ))}
+          </div>
+          <p className="mt-3 h-5 text-center text-[13px] font-medium text-red-300">
+            {err}
+          </p>
+          <div className="mt-4 grid grid-cols-3 gap-x-7 gap-y-4">
+            {keys.map((k) => (
+              <button
+                key={k}
+                type="button"
+                data-haptic
+                disabled={busy}
+                onClick={() => press(k)}
+                className={keyCls}
+              >
+                {k}
+              </button>
+            ))}
+            <span />
+            <button
+              type="button"
+              data-haptic
+              disabled={busy}
+              onClick={() => press("0")}
+              className={keyCls}
+            >
+              0
+            </button>
+            <button
+              type="button"
+              data-haptic
+              disabled={busy}
+              aria-label="Delete"
+              onClick={() => setVal((v) => v.slice(0, -1))}
+              className="grid h-[76px] w-[76px] place-items-center text-white/90 active:opacity-60"
+            >
+              <Icons.Delete size={30} />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Mounted once inside the provider. Shows (1) the PIN prompt when a payment
+  // asks for it, or (2) the mandatory "set your PIN" screen for any customer
+  // who has no PIN yet (new sign-ups, and after an admin reset).
+  function PinLayer() {
+    const { me, pinStatus, setPinStatus, pinReq, setPinReq, tr, say, logout } =
+      useApp();
+    const [step, setStep] = useState(0);
+    const [first, setFirst] = useState("");
+    if (!supabase || !me || !pinStatus || pinStatus.unavailable) return null;
+    if (me.must_change_password) return null; // password screen comes first
+
+    if (pinReq)
+      return (
+        <PinPad
+          key="verify"
+          amount={pinReq.amount}
+          title={tr("Enter PIN to make payment", "បញ្ចូល PIN ដើម្បីបង់ប្រាក់")}
+          cancelLabel={tr("Cancel", "បោះបង់")}
+          onCancel={() => {
+            pinReq.resolve(false);
+            setPinReq(null);
+          }}
+          onSubmit={async (pin) => {
+            const { data, error } = await supabase.rpc("customer_pin_verify", {
+              p_pin: pin,
+            });
+            if (error) return pinErrText(null, tr);
+            if (data?.ok) {
+              pinReq.resolve(true);
+              setPinReq(null);
+              return null;
+            }
+            if (data?.error === "pin_not_set") {
+              pinReq.resolve(false);
+              setPinReq(null);
+              setPinStatus({ has_pin: false, locked_seconds: 0 });
+              return null;
+            }
+            return pinErrText(data, tr);
+          }}
+        />
+      );
+
+    if (!pinStatus.has_pin)
+      return (
+        <PinPad
+          key={`set-${step}`}
+          title={
+            step === 0
+              ? tr("Set a new payment PIN.", "កំណត់ PIN ថ្មីសម្រាប់បង់ប្រាក់។")
+              : tr("Confirm your PIN.", "បញ្ជាក់ PIN របស់អ្នក។")
+          }
+          hint={
+            step === 0
+              ? tr(
+                  "4 digits. You will need it every time you pay.",
+                  "លេខ 4 ខ្ទង់។ អ្នកត្រូវប្រើវាគ្រប់ពេលបង់ប្រាក់។",
+                )
+              : null
+          }
+          cancelLabel={tr("Log out", "ចាកចេញ")}
+          onCancel={logout}
+          onSubmit={async (pin) => {
+            if (step === 0) {
+              if (isWeakPin(pin))
+                return tr(
+                  "Choose a less obvious PIN.",
+                  "សូមជ្រើសរើស PIN ដែលពិបាកទាយជាងនេះ។",
+                );
+              setFirst(pin);
+              setStep(1);
+              return null;
+            }
+            if (pin !== first) {
+              setStep(0);
+              setFirst("");
+              return tr(
+                "PINs do not match. Start again.",
+                "PIN មិនដូចគ្នាទេ។ សូមចាប់ផ្តើមម្តងទៀត។",
+              );
+            }
+            const { error } = await supabase.rpc("customer_set_pin", {
+              p_pin: pin,
+            });
+            if (error && !/pin_already_set/.test(error.message || "")) {
+              setStep(0);
+              setFirst("");
+              return tr("Unable to save PIN.", "មិនអាចរក្សាទុក PIN បានទេ។");
+            }
+            setPinStatus({ has_pin: true, locked_seconds: 0 });
+            setStep(0);
+            setFirst("");
+            say(tr("PIN set successfully", "បានកំណត់ PIN ដោយជោគជ័យ"));
+            return null;
+          }}
+        />
+      );
+    return null;
+  }
+
+  // Profile → Security → Change Payment PIN (old PIN → new → confirm)
+  function ChangePin() {
+    const { tr, say, pinStatus } = useApp();
+    const nav = useNavigate();
+    const [step, setStep] = useState(0);
+    const [oldPin, setOldPin] = useState("");
+    const [newPin, setNewPin] = useState("");
+    if (pinStatus && !pinStatus.unavailable && !pinStatus.has_pin) return null; // forced set screen shows instead
+    const titles = [
+      tr("Enter your current PIN.", "បញ្ចូល PIN បច្ចុប្បន្ន។"),
+      tr("Enter a new PIN.", "បញ្ចូល PIN ថ្មី។"),
+      tr("Confirm your new PIN.", "បញ្ជាក់ PIN ថ្មី។"),
+    ];
+    return (
+      <PinPad
+        key={`chg-${step}`}
+        title={titles[step]}
+        cancelLabel={tr("Cancel", "បោះបង់")}
+        onCancel={() => nav(P("/profile"), { replace: true })}
+        onSubmit={async (pin) => {
+          if (step === 0) {
+            const { data, error } = await supabase.rpc("customer_pin_check", {
+              p_pin: pin,
+            });
+            if (error || !data?.ok) return pinErrText(error ? null : data, tr);
+            setOldPin(pin);
+            setStep(1);
+            return null;
+          }
+          if (step === 1) {
+            if (pin === oldPin)
+              return tr(
+                "New PIN must be different from the current one.",
+                "PIN ថ្មីត្រូវខុសពី PIN បច្ចុប្បន្ន។",
+              );
+            if (isWeakPin(pin))
+              return tr(
+                "Choose a less obvious PIN.",
+                "សូមជ្រើសរើស PIN ដែលពិបាកទាយជាងនេះ។",
+              );
+            setNewPin(pin);
+            setStep(2);
+            return null;
+          }
+          if (pin !== newPin) {
+            setStep(1);
+            return tr(
+              "PINs do not match. Try again.",
+              "PIN មិនដូចគ្នាទេ។ សូមព្យាយាមម្តងទៀត។",
+            );
+          }
+          const { data, error } = await supabase.rpc("customer_change_pin", {
+            p_old: oldPin,
+            p_new: pin,
+          });
+          if (error || !data?.ok) {
+            setStep(0);
+            return pinErrText(error ? null : data, tr);
+          }
+          say(tr("PIN changed successfully", "បានប្តូរ PIN ដោយជោគជ័យ"));
+          nav(P("/profile"), { replace: true });
+          return null;
+        }}
+      />
     );
   }
 
@@ -45848,21 +46351,27 @@ const CustomerApp = (() => {
             <PushMenuRow />
             <InstallMenuRow />
           </Card>
-          {feat("profile_password") && (
-            <>
-              <p className="px-1 pt-1 text-[13px] font-semibold text-slate-500">
-                {tr("Security", "សុវត្ថិភាព")}
-              </p>
-              <Card className="divide-y divide-slate-100 overflow-hidden">
+          <>
+            <p className="px-1 pt-1 text-[13px] font-semibold text-slate-500">
+              {tr("Security", "សុវត្ថិភាព")}
+            </p>
+            <Card className="divide-y divide-slate-100 overflow-hidden">
+              {feat("profile_password") && (
                 <MenuRow
                   icon={Icons.KeyRound}
                   tone="green"
                   label={tr("Change Password", "ប្តូរលេខសម្ងាត់")}
                   onClick={() => nav(P("/change-password"))}
                 />
-              </Card>
-            </>
-          )}
+              )}
+              <MenuRow
+                icon={Icons.ShieldCheck}
+                tone="green"
+                label={tr("Change Payment PIN", "ប្តូរ PIN បង់ប្រាក់")}
+                onClick={() => nav(P("/change-pin"))}
+              />
+            </Card>
+          </>
           {langOpen && <LangSheet onClose={() => setLangOpen(false)} />}
           <div className="pt-2">
             <button
@@ -49807,7 +50316,7 @@ const CustomerApp = (() => {
     useShopCss();
     const { id } = useParams();
     const loc = useLocation();
-    const { tr, wallet, refreshMoney, say } = useApp();
+    const { tr, wallet, refreshMoney, say, requestPin } = useApp();
     const [openViewer, viewerNode] = useShopViewer();
     const [o, setO] = useState(null);
     const [err, setErr] = useState("");
@@ -49850,6 +50359,7 @@ const CustomerApp = (() => {
         cancelText: tr("Cancel", "បោះបង់"),
       });
       if (!ok) return;
+      if (!(await requestPin(o.total_amount))) return;
       setBusy(true);
       setMsg("");
       const { error } = await supabase.rpc("shop_pay_order", {
@@ -50347,6 +50857,7 @@ const CustomerApp = (() => {
               }
             />
             <Route path="change-password" element={<ChangePassword />} />
+            <Route path="change-pin" element={<ChangePin />} />
             <Route path="profile" element={<Profile />} />
             <Route path="profile/settings" element={<CustomerSettings />} />
             <Route
@@ -75321,6 +75832,8 @@ function CustomerDetailPage() {
   const { rows: whRows } = useWarehouses();
   const { user } = useAuth();
   const canTopUp = hasPermission(user, "payment.manage");
+  const canResetPin = hasPermission(user, "customer.reset_pin");
+  const [resetPinOpen, setResetPinOpen] = useState(false);
   const canCreateAddresses = hasPermission(user, "customer_address.create");
   const canEditAddresses = hasPermission(user, "customer_address.edit");
   const canDeleteAddresses = hasPermission(user, "customer_address.delete");
@@ -76168,6 +76681,14 @@ function CustomerDetailPage() {
           />
         )}
 
+        {resetPinOpen && canResetPin && (
+          <CustomerResetPinModal
+            code={cust.customer_code}
+            name={cust.name}
+            onClose={() => setResetPinOpen(false)}
+          />
+        )}
+
         {/* Summary header */}
         <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm md:p-5">
           <div className="flex flex-wrap items-center gap-x-7 gap-y-4">
@@ -76261,15 +76782,26 @@ function CustomerDetailPage() {
               </div>
             </div>
 
-            {canTopUp && (
-              <button
-                type="button"
-                onClick={() => setTopUp(true)}
-                className="ml-auto inline-flex h-10 items-center gap-1.5 rounded-xl bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
-              >
-                <Icons.Plus size={15} /> Top up
-              </button>
-            )}
+            <div className="ml-auto flex items-center gap-2">
+              {canResetPin && (
+                <button
+                  type="button"
+                  onClick={() => setResetPinOpen(true)}
+                  className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50"
+                >
+                  <Icons.ShieldCheck size={15} /> Reset PIN
+                </button>
+              )}
+              {canTopUp && (
+                <button
+                  type="button"
+                  onClick={() => setTopUp(true)}
+                  className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-blue-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
+                >
+                  <Icons.Plus size={15} /> Top up
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -80568,7 +81100,7 @@ function useDeliveries() {
     if (err) {
       setError(
         /relation|does not exist|schema cache/i.test(err.message || "")
-          ? "តារាង deliveries មិនទាន់មាន — សូមរត់ supabase/delivery.sql សិន"
+          ? "The deliveries table does not exist yet — run supabase/delivery.sql first"
           : err.message,
       );
       setRows([]);
@@ -80751,26 +81283,9 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
   const [addrModal, setAddrModal] = useState(false);
-  const [airReady, setAirReady] = useState([]); // AIR orders at Cambodia Warehouse
-
-  useEffect(() => {
-    if (!found) {
-      setAirReady([]);
-      return;
-    }
-    let alive = true;
-    fetchAirReadyForDelivery(
-      found.customer.uuid,
-      found.customer.customer_code,
-    ).then((r) => alive && setAirReady(r));
-    return () => {
-      alive = false;
-    };
-  }, [found]);
 
   useEffect(() => {
     if (!open) return;
-    setAirReady([]);
     setQuery("");
     setSearched(false);
     setFound(null);
@@ -80793,19 +81308,13 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
     );
   }, [found, packages]);
 
-  // China TK (Inbound Warehouse) + AIR / Indonesia (Received at Cambodia
-  // Warehouse) share one list so a customer can request both together.
+  // China TKs sitting in Inbound Warehouse.
   const chinaItems = customerTks.map((p) => ({
     ...p,
     _kind: "CHINA",
     _key: tkKey(p.tk),
   }));
-  const airItems = airReady.map((r) => ({
-    ...r,
-    _kind: "AIR",
-    _key: tkKey(airDeliveryKey(r.order_id)),
-  }));
-  const allItems = [...chinaItems, ...airItems];
+  const allItems = chinaItems;
   const selectable = allItems.filter((i) => !activeTks.has(i._key));
   const chosen = selectable.filter((i) => picked[i._key]);
   const unpaid = chosen.reduce((s, i) => s + shippingFeeOf(i).due, 0);
@@ -80833,9 +81342,9 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
 
   async function submit() {
     setErr("");
-    if (!found) return setErr("សូមស្វែងរក Customer សិន");
-    if (!chosen.length) return setErr("សូមជ្រើសរើស TK ឬ AIR Order យ៉ាងតិច ១");
-    if (!addr) return setErr("សូមជ្រើសរើសអាសយដ្ឋានដឹកជញ្ជូន");
+    if (!found) return setErr("Please search for a customer first");
+    if (!chosen.length) return setErr("Select at least 1 TK");
+    if (!addr) return setErr("Select a delivery address");
     setSaving(true);
     try {
       await onSubmit(
@@ -80855,7 +81364,7 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
           note: note.trim(),
         },
         chosen.map((i) => ({
-          tk: i._kind === "AIR" ? airDeliveryKey(i.order_id) : i.tk,
+          tk: i.tk,
           fee_due: Math.round(shippingFeeOf(i).due * 100) / 100,
         })),
       );
@@ -80866,34 +81375,47 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
     }
   }
 
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
   if (!open) return null;
   const allOn =
     selectable.length > 0 && selectable.every((i) => picked[i._key]);
 
-  return (
-    <div
-      className="fixed inset-0 z-50 flex justify-end bg-ink-900/40"
-      onClick={onClose}
-    >
+  return createPortal(
+    <div className="fixed inset-0 z-[90]" role="dialog" aria-modal="true">
+      <style>{`@keyframes cbQvIn{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}@keyframes cbQvFade{from{opacity:0}to{opacity:1}}`}</style>
       <div
-        onClick={(e) => e.stopPropagation()}
-        className="bg-white w-full max-w-xl h-full flex flex-col shadow-lg"
+        className="absolute inset-0 bg-slate-900/30"
+        style={{ animation: "cbQvFade .18s ease-out both" }}
+        onClick={onClose}
+      />
+      <aside
+        className="absolute right-0 top-0 flex h-full w-full max-w-xl flex-col bg-white shadow-2xl"
+        style={{ animation: "cbQvIn .22s cubic-bezier(.2,.8,.2,1) both" }}
       >
-        <div className="px-5 py-4 border-b border-mist-200 flex items-center justify-between">
-          <h3 className="font-display font-bold text-base text-ink-900">
+        <header className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
+          <h2 className="text-[15px] font-bold text-slate-900">
             Request Delivery
-          </h3>
+          </h2>
           <button
             type="button"
             onClick={onClose}
-            className="text-ink-600/60 hover:text-ink-900"
+            aria-label="Close"
+            className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-800"
           >
             <X size={18} />
           </button>
-        </div>
+        </header>
 
-        <div className="flex-1 overflow-y-auto p-5 space-y-5">
-          <div>
+        <div className="flex-1 space-y-5 overflow-y-auto bg-slate-50 px-5 py-5">
+          <section className="rounded-xl border border-slate-200 bg-white p-4">
             <label className={LABEL_CLS}>Customer ID / Phone</label>
             <div className="flex gap-2">
               <input
@@ -80919,18 +81441,9 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
               </button>
             </div>
             {searched && !found && (
-              <p className="mt-2 text-sm text-signal-red">
-                រកមិនឃើញ Customer នេះទេ
-              </p>
+              <p className="mt-2 text-sm text-signal-red">Customer not found</p>
             )}
-          </div>
-
-          {!found && !searched && (
-            <div className="text-center text-sm text-ink-600/55 border border-dashed border-mist-200 rounded-md py-10">
-              វាយ Customer ID ដើម្បីមើលទំនិញ Inbound Warehouse (ចិន) និង AIR
-              (Indonesia)
-            </div>
-          )}
+          </section>
 
           {found && (
             <>
@@ -80961,7 +81474,7 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
                 </div>
                 {found.addresses.length === 0 ? (
                   <p className="text-sm text-ink-600/55">
-                    Customer មិនទាន់មានអាសយដ្ឋានទេ
+                    This customer has no address yet
                   </p>
                 ) : (
                   <div className="space-y-2">
@@ -81024,8 +81537,7 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
                 </div>
                 {allItems.length === 0 ? (
                   <p className="text-sm text-ink-600/55 border border-dashed border-mist-200 rounded-md py-6 text-center px-4">
-                    Customer នេះគ្មានទំនិញក្នុង Inbound Warehouse (ចិន) ឬ AIR
-                    ដែល Received at Cambodia Warehouse ទេ
+                    No packages in Inbound Warehouse for this customer
                   </p>
                 ) : (
                   <div className="space-y-3">
@@ -81035,19 +81547,12 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
                         "China · Land / Sea — Inbound Warehouse",
                         chinaItems,
                       ],
-                      [
-                        "AIR",
-                        "Indonesia · AIR — Received at Cambodia Warehouse",
-                        airItems,
-                      ],
                     ]
                       .filter(([, , list]) => list.length > 0)
                       .map(([kind, title, list]) => (
                         <div key={kind}>
                           <div className="mb-1 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wide text-ink-600/55">
-                            <OriginBadge
-                              origin={kind === "AIR" ? "Indonesia" : "China"}
-                            />
+                            <OriginBadge origin="China" />
                             <span>
                               {title} ({list.length})
                             </span>
@@ -81056,7 +81561,6 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
                             {list.map((i) => {
                               const locked = activeTks.has(i._key);
                               const f = shippingFeeOf(i);
-                              const isAir = i._kind === "AIR";
                               return (
                                 <label
                                   key={i._key}
@@ -81075,30 +81579,14 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
                                   />
                                   <div className="flex-1 min-w-0">
                                     <div className="text-sm font-medium text-ink-900">
-                                      {isAir ? i.order_id : i.tk}
-                                      {isAir && i.tk ? (
-                                        <span className="ml-2 text-xs font-semibold text-signal-blue">
-                                          TK {i.tk}
-                                        </span>
-                                      ) : null}
+                                      {i.tk}
                                     </div>
                                     <div className="text-xs text-ink-600/55 truncate">
-                                      {isAir ? (
-                                        <>
-                                          {i.shop_name || "AIR Order"}
-                                          {i.product_name
-                                            ? ` · ${i.product_name}`
-                                            : ""}
-                                        </>
-                                      ) : (
-                                        <>
-                                          {i.weight_kg ?? i.weight ?? "—"} KG ·{" "}
-                                          {i.cbm ?? "—"} CBM
-                                          {i.product_name
-                                            ? ` · ${i.product_name}`
-                                            : ""}
-                                        </>
-                                      )}
+                                      {i.weight_kg ?? i.weight ?? "—"} KG ·{" "}
+                                      {i.cbm ?? "—"} CBM
+                                      {i.product_name
+                                        ? ` · ${i.product_name}`
+                                        : ""}
                                     </div>
                                   </div>
                                   <div className="text-right text-xs">
@@ -81177,9 +81665,9 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
         </div>
 
         {found && (
-          <div className="border-t border-mist-200 px-5 py-4 space-y-3">
+          <footer className="space-y-3 border-t border-slate-200 bg-white px-5 py-4">
             <div className="flex justify-between text-sm">
-              <span className="text-ink-600/70">Selected (TK + AIR)</span>
+              <span className="text-ink-600/70">Selected TKs</span>
               <span className="font-medium">{chosen.length}</span>
             </div>
             <div className="flex justify-between text-sm">
@@ -81211,9 +81699,9 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
                   : `Request Delivery (${chosen.length})`}
               </button>
             </div>
-          </div>
+          </footer>
         )}
-      </div>
+      </aside>
       {addrModal && found?.customer.uuid && (
         <CustomerAddressCreateModal
           customer={{
@@ -81232,90 +81720,803 @@ function RequestDeliveryDrawer({ open, onClose, activeTks, onSubmit }) {
           }}
         />
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
 
-function DeliveryDetailModal({ row, onClose }) {
+// Edit a Pending delivery (DRSB-style): drop-off address, delivery fee,
+// payment type and the courier note. Items / customer stay fixed.
+function DeliveryEditModal({ row, rows, onClose, onSave }) {
+  const { rows: warehouses } = useWarehouses();
+  const [addrs, setAddrs] = useState(null); // null = loading
+  const [addrId, setAddrId] = useState("");
+  const [fee, setFee] = useState("");
+  const [payType, setPayType] = useState("wallet");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [addrModal, setAddrModal] = useState(false);
+  const [custUuid, setCustUuid] = useState(null);
+
+  async function loadAddresses(selectId) {
+    const r = await findCustomerForDelivery(row.customer_code);
+    setCustUuid(r?.customer?.uuid || row.customer_id || null);
+    const list = r?.addresses || [];
+    setAddrs(list);
+    if (selectId) {
+      setAddrId(selectId);
+      return;
+    }
+    const cur =
+      list.find((a) => row.address_id && a.id === row.address_id) ||
+      list.find((a) => deliveryAddressText(a) === row.address_text);
+    setAddrId(cur?.id || "");
+  }
+
+  useEffect(() => {
+    if (!row) return;
+    setFee(String(Number(row.delivery_fee) || 0));
+    setPayType(row.payment_type === "cod" ? "cod" : "wallet");
+    setNote(row.note || "");
+    setErr("");
+    setBusy(false);
+    setAddrs(null);
+    loadAddresses().catch(() => setAddrs([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [row?.id]);
+
+  if (!row) return null;
+
+  const feeNum = Number(fee) || 0;
+  const picked = (addrs || []).find((a) => a.id === addrId);
+  // Suggested fee: the latest non-zero fee used for the same branch.
+  const branch = picked?.kh_branch_code || row.kh_branch_code || "";
+  const suggested = branch
+    ? Number(
+        (rows || []).find(
+          (r) =>
+            r.id !== row.id &&
+            r.kh_branch_code === branch &&
+            Number(r.delivery_fee) > 0,
+        )?.delivery_fee,
+      ) || 0
+    : 0;
+  const unpaid = (row.items || []).reduce(
+    (sum, i) => sum + (Number(i.fee_due) || 0),
+    0,
+  );
+  const cash = unpaid + (payType === "cod" ? feeNum : 0);
+  const noteRequired = feeNum <= 0;
+
+  const dirty =
+    feeNum !== (Number(row.delivery_fee) || 0) ||
+    payType !== (row.payment_type === "cod" ? "cod" : "wallet") ||
+    note.trim() !== String(row.note || "").trim() ||
+    (!!picked && deliveryAddressText(picked) !== row.address_text);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (busy || !dirty) return;
+    setErr("");
+    if (!picked && !row.address_text)
+      return setErr("Select a drop-off address");
+    if (feeNum < 0) return setErr("Delivery fee cannot be negative");
+    if (noteRequired && !note.trim())
+      return setErr("A note for the courier is required when the fee is $0");
+    setBusy(true);
+    try {
+      const values = {
+        delivery_fee: feeNum,
+        payment_type: payType,
+        cash_to_collect: Math.round(cash * 100) / 100,
+        note: note.trim(),
+      };
+      if (picked) {
+        const text = deliveryAddressText(picked);
+        Object.assign(values, {
+          address_id: picked.id,
+          receiver_name: picked.recipient_name || row.customer_name,
+          receiver_phone: picked.phone || row.customer_phone || "",
+          address_text: text,
+          address: text,
+          kh_branch_code: picked.kh_branch_code || "",
+          branch_code: picked.kh_branch_code || "",
+        });
+      }
+      await onSave(row, values);
+      onClose();
+    } catch (ex) {
+      setErr(ex.message || "Unable to save changes");
+      setBusy(false);
+    }
+  }
+
+  const label = "mb-1.5 block text-sm font-semibold text-slate-900";
+  const req = <span className="text-red-500"> *</span>;
+
+  return (
+    <>
+      <AppModal
+        title={
+          <span className="flex flex-wrap items-center gap-2">
+            Edit delivery <DeliveryStatusBadge status={row.status} />
+          </span>
+        }
+        subtitle={row.delivery_no}
+        maxW="max-w-2xl"
+        onClose={onClose}
+        onSubmit={submit}
+        busy={busy}
+        error={err}
+        className="cbx-modal-fin"
+        footer={
+          <>
+            <button
+              type="button"
+              className="cbx-btn"
+              onClick={onClose}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={busy || !dirty}
+              className="cbx-btn cbx-btn-primary"
+            >
+              {busy && <Icons.Loader2 size={15} className="animate-spin" />}
+              {busy ? "Saving..." : "Save changes"}
+            </button>
+            <span className="mr-auto self-center text-sm text-slate-500">
+              {dirty ? "Unsaved changes" : "No changes yet"}
+            </span>
+          </>
+        }
+      >
+        {/* Customer */}
+        <div>
+          <div className={label}>Customer</div>
+          <div className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3">
+            <div>
+              <div className="font-semibold text-slate-900">
+                {row.customer_name}
+              </div>
+              <div className="text-sm text-slate-600">
+                Order ID {fmtCustomerId(row.customer_code)} ·{" "}
+                {row.customer_phone || "—"}
+              </div>
+            </div>
+            {row.customer_code && row.customer_code !== "—" ? (
+              <a
+                href={`/customers/${encodeURIComponent(row.customer_code)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm font-semibold text-blue-600 hover:underline"
+              >
+                View ↗
+              </a>
+            ) : null}
+          </div>
+        </div>
+
+        {/* Drop-off address */}
+        <div>
+          <div className="mb-1.5 flex items-center justify-between">
+            <span className="text-sm font-semibold text-slate-900">
+              Drop-off address{req}
+            </span>
+            {supabase && custUuid ? (
+              <button
+                type="button"
+                onClick={() => setAddrModal(true)}
+                className="text-sm font-medium text-blue-600 hover:underline"
+              >
+                + Add address
+              </button>
+            ) : null}
+          </div>
+          {addrs === null ? (
+            <div className="rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-500">
+              Loading addresses...
+            </div>
+          ) : addrs.length === 0 ? (
+            <div className="rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-600">
+              {row.address_text || "This customer has no address yet"}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {addrs.map((a) => (
+                <label
+                  key={a.id}
+                  className={`flex cursor-pointer items-start gap-3 rounded-xl border px-4 py-3 ${addrId === a.id ? "border-blue-600 bg-blue-50/60 ring-1 ring-blue-600" : "border-slate-200 hover:bg-slate-50"}`}
+                >
+                  <input
+                    type="radio"
+                    checked={addrId === a.id}
+                    onChange={() => setAddrId(a.id)}
+                    className="mt-1"
+                  />
+                  <div className="text-sm">
+                    <div className="font-semibold text-slate-900">
+                      {a.label || "Address"}
+                      {a.is_default ? (
+                        <span className="ml-2 text-[11px] font-medium text-emerald-600">
+                          Default
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="text-slate-600">
+                      {a.recipient_name} · {a.phone}
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      {deliveryAddressText(a) || "—"}
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Fee + payment */}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <label className={label}>Delivery Fee{req}</label>
+            <div className="flex h-12 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100">
+              <span className="text-slate-500">$</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={fee}
+                onChange={(e) => setFee(e.target.value)}
+                className="w-full bg-transparent text-base outline-none"
+              />
+            </div>
+            {suggested > 0 && suggested !== feeNum ? (
+              <div className="mt-1.5 text-sm text-slate-500">
+                Suggested {money(suggested)} for this area{" "}
+                <button
+                  type="button"
+                  onClick={() => setFee(String(suggested))}
+                  className="font-semibold text-blue-600 hover:underline"
+                >
+                  Apply
+                </button>
+              </div>
+            ) : null}
+          </div>
+          <div>
+            <div className={label}>Payment Type</div>
+            <div className="grid h-12 grid-cols-2 overflow-hidden rounded-lg border border-slate-300">
+              {[
+                ["cod", "Cash on delivery"],
+                ["wallet", "Wallet"],
+              ].map(([k, t]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setPayType(k)}
+                  className={`text-sm font-semibold ${payType === k ? "bg-blue-600 text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+            <div className="mt-1.5 text-sm text-slate-500">
+              {payType === "wallet"
+                ? "Taken from the wallet when settled."
+                : `Courier collects ${money(cash)} in cash.`}
+            </div>
+          </div>
+        </div>
+
+        {/* Note */}
+        <div>
+          <div className="mb-1.5 flex items-center justify-between">
+            <label className="text-sm font-semibold text-slate-900">
+              Note for courier{noteRequired ? req : null}
+            </label>
+            {noteRequired ? (
+              <span className="text-sm text-orange-700">
+                Required when the fee is $0
+              </span>
+            ) : null}
+          </div>
+          <textarea
+            rows={3}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            className="cbx-input"
+          />
+        </div>
+      </AppModal>
+      {addrModal && custUuid && (
+        <CustomerAddressCreateModal
+          customer={{
+            id: custUuid,
+            customer_code: row.customer_code,
+            name: row.customer_name,
+          }}
+          warehouses={warehouses}
+          onClose={() => setAddrModal(false)}
+          onDone={async () => {
+            setAddrModal(false);
+            await loadAddresses(addrId);
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function DeliveryDetailView({
+  row,
+  onBack,
+  canEdit = false,
+  onEdit,
+  onDispatch,
+  onDelivered,
+  onCancel,
+}) {
   const { findPackage } = usePackageTracking();
   if (!row) return null;
+
+  const items = row.items || [];
+  const fee = Number(row.delivery_fee) || 0;
+  const cancelled = row.status === "Cancelled";
+  const feeMissing = !cancelled && row.status === "Pending" && fee <= 0;
+  const copy = (text, label) => {
+    try {
+      navigator.clipboard?.writeText(String(text || ""));
+      emitCBToast("ok", `${label} copied`, String(text || "").slice(0, 60));
+    } catch (_e) {
+      /* clipboard blocked */
+    }
+  };
+  const mapsHref = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(row.address_text || "")}`;
+  const phone = row.receiver_phone || row.customer_phone || "";
+
+  // Status stepper: Pending -> In Delivery -> Delivered
+  const steps = [
+    { key: "Pending", label: "Pending", at: row.requested_at },
+    { key: "In Delivery", label: "In delivery", at: row.dispatched_at },
+    { key: "Delivered", label: "Delivered", at: row.delivered_at },
+  ];
+  const order = { Pending: 0, "In Delivery": 1, Delivered: 2 };
+  const cur = cancelled ? -1 : (order[row.status] ?? 0);
+
+  const timeline = [
+    row.requested_at && {
+      t: "Requested",
+      sub: row.requested_by ? `by ${row.requested_by}` : "",
+      at: row.requested_at,
+    },
+    row.dispatched_at && {
+      t: "Dispatched",
+      sub: row.driver ? `courier ${row.driver}` : "",
+      at: row.dispatched_at,
+    },
+    row.delivered_at && { t: "Delivered", sub: "", at: row.delivered_at },
+    cancelled && {
+      t: "Cancelled",
+      sub: row.cancel_reason || "",
+      at: row.updated_at || "",
+    },
+  ].filter(Boolean);
+
+  const card = "rounded-xl border border-slate-200 bg-white";
+  const cap =
+    "text-[11px] font-semibold uppercase tracking-wide text-slate-500";
+
+  const canAct =
+    canEdit && (row.status === "Pending" || row.status === "In Delivery");
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-md shadow-lg w-full max-w-lg max-h-[90vh] overflow-y-auto"
-      >
-        <div className="px-5 py-4 border-b border-mist-200 flex items-center justify-between">
-          <h3 className="font-display font-bold text-base text-ink-900">
-            {row.delivery_no}
-          </h3>
-          <DeliveryStatusBadge status={row.status} />
+    <div className="space-y-4">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <button
+            type="button"
+            onClick={onBack}
+            className="mb-2 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-slate-800"
+          >
+            <Icons.ArrowLeft size={14} /> Delivery
+          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="truncate font-mono text-2xl font-bold text-slate-900">
+              {row.delivery_no}
+            </h1>
+            <DeliveryStatusBadge status={row.status} />
+          </div>
+          <button
+            type="button"
+            onClick={() => copy(row.delivery_no, "Delivery No")}
+            className="mt-1 inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800"
+          >
+            Requested {formatIso(row.requested_at)}
+            <Icons.Copy size={12} />
+          </button>
         </div>
-        <div className="p-5 space-y-3 text-sm">
-          <div>
-            <span className="text-ink-600/60">Customer: </span>
-            {row.customer_name} ({fmtCustomerId(row.customer_code)})
+        {canAct && (
+          <div className="flex gap-2">
+            {row.status === "Pending" && onEdit ? (
+              <button
+                type="button"
+                className={CT_BTN_GHOST}
+                onClick={() => onEdit(row)}
+              >
+                <Icons.Pencil size={14} className="mr-1.5 inline" />
+                Edit
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className={CT_BTN_DANGER}
+              onClick={() => onCancel?.(row)}
+            >
+              Cancel
+            </button>
+            {row.status === "Pending" ? (
+              <button
+                type="button"
+                className={CT_BTN_PRIMARY}
+                onClick={() => onDispatch?.(row)}
+              >
+                Dispatch
+              </button>
+            ) : (
+              <button
+                type="button"
+                className={CT_BTN_OK}
+                onClick={() => onDelivered?.(row)}
+              >
+                Delivered
+              </button>
+            )}
           </div>
-          <div>
-            <span className="text-ink-600/60">Receiver: </span>
-            {row.receiver_name} · {row.receiver_phone}
+        )}
+      </header>
+
+      <div className="space-y-4">
+        {feeMissing && (
+          <div className="flex items-center gap-2 rounded-lg bg-orange-50 px-4 py-2.5 text-sm text-orange-700">
+            <Icons.CircleDollarSign size={16} />
+            The delivery fee is not set yet. Set it before dispatch.
           </div>
-          <div>
-            <span className="text-ink-600/60">Address: </span>
+        )}
+        {cancelled && (
+          <div className="flex items-center gap-2 rounded-lg bg-red-50 px-4 py-2.5 text-sm text-red-700">
+            <Icons.TriangleAlert size={16} />
+            Cancelled{row.cancel_reason ? ` · ${row.cancel_reason}` : ""}
+          </div>
+        )}
+
+        {/* Cash / Customer / Courier */}
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className={`${card} border-blue-200 bg-blue-50/50 p-4`}>
+            <div className="flex items-center justify-between">
+              <span className={cap}>Cash to collect</span>
+              <span className="text-xs font-semibold text-blue-600">
+                Delivery Fee {money(fee)}
+              </span>
+            </div>
+            <div className="mt-2 text-2xl font-bold text-slate-900">
+              {money(row.cash_to_collect)}
+            </div>
+            <div className="mt-1 text-xs text-slate-500">
+              <span className="mr-2 font-semibold text-blue-600">
+                {row.payment_type === "cod" ? "COD" : "Wallet"}
+              </span>
+              {Number(row.cash_to_collect) > 0
+                ? "Collect at the door"
+                : "Nothing to collect"}
+            </div>
+          </div>
+          <div className={`${card} p-4`}>
+            <span className={cap}>Customer</span>
+            <div className="mt-2 text-base font-bold text-slate-900">
+              {row.customer_name}
+            </div>
+            <div className="mt-1 text-xs text-slate-500">
+              {row.customer_phone || "—"} · Order ID{" "}
+              {fmtCustomerId(row.customer_code)}
+            </div>
+          </div>
+          <div className={`${card} p-4`}>
+            <span className={cap}>Courier</span>
+            <div
+              className={`mt-2 text-base font-bold ${row.driver ? "text-slate-900" : "text-orange-700"}`}
+            >
+              {row.driver || "Unassigned"}
+            </div>
+            {row.dispatched_at && (
+              <div className="mt-1 text-xs text-slate-500">
+                Dispatched {formatIso(row.dispatched_at)}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Drop-off */}
+        <div className={`${card} p-5`}>
+          <div className="flex items-center justify-between text-xs text-slate-500">
+            <span className="inline-flex items-center gap-1.5 font-semibold uppercase tracking-wide">
+              <Icons.MapPin size={13} /> Drop-off
+            </span>
+            {row.kh_branch_code ? <span>{row.kh_branch_code}</span> : null}
+          </div>
+          <div className="mt-2 text-lg font-bold text-slate-900">
+            {row.receiver_name || row.customer_name}
+          </div>
+          <div className="mt-1 text-sm text-slate-600">
             {row.address_text || "—"}
           </div>
-          <div>
-            <span className="text-ink-600/60">Payment: </span>
-            {row.payment_type === "cod" ? "COD" : "Wallet"} · Delivery fee{" "}
-            {money(row.delivery_fee)}
-          </div>
-          <div>
-            <span className="text-ink-600/60">Cash to collect: </span>
-            <b>{money(row.cash_to_collect)}</b>
-          </div>
-          {row.driver && (
-            <div>
-              <span className="text-ink-600/60">Driver: </span>
-              {row.driver}
-            </div>
-          )}
-          {row.note && (
-            <div>
-              <span className="text-ink-600/60">Note: </span>
-              {row.note}
-            </div>
-          )}
-          {row.cancel_reason && (
-            <div className="text-signal-red">
-              Cancelled: {row.cancel_reason}
-            </div>
-          )}
-          <div className="border border-mist-200 rounded-md divide-y divide-mist-100">
-            {(row.items || []).map((i) => {
-              const air = isAirDeliveryItem(i.tk);
-              const p = air ? null : findPackage(i.tk);
-              return (
-                <div key={i.tk} className="flex justify-between px-3 py-2">
-                  <span className="font-medium inline-flex items-center gap-2">
-                    {deliveryItemLabel(i.tk)}
-                    {air && <OriginBadge origin="Indonesia" />}
-                  </span>
-                  <span className="text-xs text-ink-600/60">
-                    {p ? `${p.weight_kg ?? p.weight ?? "—"} KG` : ""}{" "}
-                    {Number(i.fee_due) > 0 ? `· Due ${money(i.fee_due)}` : ""}
-                  </span>
-                </div>
-              );
-            })}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <a
+              href={mapsHref}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700"
+            >
+              <Icons.Navigation size={14} /> Navigate
+              <span className="text-xs font-normal opacity-80">
+                · Google Maps
+              </span>
+            </a>
+            {phone ? (
+              <a
+                href={`tel:${phone}`}
+                className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                <Icons.Phone size={14} /> Call
+              </a>
+            ) : null}
+            <button
+              type="button"
+              onClick={() =>
+                copy(
+                  [row.receiver_name, phone, row.address_text]
+                    .filter(Boolean)
+                    .join(" · "),
+                  "Address",
+                )
+              }
+              className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              <Icons.Copy size={14} /> Copy
+            </button>
           </div>
         </div>
-        <div className="flex justify-end px-5 py-4 border-t border-mist-200">
-          <button type="button" onClick={onClose} className={CT_BTN_GHOST}>
-            Close
-          </button>
+
+        {/* Status stepper */}
+        {!cancelled && (
+          <div className={`${card} px-5 py-4`}>
+            <div className="flex items-start">
+              {steps.map((st, i) => {
+                const done = i < cur || (i === cur && cur === 2);
+                const active = i === cur;
+                return (
+                  <React.Fragment key={st.key}>
+                    <div className="flex items-start gap-2">
+                      <span
+                        className={`mt-0.5 grid h-5 w-5 place-items-center rounded-full border-2 ${done || active ? "border-blue-600 bg-blue-600 text-white" : "border-slate-300 bg-white"}`}
+                      >
+                        {(done || active) && <Icons.Check size={12} />}
+                      </span>
+                      <div className="leading-tight">
+                        <div className="text-sm font-semibold text-slate-900">
+                          {st.label}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {st.at ? formatIso(st.at) : "Not yet"}
+                        </div>
+                      </div>
+                    </div>
+                    {i < steps.length - 1 && (
+                      <div
+                        className={`mx-3 mt-2.5 h-px flex-1 ${i < cur ? "bg-blue-600" : "bg-slate-300"}`}
+                      />
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Packages + Timeline */}
+        <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
+          <div className={`${card} p-5`}>
+            <h3 className="text-base font-bold text-slate-900">
+              Packages · {items.length}
+            </h3>
+            <div className="mt-3 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                    <th className="py-2 pr-3">Tracking / Order</th>
+                    <th className="py-2 pr-3">Size</th>
+                    <th className="py-2 pr-3">Waiting</th>
+                    <th className="py-2 text-right">Shipping</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {items.map((i) => {
+                    const pkg = findPackage(i.tk);
+                    const due = Number(i.fee_due) || 0;
+                    const fee = Number(pkg?.freight_fee ?? i.fee) || 0;
+                    const sizeName = {
+                      S: "Small box",
+                      M: "Medium box",
+                      L: "Large box",
+                      OVER: "Oversize",
+                    }[pkg?.size_class];
+                    const qty = Number(pkg?.package_count) || 1;
+                    // Whole row opens in a new tab: Parse Link -> CN Order (JZE...)
+                    // detail; Shipment -> its Shipment / Package (TK) detail.
+                    const orderNo = pkg?.cn_order_id
+                      ? CN_ORDER_NO_BY_ID[pkg.cn_order_id] ||
+                        pkg.cn_order_no ||
+                        ""
+                      : pkg?.order_no || "";
+                    const orderHref = pkg
+                      ? pkgRowHref(pkg)
+                      : `/packages/${encodeURIComponent(i.tk)}`;
+                    const openRow = () =>
+                      window.open(orderHref, "_blank", "noopener,noreferrer");
+                    // Waiting = days since the TK arrived in Cambodia, up to
+                    // delivery (or now while it is still waiting).
+                    const arrivedIso = pkg ? arrivalAtOf(pkg) : null;
+                    const arrived = arrivedIso ? new Date(arrivedIso) : null;
+                    const endAt =
+                      row.status === "Delivered" && row.delivered_at
+                        ? new Date(row.delivered_at)
+                        : new Date();
+                    const days =
+                      arrived && !Number.isNaN(arrived.getTime())
+                        ? Math.max(0, Math.floor((endAt - arrived) / 86400000))
+                        : null;
+                    return (
+                      <tr
+                        key={i.tk}
+                        role="link"
+                        tabIndex={0}
+                        title="Open in a new tab"
+                        onClick={() => openRow()}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") openRow();
+                        }}
+                        className="cursor-pointer transition-colors hover:bg-blue-50/50 focus:bg-blue-50/50 focus:outline-none"
+                      >
+                        <td className="py-3 pr-3 pl-2">
+                          <div className="font-mono font-semibold text-slate-900">
+                            {deliveryItemLabel(i.tk)}
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            Order{" "}
+                            <span className="font-mono">{orderNo || "—"}</span>
+                          </div>
+                        </td>
+                        <td className="py-3 pr-3">
+                          <div className="font-medium text-slate-900">
+                            {sizeName || "—"}
+                          </div>
+                          <div className="text-xs text-slate-500">
+                            qty {qty}
+                          </div>
+                        </td>
+                        <td className="py-3 pr-3">
+                          {days == null ? (
+                            <span className="text-slate-400">—</span>
+                          ) : (
+                            <>
+                              <div
+                                className={`font-semibold ${days >= 7 ? "text-orange-700" : "text-slate-900"}`}
+                              >
+                                {days === 0
+                                  ? "Today"
+                                  : `${days} day${days === 1 ? "" : "s"}`}
+                              </div>
+                              <div className="text-xs text-slate-500">
+                                arrived{" "}
+                                {arrived.toLocaleDateString("en-US", {
+                                  month: "short",
+                                  day: "numeric",
+                                })}
+                              </div>
+                            </>
+                          )}
+                        </td>
+                        <td className="py-3 text-right">
+                          <div className="font-semibold text-slate-700">
+                            {money(due > 0 ? due : fee)}
+                          </div>
+                          {due > 0 ? (
+                            <span className="inline-block rounded bg-amber-50 px-1.5 py-0.5 text-[11px] font-semibold text-amber-700">
+                              Due
+                            </span>
+                          ) : (
+                            <span className="inline-block rounded bg-emerald-50 px-1.5 py-0.5 text-[11px] font-semibold text-emerald-700">
+                              Paid
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className={`${card} p-5`}>
+            <h3 className="text-base font-bold text-slate-900">Timeline</h3>
+            <ol className="mt-3 space-y-3">
+              {timeline.map((t) => (
+                <li key={t.t} className="flex gap-2.5">
+                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-blue-600" />
+                  <div className="leading-tight">
+                    <div className="text-sm font-semibold text-slate-900">
+                      {t.t}
+                      {t.sub ? (
+                        <span className="ml-1 text-xs font-normal text-slate-500">
+                          · {t.sub}
+                        </span>
+                      ) : null}
+                    </div>
+                    {t.at ? (
+                      <div className="text-xs text-slate-500">
+                        {formatIso(t.at)}
+                      </div>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </div>
+        </div>
+
+        {/* Delivery info */}
+        <div className={`${card} p-5`}>
+          <h3 className="text-base font-bold text-slate-900">Delivery</h3>
+          <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+            <div>
+              <dt className="text-slate-500">Dispatched At</dt>
+              <dd className="font-medium text-slate-900">
+                {row.dispatched_at
+                  ? formatIso(row.dispatched_at)
+                  : "Not scheduled"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-slate-500">Delivered At</dt>
+              <dd className="font-medium text-slate-900">
+                {row.delivered_at ? formatIso(row.delivered_at) : "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-slate-500">Created Date</dt>
+              <dd className="font-medium text-slate-900">
+                {formatIso(row.requested_at)}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-slate-500">Payment</dt>
+              <dd className="font-medium text-slate-900">
+                {row.payment_type === "cod" ? "COD" : "Wallet"} · Delivery fee{" "}
+                {money(fee)}
+              </dd>
+            </div>
+          </dl>
+          {row.note ? (
+            <div className="mt-4 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+              <Icons.StickyNote size={15} className="mt-0.5 shrink-0" />
+              <span>
+                <b>Note:</b> {row.note}
+              </span>
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
@@ -81332,56 +82533,40 @@ function DeliveryDispatchModal({ row, onClose, onConfirm }) {
     setBusy(false);
   }, [row]);
   if (!row) return null;
+
+  async function submit(e) {
+    e.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await onConfirm(row, driver.trim());
+      onClose();
+    } catch (ex) {
+      setErr(ex.message || "Unable to complete this action");
+      setBusy(false);
+    }
+  }
+
   return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
+    <AppModal
+      title={`Dispatch ${row.delivery_no}`}
+      onClose={onClose}
+      onSubmit={submit}
+      busy={busy}
+      error={err}
+      submitLabel="Dispatch"
+      busyLabel="Processing..."
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-md shadow-lg w-full max-w-md"
-      >
-        <div className="px-5 py-4 border-b border-mist-200">
-          <h3 className="font-display font-bold text-base text-ink-900">
-            Dispatch {row.delivery_no}
-          </h3>
-        </div>
-        <div className="p-5 space-y-3">
-          <div>
-            <label className={LABEL_CLS}>Driver / Courier</label>
-            <input
-              value={driver}
-              onChange={(e) => setDriver(e.target.value)}
-              className={INPUT_CLS}
-              autoFocus
-            />
-          </div>
-          {err && <div className="text-sm text-signal-red">{err}</div>}
-        </div>
-        <div className="flex justify-end gap-2 px-5 py-4 border-t border-mist-200">
-          <button type="button" onClick={onClose} className={CT_BTN_GHOST}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            className={CT_BTN_PRIMARY}
-            onClick={async () => {
-              setBusy(true);
-              try {
-                await onConfirm(row, driver.trim());
-                onClose();
-              } catch (e) {
-                setErr(e.message);
-                setBusy(false);
-              }
-            }}
-          >
-            {busy ? "Processing..." : "Dispatch"}
-          </button>
-        </div>
-      </div>
-    </div>
+      <FormField label="Driver / Courier">
+        <input
+          value={driver}
+          onChange={(e) => setDriver(e.target.value)}
+          className="cbx-input"
+          autoFocus
+        />
+      </FormField>
+    </AppModal>
   );
 }
 
@@ -82200,8 +83385,10 @@ function DeliveryPage() {
   const [tab, setTab] = useState("All");
   const [search, setSearch] = useState("");
   const [drawer, setDrawer] = useState(false);
-  const [detail, setDetail] = useState(null);
+  const { id: routeId } = useParams();
+  const navigate = useNavigate();
   const [dispatch, setDispatch] = useState(null);
+  const [editRow, setEditRow] = useState(null);
   const [confirm, setConfirm] = useState(null); // {row, kind}
   const [range, setRange] = useState("30d");
   const [courierF, setCourierF] = useState("");
@@ -82307,7 +83494,8 @@ function DeliveryPage() {
   }, [scoped, tab, search, searchBy, newestFirst]);
 
   async function submitRequest(d, items) {
-    if (!canCreate) throw new Error("អ្នកគ្មានសិទ្ធិ Request Delivery ទេ");
+    if (!canCreate)
+      throw new Error("You do not have permission to request a delivery");
     const created = await create({ ...d, requested_by: operator }, items);
     emitCBToast(
       "ok",
@@ -82317,6 +83505,13 @@ function DeliveryPage() {
     // a fresh request starts as Pending → jump straight to it
     setTab("Pending");
     setReport("pending");
+  }
+
+  async function doEdit(row, values) {
+    if (!canEdit)
+      throw new Error("You do not have permission to edit deliveries");
+    await patch(row.id, { ...values, updated_by: operator });
+    emitCBToast("ok", "Delivery updated", row.delivery_no);
   }
 
   async function doDispatch(row, driver) {
@@ -82373,7 +83568,7 @@ function DeliveryPage() {
       render: (r) => (
         <button
           type="button"
-          onClick={() => setDetail(r)}
+          onClick={() => navigate(`/delivery/${encodeURIComponent(r.id)}`)}
           className="font-medium text-signal-blue hover:underline"
         >
           {r.delivery_no}
@@ -82466,6 +83661,89 @@ function DeliveryPage() {
         </div>
       )
     : undefined;
+
+  const modals = (
+    <>
+      <DeliveryEditModal
+        key={editRow?.id || "edit"}
+        row={editRow}
+        rows={rows}
+        onClose={() => setEditRow(null)}
+        onSave={doEdit}
+      />
+      <DeliveryDispatchModal
+        row={dispatch}
+        onClose={() => setDispatch(null)}
+        onConfirm={doDispatch}
+      />
+      <ConfirmModal
+        open={!!confirm}
+        title={
+          confirm?.kind === "done" ? "Mark as Delivered" : "Cancel Delivery"
+        }
+        message={
+          confirm?.kind === "done"
+            ? `Confirm that ${confirm?.row?.delivery_no} has been delivered? All its TKs will be set to Completed.`
+            : `Cancel ${confirm?.row?.delivery_no}? Its TKs can be requested again.`
+        }
+        confirmLabel={
+          confirm?.kind === "done" ? "Delivered" : "Cancel Delivery"
+        }
+        danger={confirm?.kind === "cancel"}
+        askReason={confirm?.kind === "cancel"}
+        fin
+        onConfirm={async (reason) => {
+          if (confirm.kind === "done") await doDelivered(confirm.row);
+          else {
+            if (!String(reason || "").trim())
+              throw new Error("Please enter a reason");
+            await doCancel(confirm.row, reason.trim());
+          }
+        }}
+        onClose={() => setConfirm(null)}
+      />
+    </>
+  );
+
+  // /delivery/:id -> full delivery detail page (like CN order detail)
+  if (routeId) {
+    const row = rows.find(
+      (r) => String(r.id) === routeId || r.delivery_no === routeId,
+    );
+    return (
+      <div className="space-y-5">
+        {row ? (
+          <DeliveryDetailView
+            row={row}
+            canEdit={canEdit}
+            onBack={() => navigate("/delivery")}
+            onEdit={(r) => setEditRow(r)}
+            onDispatch={(r) => setDispatch(r)}
+            onDelivered={(r) => setConfirm({ row: r, kind: "done" })}
+            onCancel={(r) => setConfirm({ row: r, kind: "cancel" })}
+          />
+        ) : (
+          <div className="space-y-3 py-16 text-center text-sm text-ink-600/60">
+            {loading ? (
+              "Loading..."
+            ) : (
+              <>
+                <div>Delivery not found</div>
+                <button
+                  type="button"
+                  className={CT_BTN_GHOST}
+                  onClick={() => navigate("/delivery")}
+                >
+                  Back to Delivery
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        {modals}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5">
@@ -82626,10 +83904,14 @@ function DeliveryPage() {
             rows={shown}
             loading={loading}
             rowActions={actions}
+            rowKey={(r) => r.id}
+            onRowClick={(r) =>
+              navigate(`/delivery/${encodeURIComponent(r.id)}`)
+            }
           />
           {!loading && shown.length === 0 && (
             <div className="text-center text-sm text-ink-600/55 py-10">
-              មិនមានទិន្នន័យ Delivery ទេ
+              No deliveries found
             </div>
           )}
         </div>
@@ -82641,37 +83923,7 @@ function DeliveryPage() {
         activeTks={activeTks}
         onSubmit={submitRequest}
       />
-      <DeliveryDetailModal row={detail} onClose={() => setDetail(null)} />
-      <DeliveryDispatchModal
-        row={dispatch}
-        onClose={() => setDispatch(null)}
-        onConfirm={doDispatch}
-      />
-      <ConfirmModal
-        open={!!confirm}
-        title={
-          confirm?.kind === "done" ? "Mark as Delivered" : "Cancel Delivery"
-        }
-        message={
-          confirm?.kind === "done"
-            ? `បញ្ជាក់ថា ${confirm?.row?.delivery_no} បានដឹកដល់ហើយ? TK ទាំងអស់នឹងប្តូរទៅ Completed។`
-            : `បោះបង់ ${confirm?.row?.delivery_no}? TK នឹងអាច Request ម្តងទៀតបាន។`
-        }
-        confirmLabel={
-          confirm?.kind === "done" ? "Delivered" : "Cancel Delivery"
-        }
-        danger={confirm?.kind === "cancel"}
-        askReason={confirm?.kind === "cancel"}
-        onConfirm={async (reason) => {
-          if (confirm.kind === "done") await doDelivered(confirm.row);
-          else {
-            if (!String(reason || "").trim())
-              throw new Error("សូមបញ្ចូលមូលហេតុ");
-            await doCancel(confirm.row, reason.trim());
-          }
-        }}
-        onClose={() => setConfirm(null)}
-      />
+      {modals}
     </div>
   );
 }
@@ -90528,6 +91780,7 @@ function AdminApp() {
               <Route path="/exceptions" element={<ExceptionCenterPage />} />
               <Route path="/wh-arrived" element={<WHArrivedPage />} />
               <Route path="/delivery" element={<DeliveryPage />} />
+              <Route path="/delivery/:id" element={<DeliveryPage />} />
               <Route path="/sorting" element={<SortingPage />} />
               <Route path="/warehouses" element={<WarehouseManagementPage />} />
               <Route path="/addresses" element={<AddressManagementPage />} />
