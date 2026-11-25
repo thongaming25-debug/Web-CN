@@ -3469,6 +3469,7 @@ const PERMISSION_GROUPS = [
       ["support.view", "View Support Tools (menu)"],
       ["support.rollback", "Rollback Completed Orders to Inbound Warehouse"],
       ["support.rollback_refund", "Rollback Refunded CN Orders"],
+      ["support.fix_order_id", "Fix Duplicate Order IDs"],
     ],
   },
   {
@@ -3551,6 +3552,7 @@ const PATH_VIEW = {
   "/support": "support.view",
   "/support/rollback-completed": "support.rollback",
   "/support/rollback-refund": "support.rollback_refund",
+  "/support/fix-duplicate-order-id": "support.fix_order_id",
 };
 
 // Generic list pages: which permission creates / edits / deletes a row.
@@ -67119,6 +67121,14 @@ const SUPPORT_TOOLS = [
     desc: "Undo a CN order refund by Order ID: takes the money back from the wallet and returns the order to Approve Purchase.",
     perm: "support.rollback_refund",
   },
+  {
+    key: "fix-duplicate-order-id",
+    code: "FD",
+    color: "bg-amber-500",
+    title: "Fix Duplicate Order ID",
+    desc: "Shipment and Parse Link share the same Order ID? Search it and renumber one of them.",
+    perm: "support.fix_order_id",
+  },
 ];
 
 function SupportHubPage() {
@@ -67651,6 +67661,395 @@ function RollbackCompletedPage() {
                   onDone={onDone}
                 />
               ))}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Fix Duplicate Order ID — a Shipment (orders.order_no) and a Parse Link CN
+// order (cn_orders.order_id) ended up with the same JZE… ID. Search the ID,
+// choose which record to renumber; the fix_duplicate_order_id RPC renames it
+// (with its packages and photos) in ONE transaction and writes a log row.
+async function findOrderIdRecords(raw) {
+  const id = String(raw || "")
+    .trim()
+    .toUpperCase();
+  if (!id) throw new Error("Enter an Order ID.");
+  if (!supabase) throw new Error("Database is not connected.");
+  const [oRes, cRes] = await Promise.all([
+    supabase.from("orders").select("*").eq("order_no", id).limit(20),
+    supabase.from("cn_orders").select("*").eq("order_id", id).limit(20),
+  ]);
+  if (oRes.error) throw oRes.error;
+  if (cRes.error) throw cRes.error;
+  const shipments = oRes.data || [];
+  const parseLinks = cRes.data || [];
+  const [sPk, cPk] = await Promise.all([
+    shipments.length
+      ? supabase
+          .from("packages")
+          .select("id,tk,status,order_id")
+          .in(
+            "order_id",
+            shipments.map((o) => String(o.id)),
+          )
+          .limit(500)
+      : { data: [] },
+    parseLinks.length
+      ? supabase
+          .from("packages")
+          .select("id,tk,status,cn_order_id")
+          .in(
+            "cn_order_id",
+            parseLinks.map((o) => o.id),
+          )
+          .limit(500)
+      : { data: [] },
+  ]);
+  const records = [
+    ...shipments.map((o) => ({
+      key: `shipment:${o.id}`,
+      source: "shipment",
+      row: o,
+      created: o.created_at || o.date || null,
+      packages: (sPk.data || []).filter(
+        (p) => String(p.order_id) === String(o.id),
+      ),
+    })),
+    ...parseLinks.map((o) => ({
+      key: `parse_link:${o.id}`,
+      source: "parse_link",
+      row: o,
+      created: o.created_at || null,
+      packages: (cPk.data || []).filter(
+        (p) => String(p.cn_order_id) === String(o.id),
+      ),
+    })),
+  ];
+  return {
+    id,
+    isDuplicate: shipments.length > 0 && parseLinks.length > 0,
+    records,
+  };
+}
+
+function FixDuplicateOrderIdPage() {
+  const { user } = useAuth();
+  const { refetch } = usePackageTracking();
+  const canFix = hasPermission(user, "support.fix_order_id");
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [result, setResult] = useState(null); // null = nothing searched yet
+  const [confirmKey, setConfirmKey] = useState("");
+  const [note, setNote] = useState("");
+  const [fixing, setFixing] = useState(false);
+
+  const fmt = (v) => {
+    if (!v) return "—";
+    const d = new Date(v);
+    return Number.isNaN(d.getTime())
+      ? String(v)
+      : d.toLocaleString("en-GB", { timeZone: "Asia/Phnom_Penh" });
+  };
+
+  async function search(value, keepSuccess = false) {
+    setBusy(true);
+    setError("");
+    setConfirmKey("");
+    setNote("");
+    if (!keepSuccess) setSuccess("");
+    try {
+      setResult(await findOrderIdRecords(value ?? query));
+    } catch (e) {
+      setResult(null);
+      setError(e.message || "Search failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // The newer record is the one we recommend renumbering — the older one
+  // is more likely to be already visible to the customer.
+  const recommendedKey = result?.records?.length
+    ? [...result.records].sort(
+        (a, b) => new Date(b.created || 0) - new Date(a.created || 0),
+      )[0].key
+    : "";
+
+  async function renumber(rec) {
+    setFixing(true);
+    setError("");
+    try {
+      requirePermission(user, "support.fix_order_id");
+      const { data, error: err } = await supabase.rpc(
+        "fix_duplicate_order_id",
+        {
+          p_source: rec.source,
+          p_record_id: rec.row.id,
+          p_reason: note.trim() || null,
+        },
+      );
+      if (err) throw err;
+      if (rec.source === "parse_link" && data?.new_id)
+        CN_ORDER_NO_BY_ID[rec.row.id] = data.new_id;
+      setSuccess(
+        `Renumbered ${rec.source === "shipment" ? "Shipment" : "Parse Link"} order: ${data?.old_id} → ${data?.new_id}`,
+      );
+      try {
+        await refetch?.();
+      } catch {
+        /* lists refresh on the next realtime event / focus */
+      }
+      await search(result.id, true);
+    } catch (e) {
+      setError(e.message || "Could not renumber this order.");
+    } finally {
+      setFixing(false);
+    }
+  }
+
+  const label = (s) => (s === "shipment" ? "Shipment" : "Parse Link");
+
+  return (
+    <div className="min-h-full bg-slate-50/70">
+      <div className="mx-auto max-w-[900px] space-y-5 p-5 md:p-7">
+        <div className="flex items-start gap-3">
+          <Link
+            to="/support"
+            className="mt-1 rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"
+            aria-label="Back to Support"
+          >
+            <Icons.ArrowLeft size={18} />
+          </Link>
+          <div>
+            <h1 className="text-2xl font-extrabold tracking-tight text-slate-900">
+              Fix Duplicate Order ID
+            </h1>
+            <p className="text-sm text-slate-500">
+              A Shipment and a Parse Link order share the same Order ID? Enter
+              it, then renumber one of them. Its packages and photos follow.
+            </p>
+          </div>
+        </div>
+
+        {!canFix ? (
+          <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
+            You do not have permission to fix Order IDs. Ask a Super Admin to
+            grant "Fix Duplicate Order IDs" in Role Management.
+          </div>
+        ) : (
+          <>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                search();
+              }}
+              className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+            >
+              <label className="mb-1.5 block text-sm font-semibold text-slate-900">
+                Order ID <span className="text-red-500">*</span>
+              </label>
+              <div className="flex gap-3">
+                <div className="relative flex-1">
+                  <Icons.Search
+                    size={15}
+                    className="absolute left-3 top-3 text-slate-400"
+                  />
+                  <input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="e.g. JZE261122001"
+                    autoFocus
+                    className="h-10 w-full rounded-xl border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={busy || !query.trim()}
+                  className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {busy ? (
+                    <Icons.Loader2 size={15} className="animate-spin" />
+                  ) : (
+                    <Icons.Search size={15} />
+                  )}
+                  Search
+                </button>
+              </div>
+            </form>
+
+            {error && (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                {error}
+              </div>
+            )}
+            {success && (
+              <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                <Icons.CheckCircle2 size={16} className="mt-0.5 shrink-0" />
+                <span>{success}</span>
+              </div>
+            )}
+
+            {result === null && !error && (
+              <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center">
+                <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+                  <Icons.PackageSearch size={24} />
+                </div>
+                <div className="font-semibold text-slate-900">
+                  Search for a duplicated Order ID
+                </div>
+                <p className="mt-1 text-sm text-slate-500">
+                  Both the Shipment and the Parse Link order will be shown.
+                </p>
+              </div>
+            )}
+            {result && result.records.length === 0 && (
+              <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
+                No order found with ID "{result.id}".
+              </div>
+            )}
+            {result && result.records.length > 0 && !result.isDuplicate && (
+              <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+                "{result.id}" is not duplicated: it exists only as a{" "}
+                {label(result.records[0].source)} order. Nothing to fix.
+              </div>
+            )}
+
+            {result &&
+              result.isDuplicate &&
+              result.records.map((rec) => {
+                const recommended = rec.key === recommendedKey;
+                const confirming = confirmKey === rec.key;
+                return (
+                  <div
+                    key={rec.key}
+                    className={`rounded-2xl border bg-white p-5 shadow-sm ${
+                      recommended ? "border-amber-300" : "border-slate-200"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                            rec.source === "shipment"
+                              ? "bg-sky-50 text-sky-700"
+                              : "bg-violet-50 text-violet-700"
+                          }`}
+                        >
+                          {label(rec.source)}
+                        </span>
+                        <span className="font-bold text-slate-900">
+                          {result.id}
+                        </span>
+                        {recommended && (
+                          <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700">
+                            Newer · recommended to renumber
+                          </span>
+                        )}
+                      </div>
+                      {!confirming && (
+                        <button
+                          type="button"
+                          disabled={fixing}
+                          onClick={() => {
+                            setConfirmKey(rec.key);
+                            setNote("");
+                          }}
+                          className="inline-flex h-9 items-center gap-2 rounded-xl border border-slate-200 px-4 text-sm font-semibold text-slate-700 transition hover:border-blue-300 hover:text-blue-700 disabled:opacity-50"
+                        >
+                          <Icons.Hash size={14} />
+                          Renumber this one
+                        </button>
+                      )}
+                    </div>
+
+                    <dl className="mt-4 grid gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
+                      <div>
+                        <dt className="text-xs text-slate-500">Customer</dt>
+                        <dd className="font-medium text-slate-900">
+                          {rec.row.customer || "—"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-slate-500">Status</dt>
+                        <dd className="font-medium text-slate-900">
+                          {rec.row.status || "—"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className="text-xs text-slate-500">Created</dt>
+                        <dd className="font-medium text-slate-900">
+                          {fmt(rec.created)}
+                        </dd>
+                      </div>
+                    </dl>
+
+                    <div className="mt-4 text-xs text-slate-500">
+                      {rec.packages.length} package
+                      {rec.packages.length === 1 ? "" : "s"}
+                    </div>
+                    {rec.packages.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-2">
+                        {rec.packages.map((p) => (
+                          <span
+                            key={p.id}
+                            className="rounded-lg bg-slate-50 px-2.5 py-1 text-xs text-slate-700"
+                          >
+                            {p.tk} · {p.status}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {confirming && (
+                      <div className="mt-4 space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+                        <p className="text-sm text-amber-900">
+                          This {label(rec.source)} order gets a new ID (same
+                          date, next free number) and its {rec.packages.length}{" "}
+                          package
+                          {rec.packages.length === 1 ? "" : "s"} and photos
+                          follow. The customer may have seen the old ID already.
+                          The other record keeps {result.id}.
+                        </p>
+                        <input
+                          value={note}
+                          onChange={(e) => setNote(e.target.value)}
+                          placeholder="Reason (optional)"
+                          className="h-10 w-full rounded-xl border border-amber-200 bg-white px-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                        />
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            disabled={fixing}
+                            onClick={() => setConfirmKey("")}
+                            className="h-9 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            disabled={fixing}
+                            onClick={() => renumber(rec)}
+                            className="inline-flex h-9 items-center gap-2 rounded-xl bg-blue-600 px-4 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                          >
+                            {fixing && (
+                              <Icons.Loader2
+                                size={14}
+                                className="animate-spin"
+                              />
+                            )}
+                            Confirm renumber
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
           </>
         )}
       </div>
@@ -92315,6 +92714,10 @@ function AdminApp() {
               <Route
                 path="/support/rollback-refund"
                 element={<RollbackRefundPage />}
+              />
+              <Route
+                path="/support/fix-duplicate-order-id"
+                element={<FixDuplicateOrderIdPage />}
               />
               <Route path="/customers/:code" element={<CustomerDetailPage />} />
               <Route path="/users/:id" element={<StaffDetailPage />} />
