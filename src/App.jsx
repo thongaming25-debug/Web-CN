@@ -43700,9 +43700,10 @@ const CustomerApp = (() => {
 
   // ---------- Wallet ----------
   function WalletPage() {
-    const { wallet, walletReady, refreshMoney, tr } = useApp();
+    const { wallet, walletReady, refreshMoney, tr, me } = useApp();
     const feat = useCustomerFeatures();
     const canOpenTx = feat("wallet_tx_detail");
+    const [hideBal, setHideBal] = useState(false);
     useEffect(() => {
       refreshMoney();
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -43747,91 +43748,251 @@ const CustomerApp = (() => {
       shop_order_payment_wallet: tr("Shop order payment", "ការបង់ប្រាក់ហាង"),
       shop_order_refund_wallet: tr("Shop order refund", "សងប្រាក់ហាងវិញ"),
     };
+    // Money in / out over the rows the customer can see.
+    const totalIn = rows.reduce(
+      (n, t) => n + (Number(t.amount) > 0 ? Number(t.amount) : 0),
+      0,
+    );
+    const totalOut = rows.reduce(
+      (n, t) => n + (Number(t.amount) < 0 ? -Number(t.amount) : 0),
+      0,
+    );
+    // Group rows by day (Today / Yesterday / date) for a calmer list.
+    const dayKey = (d) => String(d || "").slice(0, 10);
+    const localKey = (dt) =>
+      `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+    const todayKey = localKey(new Date());
+    const yest = new Date();
+    yest.setDate(yest.getDate() - 1);
+    const yesterdayKey = localKey(yest);
+    const groups = [];
+    rows.forEach((t) => {
+      const k = dayKey(t.created_at);
+      const g = groups[groups.length - 1];
+      if (g && g.key === k) g.items.push(t);
+      else groups.push({ key: k, at: t.created_at, items: [t] });
+    });
+    const groupLabel = (g) =>
+      g.key === todayKey
+        ? tr("Today", "ថ្ងៃនេះ")
+        : g.key === yesterdayKey
+          ? tr("Yesterday", "ម្សិលមិញ")
+          : fmtDate(g.at);
+    // Icon + tint per transaction type.
+    const kindOf = (type, n) => {
+      const t = String(type || "");
+      if (t === "top_up")
+        return [
+          Icons.ArrowDownLeft || Icons.Plus,
+          "bg-emerald-50 text-emerald-600",
+        ];
+      if (/refund/.test(t))
+        return [Icons.Undo2 || Icons.Receipt, "bg-violet-50 text-violet-600"];
+      if (/^shipping/.test(t))
+        return [Icons.Truck || Icons.Receipt, "bg-blue-50 text-blue-600"];
+      if (/^cn_order/.test(t))
+        return [
+          Icons.ShoppingCart || Icons.Receipt,
+          "bg-amber-50 text-amber-600",
+        ];
+      if (/^shop/.test(t))
+        return [Icons.Store || Icons.Receipt, "bg-pink-50 text-pink-600"];
+      return [
+        n > 0 ? Icons.ArrowDownLeft || Icons.Plus : Icons.Receipt,
+        "bg-slate-100 text-slate-500",
+      ];
+    };
+    const shown = (v) => (hideBal ? "••••" : v);
     return (
       <>
         <Top title={tr("My Wallet", "កាបូបរបស់ខ្ញុំ")} back />
         <div className="px-4 pt-4 space-y-4">
-          <Card className="p-5 bg-gradient-to-br from-blue-600 to-blue-700 text-white">
-            <p className="text-sm text-blue-100">
-              {tr("Available balance", "សមតុល្យដែលមាន")}
-            </p>
-            {walletReady ? (
-              <p className="text-3xl font-extrabold mt-1 cb-fade-in">
-                {moneyS(wallet.balance)}
-              </p>
-            ) : (
-              <SkeletonRegion className="h-9 mt-1 flex items-center">
-                <Skeleton className="h-7 w-32 rounded-lg" style={SK_ON_COLOR} />
-              </SkeletonRegion>
-            )}
-          </Card>
+          {/* Premium balance card */}
+          <div
+            className="relative overflow-hidden rounded-[28px] p-5 text-white"
+            style={{
+              background:
+                "linear-gradient(135deg,#1e3a8a 0%,#2563eb 52%,#5b9bff 100%)",
+              boxShadow: "0 24px 40px -22px rgba(37,99,235,.75)",
+            }}
+          >
+            <span className="pointer-events-none absolute -right-12 -top-14 h-48 w-48 rounded-full bg-white/10" />
+            <span className="pointer-events-none absolute -right-2 -top-4 h-28 w-28 rounded-full border border-white/20" />
+            <span className="pointer-events-none absolute -bottom-20 -left-10 h-44 w-44 rounded-full bg-white/10" />
+            <div className="relative flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <span className="grid h-9 w-9 place-items-center rounded-xl bg-white/20 backdrop-blur">
+                  <Icons.Wallet size={18} />
+                </span>
+                <p className="text-[13px] font-medium text-blue-100">
+                  {tr("Available balance", "សមតុល្យដែលមាន")}
+                </p>
+              </div>
+              <button
+                type="button"
+                data-haptic
+                aria-label={tr("Show / hide balance", "បង្ហាញ / លាក់សមតុល្យ")}
+                onClick={() => setHideBal((v) => !v)}
+                className="grid h-9 w-9 place-items-center rounded-full bg-white/15 active:bg-white/25"
+              >
+                {hideBal ? <Icons.EyeOff size={16} /> : <Icons.Eye size={16} />}
+              </button>
+            </div>
+            <div className="relative mt-4">
+              {walletReady ? (
+                <p className="cb-fade-in text-[38px] font-extrabold leading-none tracking-tight">
+                  {shown(moneyS(wallet.balance))}
+                </p>
+              ) : (
+                <SkeletonRegion className="h-10 flex items-center">
+                  <Skeleton
+                    className="h-8 w-36 rounded-lg"
+                    style={SK_ON_COLOR}
+                  />
+                </SkeletonRegion>
+              )}
+            </div>
+            <div className="relative mt-6 flex items-end justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-[15px] font-semibold">
+                  {me?.name || ""}
+                </p>
+                <p className="mt-0.5 text-[12px] tracking-wide text-blue-100">
+                  {tr("Customer ID", "លេខសម្គាល់អតិថិជន")} ·{" "}
+                  {me?.customer_code ? fmtCustomerId(me.customer_code) : "—"}
+                </p>
+              </div>
+              <span className="shrink-0 rounded-full bg-white/15 px-3 py-1 text-[11px] font-semibold tracking-wider text-white/90 backdrop-blur">
+                USD
+              </span>
+            </div>
+          </div>
+
           {walletReady && wallet.balance < 0 && (
-            <p className="rounded-xl bg-red-50 text-red-700 text-xs font-semibold px-3 py-2.5">
+            <p className="rounded-2xl bg-red-50 text-red-700 text-xs font-semibold px-3.5 py-3">
               {tr(
                 `Your balance is negative. Please top up ${moneyS(Math.abs(wallet.balance))} or more with our staff to cover it before your next payment.`,
                 `សមតុល្យរបស់អ្នកអវិជ្ជមាន។ សូមបញ្ចូលទឹកប្រាក់ ${moneyS(Math.abs(wallet.balance))} ឬច្រើនជាងនេះជាមួយបុគ្គលិករបស់យើង មុនការបង់ប្រាក់លើកក្រោយ។`,
               )}
             </p>
           )}
-          <h2 className="font-bold">
+
+          {/* Money in / out */}
+          {walletReady && rows.length > 0 && (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-2xl border border-slate-100 bg-white p-3.5 shadow-[0_8px_20px_-16px_rgba(15,30,60,.35)]">
+                <div className="flex items-center gap-2">
+                  <span className="grid h-8 w-8 place-items-center rounded-full bg-emerald-50 text-emerald-600">
+                    <Icons.ArrowDownLeft size={16} />
+                  </span>
+                  <p className="text-xs font-medium text-slate-500">
+                    {tr("Money in", "ប្រាក់ចូល")}
+                  </p>
+                </div>
+                <p className="mt-2 text-lg font-extrabold text-emerald-600">
+                  {shown(money(totalIn))}
+                </p>
+              </div>
+              <div className="rounded-2xl border border-slate-100 bg-white p-3.5 shadow-[0_8px_20px_-16px_rgba(15,30,60,.35)]">
+                <div className="flex items-center gap-2">
+                  <span className="grid h-8 w-8 place-items-center rounded-full bg-red-50 text-red-500">
+                    <Icons.ArrowUpRight size={16} />
+                  </span>
+                  <p className="text-xs font-medium text-slate-500">
+                    {tr("Money out", "ប្រាក់ចេញ")}
+                  </p>
+                </div>
+                <p className="mt-2 text-lg font-extrabold text-red-500">
+                  {shown(money(totalOut))}
+                </p>
+              </div>
+            </div>
+          )}
+
+          <h2 className="px-1 pt-1 text-[17px] font-extrabold">
             {tr("Transaction History", "ប្រវត្តិប្រតិបត្តិការ")}
           </h2>
-          <Card className="divide-y divide-slate-100">
-            {!walletReady && <TxRowsSkeleton rows={7} />}
-            {walletReady &&
-              rows.map((t) => {
-                const n = Number(t.amount) || 0;
-                const open = canOpenTx && t.type === "top_up" && t.id != null;
-                const Row = open ? Link : "div";
-                return (
-                  <Row
-                    key={t.id}
-                    {...(open
-                      ? { to: `/customer/wallet/${encodeURIComponent(t.id)}` }
-                      : {})}
-                    className={`flex items-center gap-3 px-4 py-3 cb-fade-in ${open ? "active:bg-slate-50" : ""}`}
-                    style={{
-                      animationDelay: `${Math.min(rows.indexOf(t), 8) * 30}ms`,
-                    }}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold">
-                        {label[t.type] || t.type}
-                      </p>
-                      <p className="text-xs text-slate-400 truncate">
-                        {fmtDate(t.created_at)}
-                        {t.tk ? ` · ${t.tk}` : ""}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p
-                        className={`text-sm font-bold ${n > 0 ? "text-emerald-600" : n < 0 ? "text-red-600" : "text-slate-400"}`}
+
+          {!walletReady && (
+            <Card className="divide-y divide-slate-100">
+              <TxRowsSkeleton rows={7} />
+            </Card>
+          )}
+          {walletReady &&
+            groups.map((g) => (
+              <div key={g.key} className="space-y-2">
+                <p className="px-1 text-[12px] font-semibold uppercase tracking-wide text-slate-400">
+                  {groupLabel(g)}
+                </p>
+                <Card className="divide-y divide-slate-100 overflow-hidden rounded-2xl">
+                  {g.items.map((t) => {
+                    const n = Number(t.amount) || 0;
+                    const open =
+                      canOpenTx && t.type === "top_up" && t.id != null;
+                    const Row = open ? Link : "div";
+                    const [KIcon, tint] = kindOf(t.type, n);
+                    return (
+                      <Row
+                        key={t.id}
+                        {...(open
+                          ? {
+                              to: `/customer/wallet/${encodeURIComponent(t.id)}`,
+                            }
+                          : {})}
+                        className={`flex items-center gap-3 px-4 py-3.5 cb-fade-in ${open ? "active:bg-slate-50" : ""}`}
+                        style={{
+                          animationDelay: `${Math.min(rows.indexOf(t), 8) * 30}ms`,
+                        }}
                       >
-                        {n > 0 ? "+" : n < 0 ? "−" : ""}
-                        {money(Math.abs(n))}
-                      </p>
-                      <p className="text-[11px] text-slate-400">
-                        {tr("Bal", "សមតុល្យ")} {moneyS(t._after)}
-                      </p>
-                    </div>
-                    {/* same width on every row so the amounts line up */}
-                    {open ? (
-                      <ChevronRight
-                        size={16}
-                        className="shrink-0 text-slate-300"
-                      />
-                    ) : (
-                      <span className="w-4 shrink-0" aria-hidden="true" />
-                    )}
-                  </Row>
-                );
-              })}
-            {walletReady && !rows.length && (
-              <p className="text-center text-sm text-slate-400 py-8">
+                        <span
+                          className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl ${tint}`}
+                        >
+                          <KIcon size={20} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[14px] font-semibold">
+                            {label[t.type] || t.type}
+                          </p>
+                          <p className="truncate text-xs text-slate-400">
+                            {t.tk ? t.tk : fmtDate(t.created_at)}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p
+                            className={`text-[15px] font-bold ${n > 0 ? "text-emerald-600" : n < 0 ? "text-red-600" : "text-slate-400"}`}
+                          >
+                            {n > 0 ? "+" : n < 0 ? "−" : ""}
+                            {money(Math.abs(n))}
+                          </p>
+                          <p className="text-[11px] text-slate-400">
+                            {tr("Bal", "សមតុល្យ")} {moneyS(t._after)}
+                          </p>
+                        </div>
+                        {/* same width on every row so the amounts line up */}
+                        {open ? (
+                          <ChevronRight
+                            size={16}
+                            className="shrink-0 text-slate-300"
+                          />
+                        ) : (
+                          <span className="w-4 shrink-0" aria-hidden="true" />
+                        )}
+                      </Row>
+                    );
+                  })}
+                </Card>
+              </div>
+            ))}
+          {walletReady && !rows.length && (
+            <Card className="py-10 text-center">
+              <span className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-full bg-slate-100 text-slate-400">
+                <Icons.Receipt size={26} />
+              </span>
+              <p className="text-sm text-slate-400">
                 {tr("No transactions yet", "មិនទាន់មានប្រតិបត្តិការទេ")}
               </p>
-            )}
-          </Card>
+            </Card>
+          )}
         </div>
       </>
     );
