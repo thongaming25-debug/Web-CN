@@ -39552,8 +39552,8 @@ const CustomerApp = (() => {
     };
     const refreshMoney = () =>
       Promise.all([loadShips(), loadAirShips(), loadCnOrders(), loadWallet()]);
-    const payShipping = async (tk) => {
-      if (!(await requestPin())) return pinCancelledMsg();
+    const payShipping = async (tk, amount) => {
+      if (!(await requestPin(amount))) return pinCancelledMsg();
       const { error } = await supabase.rpc("pay_shipping_fee", {
         p_tk: tk,
         p_method: "wallet",
@@ -39570,16 +39570,39 @@ const CustomerApp = (() => {
       await refreshMoney();
       return null;
     };
+    // Pays several shipping fees after a single PIN entry (CN order detail).
+    const payShippingMany = async (tks, amount) => {
+      if (!(await requestPin(amount))) return pinCancelledMsg();
+      for (const tk of tks) {
+        const { error } = await supabase.rpc("pay_shipping_fee", {
+          p_tk: tk,
+          p_method: "wallet",
+        });
+        if (error) {
+          await refreshMoney();
+          return /pin_required/i.test(error.message)
+            ? pinMissingMsg()
+            : /insufficient/i.test(error.message)
+              ? tr(
+                  "Your wallet balance is not enough.",
+                  "សមតុល្យកាបូបមិនគ្រប់គ្រាន់ទេ។",
+                )
+              : error.message || tr("Payment failed.", "ការបង់ប្រាក់បរាជ័យ។");
+        }
+      }
+      await refreshMoney();
+      return null;
+    };
     // Customer CN Order payments are processed by one SECURITY DEFINER RPC.
     // The server locks the order + wallet, prevents duplicate charges, checks
     // ownership and balance, writes the ledger, and marks the order paid.
-    const payCnOrder = async (orderId) => {
+    const payCnOrder = async (orderId, amount) => {
       if (!supabase)
         return tr(
           "Payment service is unavailable.",
           "សេវាបង់ប្រាក់មិនអាចប្រើបានទេ។",
         );
-      if (!(await requestPin())) return pinCancelledMsg();
+      if (!(await requestPin(amount))) return pinCancelledMsg();
       const { error } = await supabase.rpc("pay_cn_order_from_wallet", {
         p_order_id: orderId,
       });
@@ -40243,6 +40266,7 @@ const CustomerApp = (() => {
       shipsReady,
       refreshMoney,
       payShipping,
+      payShippingMany,
       payCnOrder,
       pinStatus,
       setPinStatus,
@@ -41467,7 +41491,9 @@ const CustomerApp = (() => {
     };
     // DRSB-style focus pages: product detail, cart and checkout hide the bottom
     // menu so the only thing on screen is the order bar.
-    const hideNav = /\/shop\/(p\/[^/]+|cart|checkout)\/?$/.test(pathname);
+    const hideNav =
+      /\/shop\/(p\/[^/]+|cart|checkout|orders\/[^/]+)\/?$/.test(pathname) ||
+      /\/(shipments|cn-orders)\/[^/]+\/?$/.test(pathname);
     // Use the actual dock height: language, enabled tabs and screen size can
     // change it. This shared clearance keeps every shop action above the dock.
     useLayoutEffect(() => {
@@ -43303,64 +43329,6 @@ const CustomerApp = (() => {
                               )}
                             </p>
                           )}
-                          {confirmPay ? (
-                            <div className="mt-3 space-y-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
-                              <p className="text-sm text-slate-600">
-                                {tr(
-                                  `${money(s.fee.due)} will be deducted from your wallet.`,
-                                  `${money(s.fee.due)} នឹងត្រូវកាត់ចេញពីកាបូបរបស់អ្នក។`,
-                                )}
-                              </p>
-                              <div className="grid grid-cols-2 gap-2">
-                                <Btn
-                                  ghost
-                                  disabled={paying}
-                                  onClick={() => setConfirmPay(false)}
-                                >
-                                  {tr("Cancel", "បោះបង់")}
-                                </Btn>
-                                <Btn
-                                  data-haptic
-                                  disabled={paying || !canPayShip}
-                                  loading={paying}
-                                  onClick={async () => {
-                                    if (!s.fee?.payable) return; // not open yet
-                                    setPaying(true);
-                                    setPayErr("");
-                                    const err = await payShipping(s.tk);
-                                    setPaying(false);
-                                    if (err) return setPayErr(err);
-                                    setConfirmPay(false);
-                                    say(
-                                      tr(
-                                        "Payment successful",
-                                        "ការបង់ប្រាក់ជោគជ័យ",
-                                      ),
-                                    );
-                                  }}
-                                >
-                                  {paying
-                                    ? tr("Paying…", "កំពុងបង់…")
-                                    : tr("Confirm", "បញ្ជាក់")}
-                                </Btn>
-                              </div>
-                            </div>
-                          ) : (
-                            <Btn
-                              data-haptic
-                              className="mt-3"
-                              disabled={!canPayShip}
-                              onClick={() => {
-                                setPayErr("");
-                                setConfirmPay(true);
-                              }}
-                            >
-                              {tr(
-                                `Pay ${money(s.fee.due)} from Wallet`,
-                                `បង់ ${money(s.fee.due)} ពីកាបូប`,
-                              )}
-                            </Btn>
-                          )}
                           {payErr && (
                             <p className="mt-2 text-xs font-semibold text-red-600">
                               {payErr}
@@ -43452,6 +43420,32 @@ const CustomerApp = (() => {
             )}
           </p>
         </div>
+        {feat("pay_shipping") &&
+          s.fee?.total > 0 &&
+          s.fee.state === "due" &&
+          s.fee.payable && (
+            <div className="jz-shop-action-bar jz-shop-action-bar--flush z-30">
+              <Btn
+                data-haptic
+                loading={paying}
+                disabled={paying || !canPayShip}
+                onClick={async () => {
+                  setPaying(true);
+                  setPayErr("");
+                  const err = await payShipping(s.tk, s.fee.due);
+                  setPaying(false);
+                  if (err) return setPayErr(err);
+                  say(tr("Payment successful", "ការបង់ប្រាក់ជោគជ័យ"));
+                }}
+              >
+                <Icons.Wallet size={18} />
+                {tr(
+                  `Pay ${money(s.fee.due)} from Wallet`,
+                  `បង់ ${money(s.fee.due)} ពីកាបូប`,
+                )}
+              </Btn>
+            </div>
+          )}
       </>
     );
   }
@@ -46884,7 +46878,15 @@ const CustomerApp = (() => {
 
   function CustomerCnOrderDetail() {
     const { id } = useParams();
-    const { me, tr, wallet, payCnOrder, payShipping, branches } = useApp();
+    const {
+      me,
+      tr,
+      wallet,
+      payCnOrder,
+      payShipping,
+      payShippingMany,
+      branches,
+    } = useApp();
     const cacheKey = me?.id && id ? `${me.id}:${id}` : "";
     const cached = cacheKey ? cnDetailCache.get(cacheKey) : null;
     const nav = useNavigate();
@@ -47145,7 +47147,7 @@ const CustomerApp = (() => {
       setWalletPayBusy(true);
       setWalletPayError("");
       try {
-        const error = await payCnOrder(row.id);
+        const error = await payCnOrder(row.id, cnOutstanding);
         if (error) {
           setWalletPayError(error);
           throw new Error(error);
@@ -47157,14 +47159,26 @@ const CustomerApp = (() => {
       }
     }
 
-    async function confirmShippingPayment(r) {
-      if (shipPayBusy || !r.payable) return; // staff has not requested payment
+    // Every shipping fee that staff opened for payment, paid with ONE button
+    // and ONE PIN entry from the sticky bar at the bottom.
+    const payableFees = shipFees.filter(
+      (r) => r.fee.state === "due" && r.payable,
+    );
+    const payableFeesTotal = payableFees.reduce(
+      (n, r) => n + Number(r.fee.due || 0),
+      0,
+    );
+    const feesCanPay = Number(wallet?.balance || 0) + 0.005 >= payableFeesTotal;
+    async function confirmAllShippingPayments() {
+      if (shipPayBusy || !payableFees.length) return;
       setShipPayBusy(true);
       setShipPayError("");
-      const error = await payShipping(r.tk);
+      const error = await payShippingMany(
+        payableFees.map((r) => r.tk),
+        payableFeesTotal,
+      );
       setShipPayBusy(false);
       if (error) return setShipPayError(error);
-      setShipPayTk(null);
       await load();
     }
 
@@ -47397,64 +47411,20 @@ const CustomerApp = (() => {
                                   )}
                                 </p>
                               )}
-                              {shipPayTk === r.tk ? (
-                                <div className="mt-3 space-y-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
-                                  <p className="text-sm text-slate-600">
-                                    {tr(
-                                      `${money(r.fee.due)} will be deducted from your wallet.`,
-                                      `${money(r.fee.due)} នឹងត្រូវកាត់ចេញពីកាបូបរបស់អ្នក។`,
-                                    )}
-                                  </p>
-                                  <div className="grid grid-cols-2 gap-2">
-                                    <Btn
-                                      ghost
-                                      disabled={shipPayBusy}
-                                      onClick={() => setShipPayTk(null)}
-                                    >
-                                      {tr("Cancel", "បោះបង់")}
-                                    </Btn>
-                                    <Btn
-                                      data-haptic
-                                      disabled={shipPayBusy || !canPay}
-                                      loading={shipPayBusy}
-                                      onClick={() => confirmShippingPayment(r)}
-                                    >
-                                      {shipPayBusy
-                                        ? tr("Paying…", "កំពុងបង់…")
-                                        : tr("Confirm", "បញ្ជាក់")}
-                                    </Btn>
-                                  </div>
-                                </div>
-                              ) : (
-                                <Btn
-                                  data-haptic
-                                  className="mt-3"
-                                  disabled={!canPay}
-                                  onClick={() => {
-                                    setShipPayError("");
-                                    setShipPayTk(r.tk);
-                                  }}
-                                >
-                                  {tr(
-                                    `Pay ${money(r.fee.due)} from Wallet`,
-                                    `បង់ ${money(r.fee.due)} ពីកាបូប`,
-                                  )}
-                                </Btn>
-                              )}
-                              {shipPayError && shipPayTk === r.tk && (
-                                <p
-                                  role="alert"
-                                  className="mt-2 text-xs font-semibold text-red-600"
-                                >
-                                  {shipPayError}
-                                </p>
-                              )}
                             </div>
                           )}
                         </div>
                       );
                     })}
                   </div>
+                  {shipPayError && (
+                    <p
+                      role="alert"
+                      className="mt-2 text-xs font-semibold text-red-600"
+                    >
+                      {shipPayError}
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -47601,62 +47571,6 @@ const CustomerApp = (() => {
                       )}
                     </p>
                   )}
-                  {walletPayConfirm ? (
-                    <div className="mt-3 space-y-2 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
-                      <p className="text-sm text-slate-600">
-                        {tr(
-                          `${money(cnOutstanding)} will be deducted from your wallet.`,
-                          `${money(cnOutstanding)} នឹងត្រូវកាត់ចេញពីកាបូបរបស់អ្នក។`,
-                        )}
-                      </p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <Btn
-                          ghost
-                          disabled={walletPayBusy}
-                          onClick={() => setWalletPayConfirm(false)}
-                        >
-                          {tr("Cancel", "បោះបង់")}
-                        </Btn>
-                        <Btn
-                          data-haptic
-                          disabled={walletPayBusy || !walletCanPay}
-                          loading={walletPayBusy}
-                          onClick={async () => {
-                            try {
-                              await confirmCnWalletPayment();
-                            } catch (e) {
-                              setWalletPayError(
-                                e?.message ||
-                                  tr(
-                                    "Payment failed. Please try again.",
-                                    "ការបង់ប្រាក់មិនបានជោគជ័យទេ។ សូមព្យាយាមម្តងទៀត។",
-                                  ),
-                              );
-                            }
-                          }}
-                        >
-                          {walletPayBusy
-                            ? tr("Paying…", "កំពុងបង់…")
-                            : tr("Confirm", "បញ្ជាក់")}
-                        </Btn>
-                      </div>
-                    </div>
-                  ) : (
-                    <Btn
-                      data-haptic
-                      className="mt-3"
-                      disabled={walletPayBusy || !walletCanPay}
-                      onClick={() => {
-                        setWalletPayError("");
-                        setWalletPayConfirm(true);
-                      }}
-                    >
-                      {tr(
-                        `Pay ${money(cnOutstanding)} from Wallet`,
-                        `បង់ ${money(cnOutstanding)} ពីកាបូប`,
-                      )}
-                    </Btn>
-                  )}
                   {walletPayError && (
                     <p
                       role="alert"
@@ -47697,6 +47611,53 @@ const CustomerApp = (() => {
             </Card>
           )}
         </div>
+        {waitingPayment && canPayCnOrder ? (
+          <div className="jz-shop-action-bar jz-shop-action-bar--flush z-30">
+            <Btn
+              data-haptic
+              loading={walletPayBusy}
+              disabled={walletPayBusy || !walletCanPay}
+              onClick={async () => {
+                setWalletPayError("");
+                try {
+                  await confirmCnWalletPayment();
+                } catch (e) {
+                  setWalletPayError(
+                    e?.message ||
+                      tr(
+                        "Payment failed. Please try again.",
+                        "ការបង់ប្រាក់មិនបានជោគជ័យទេ។ សូមព្យាយាមម្តងទៀត។",
+                      ),
+                  );
+                }
+              }}
+            >
+              <Icons.Wallet size={18} />
+              {tr(
+                `Pay ${money(cnOutstanding)} from Wallet`,
+                `បង់ ${money(cnOutstanding)} ពីកាបូប`,
+              )}
+            </Btn>
+          </div>
+        ) : (
+          !waitingPayment &&
+          payableFees.length > 0 && (
+            <div className="jz-shop-action-bar jz-shop-action-bar--flush z-30">
+              <Btn
+                data-haptic
+                loading={shipPayBusy}
+                disabled={shipPayBusy || !feesCanPay}
+                onClick={confirmAllShippingPayments}
+              >
+                <Icons.Wallet size={18} />
+                {tr(
+                  `Pay ${money(payableFeesTotal)} from Wallet`,
+                  `បង់ ${money(payableFeesTotal)} ពីកាបូប`,
+                )}
+              </Btn>
+            </div>
+          )
+        )}
       </div>
     );
   }
@@ -50699,10 +50660,7 @@ const CustomerApp = (() => {
           </Card>
         </div>
         {need && (
-          <div
-            className="jz-shop-action-bar sticky z-30 px-4 py-2.5 bg-white/95 backdrop-blur border-t border-slate-100"
-            style={SHOP_C_BAR}
-          >
+          <div className="jz-shop-action-bar jz-shop-action-bar--flush z-30">
             <Btn
               data-haptic
               loading={busy}
@@ -92490,6 +92448,7 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 /* DRSB-style footer: full-width bar glued to the screen bottom, no floating card. */
 .jz-customer .jz-shop-action-bar.jz-shop-action-bar--flush{position:fixed;left:0;right:0;bottom:0!important;width:100%;max-width:448px;margin:0 auto;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));border:0;border-top:1px solid var(--jz-c-border);border-radius:0;box-shadow:0 -8px 24px -14px rgba(15,30,60,.28);}
 .jz-customer .jz-customer-content:has(.jz-shop-action-bar--flush){padding-bottom:calc(96px + env(safe-area-inset-bottom,0px));}
+.jz-customer:has(.jz-shop-action-bar--flush) .jz-bottom-nav,.jz-customer:has(.jz-shop-action-bar--flush) .jz-dock-mask{display:none!important;}
 .jz-customer .jz-shop-action-bar.jz-shop-action-bar--flush>button{width:100%;min-height:52px;border-radius:16px;font-size:16px;font-weight:700;}
 .jz-customer .jz-shop-checkout-content>*+*{margin-top:16px;}
 @media(min-width:640px){.jz-customer .jz-shop-action-bar{margin-inline:auto;max-width:608px;}.jz-customer .jz-shop-action-bar.jz-shop-action-bar--flush{max-width:608px;}}
