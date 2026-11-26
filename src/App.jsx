@@ -8728,7 +8728,7 @@ const ORDER_DETAILS = {}; // live data only — nothing hard-coded
 // a customer up by UID (Customer ID), Name, or Phone and get back the
 // same account, so both flows show the same Information card.
 const TRANSFER_TYPES = [
-  { value: "uid", label: "Order ID" },
+  { value: "uid", label: "Customer ID" },
   { value: "name", label: "Name" },
   { value: "phone", label: "Phone" },
 ];
@@ -10814,18 +10814,26 @@ function TransferAccountLookup({
   loading,
   noteText,
 }) {
+  const row = (k, v) => (
+    <div className="flex items-center justify-between gap-4 text-[15px]">
+      <span className="text-slate-500">{k}</span>
+      <span className="text-right font-semibold text-slate-900">{v}</span>
+    </div>
+  );
   return (
-    <div className="space-y-3.5">
+    <div className="space-y-6">
       <div>
-        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-          Transfer Type <span className="text-signal-red">*</span>
-        </label>
-        <div className="flex border border-mist-200 rounded-md overflow-hidden focus-within:border-signal-blue">
-          <div className="relative shrink-0 border-r border-mist-200">
+        <span className={FIN_LABEL}>
+          Transfer Type <span className="text-red-500">*</span>
+        </span>
+        <div className="mt-2 flex h-12 overflow-hidden rounded-lg border border-slate-300 bg-white shadow-sm focus-within:border-slate-500">
+          <div className="relative shrink-0 border-r border-slate-300">
             <select
               value={transferType}
               onChange={(e) => onTransferTypeChange(e.target.value)}
-              className="appearance-none bg-white pl-3 pr-7 py-2 text-sm text-ink-900 outline-none cursor-pointer"
+              aria-label="Transfer type"
+              className="h-full cursor-pointer appearance-none bg-transparent pl-3.5 pr-9 text-[15px] font-semibold text-slate-900"
+              style={WTU_NO_RING}
             >
               {TRANSFER_TYPES.map((t) => (
                 <option key={t.value} value={t.value}>
@@ -10833,30 +10841,29 @@ function TransferAccountLookup({
                 </option>
               ))}
             </select>
-            <ChevronDown
-              size={14}
-              className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-ink-600/40"
+            <Icons.ChevronDown
+              size={15}
+              className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500"
             />
           </div>
           <div className="relative flex-1">
-            <Search
-              size={14}
-              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-600/40"
+            <Icons.Search
+              size={16}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
             />
             <input
               autoFocus
               value={query}
               onChange={(e) => onQueryChange(e.target.value)}
-              className="w-full pl-8 pr-3 py-2 text-sm outline-none"
+              className="h-full w-full bg-transparent pl-10 pr-3 text-[15px] font-medium text-slate-900 placeholder:font-normal placeholder:text-slate-500"
+              style={WTU_NO_RING}
             />
           </div>
         </div>
       </div>
 
-      <div className="bg-mist-50 border border-mist-200 rounded-md p-4 space-y-3">
-        <h4 className="font-display font-bold text-sm text-signal-blue">
-          Information
-        </h4>
+      <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-5">
+        <h4 className="text-[15px] font-bold text-blue-600">Information</h4>
         {loading ? (
           <SkeletonRegion className="space-y-3">
             {[0, 1, 2].map((i) => (
@@ -10868,20 +10875,20 @@ function TransferAccountLookup({
           </SkeletonRegion>
         ) : matched ? (
           <>
-            <InfoRow label="Order ID" value={matched.id} />
-            <InfoRow label="Name" value={matched.name} />
-            <InfoRow label="Phone Number" value={matched.phone} />
+            {row("Customer ID", matched.id)}
+            {row("Name", matched.name)}
+            {row("Phone Number", matched.phone)}
           </>
         ) : (
-          <p className="text-xs text-ink-600/45">
+          <p className="text-sm text-slate-500">
             {query
-              ? "រកមិនឃើញគណនីនេះទេ — សូមពិនិត្យម្តងទៀត"
-              : "សូមវាយបញ្ចូល Order ID, ឈ្មោះ ឬPhone number ដើម្បីSearchគណនី"}
+              ? "Account not found. Please check and try again."
+              : "Enter a Customer ID, name or phone number to search for an account."}
           </p>
         )}
         {matched && !loading && noteText && (
-          <p className="text-xs text-signal-red font-medium leading-relaxed pt-2 border-t border-mist-200">
-            *Note : {noteText}
+          <p className="border-t border-slate-200 pt-3 text-sm font-medium leading-relaxed text-red-600">
+            *Note: {noteText}
           </p>
         )}
       </div>
@@ -16260,7 +16267,8 @@ function TransferOrderModal({ open, order, onClose, onTransferred }) {
   return (
     <AppModal
       title="Transfer Order"
-      maxW="max-w-md"
+      maxW="max-w-lg"
+      className="cbx-modal-fin"
       onClose={onClose}
       onSubmit={(e) => {
         e.preventDefault();
@@ -16282,11 +16290,11 @@ function TransferOrderModal({ open, order, onClose, onTransferred }) {
         onQueryChange={setQuery}
         matched={matched}
         loading={loading}
-        noteText="ការបញ្ជាទិញនេះឈានដល់ស្ថានភាព arrived destination។ បើអ្នកបានផ្ទេរវាទៅ User ផ្សេង សូម print ស្លាកPackage (order sticker) ម្តងទៀត។"
+        noteText="This order has already reached Arrived Destination. If you transfer it to another user, please reprint the package label (order sticker)."
       />
 
       {matched && sameCustomer && (
-        <p className="text-xs text-signal-red">
+        <p className="text-sm text-red-600">
           This is already the same customer — please choose a different
           customer.
         </p>
@@ -21557,7 +21565,8 @@ function CreateTransferModal({ open, onClose, onCreated }) {
   return (
     <AppModal
       title="New Transfer"
-      maxW="max-w-md"
+      maxW="max-w-lg"
+      className="cbx-modal-fin"
       onClose={onClose}
       onSubmit={handleSubmit}
       busy={saving}
@@ -21567,9 +21576,7 @@ function CreateTransferModal({ open, onClose, onCreated }) {
       submitDisabled={!canSubmit}
     >
       <div>
-        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-          TK Number
-        </label>
+        <label className={FIN_LABEL}>TK Number</label>
         <input
           required
           value={tk}
@@ -21580,19 +21587,20 @@ function CreateTransferModal({ open, onClose, onCreated }) {
             setTkParseLink(false);
           }}
           onBlur={checkTk}
-          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+          className={`mt-2 ${FIN_FIELD}`}
+          style={WTU_NO_RING}
         />
         {tkChecked && (
           <p
-            className={`text-xs mt-1 ${fromLabel ? "text-ink-600/55" : "text-signal-red"}`}
+            className={`mt-2 text-sm ${fromLabel ? "text-slate-500" : "text-red-600"}`}
           >
             {fromLabel
               ? `From: ${fromLabel}`
-              : "TK not found នេះទេ — សូមពិនិត្យលេខម្តងទៀត"}
+              : "TK not found. Please check the number and try again."}
           </p>
         )}
         {tkChecked && fromLabel && tkParseLink && (
-          <p className="text-xs mt-1 text-signal-red">
+          <p className="mt-2 text-sm text-red-600">
             {
               "Parse Link orders cannot be transferred — only Shipment orders can be moved to another customer."
             }
@@ -21613,20 +21621,19 @@ function CreateTransferModal({ open, onClose, onCreated }) {
         noteText="This transfer takes effect immediately — the TK will be removed from the original customer and appear under the new customer."
       />
       {selectedCustomer && sameCustomer && (
-        <p className="text-xs text-signal-red">
+        <p className="text-sm text-red-600">
           This is already the same customer — please choose a different
           customer.
         </p>
       )}
 
       <div>
-        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-          Reason
-        </label>
+        <label className={FIN_LABEL}>Reason</label>
         <input
           value={reason}
           onChange={(e) => setReason(e.target.value)}
-          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+          className={`mt-2 ${FIN_FIELD}`}
+          style={WTU_NO_RING}
         />
       </div>
     </AppModal>
@@ -26712,10 +26719,9 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
     walletSum(["cn_order_payment_wallet", "cn_order_payment"]) -
     walletSum(["cn_order_refund"]) +
     walletSum(["cn_order_refund_reversal"]);
-  const shippingFeeWallet = walletSum([
-    "shipping_payment_wallet",
-    "shipping_payment",
-  ]);
+  const shippingFeeWallet =
+    walletSum(["shipping_payment_wallet", "shipping_payment"]) -
+    walletSum(["shipping_payment_refund"]);
   const walletPayGrand = productOrderWallet + cnOrderWallet + shippingFeeWallet;
   // Purchase: money actually paid on CN orders. Orders that reached
   // "Complete Order" are completed; every other paid order is in progress.
@@ -28498,7 +28504,8 @@ function TransferPackageModal({ open, tk, fromLabel, onClose, onTransferred }) {
     <AppModal
       title="Customer ID Transfer"
       subtitle={`TK: ${tk}`}
-      maxW="max-w-md"
+      maxW="max-w-lg"
+      className="cbx-modal-fin"
       onClose={onClose}
       onSubmit={handleSubmit}
       busy={saving}
@@ -28508,10 +28515,8 @@ function TransferPackageModal({ open, tk, fromLabel, onClose, onTransferred }) {
       submitDisabled={!canSubmit}
     >
       <div>
-        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-          From
-        </label>
-        <div className="w-full bg-mist-50 border border-mist-200 rounded-md px-3 py-2 text-sm text-ink-700">
+        <span className={FIN_LABEL}>From</span>
+        <div className="mt-2 flex min-h-12 items-center rounded-lg border border-slate-200 bg-slate-50 px-3.5 text-[15px] font-medium text-slate-800">
           {fromLabel || "—"}
         </div>
       </div>
@@ -28529,21 +28534,213 @@ function TransferPackageModal({ open, tk, fromLabel, onClose, onTransferred }) {
         noteText="This transfer takes effect immediately — the TK will be removed from the original customer and appear under the new customer."
       />
       {selectedCustomer && sameCustomer && (
-        <p className="text-xs text-signal-red">
+        <p className="text-sm text-red-600">
           This is already the same customer — please choose a different
           customer.
         </p>
       )}
 
       <div>
-        <label className="block text-xs font-semibold text-ink-600/55 uppercase tracking-wide mb-1">
-          Reason
-        </label>
+        <label className={FIN_LABEL}>Reason</label>
         <input
           value={reason}
           onChange={(e) => setReason(e.target.value)}
-          className="w-full bg-white border border-mist-200 rounded-md px-3 py-2 text-sm outline-none focus:border-signal-blue"
+          className={`mt-2 ${FIN_FIELD}`}
+          style={WTU_NO_RING}
         />
+      </div>
+    </AppModal>
+  );
+}
+
+// ------------------------------------------------------------
+// RollbackTransferModal — "Rollback & Transfer Order" (Shipment only).
+// A Completed TK was assigned to the WRONG customer and that customer already
+// paid the shipping fee. One atomic RPC (rollback_transfer_shipment.sql):
+//   • refunds the paid fee into the OLD customer's wallet (ledger row)
+//   • moves the TK to the correct customer
+//   • sets the status back to Inbound Warehouse + clears the payment so the
+//     new customer can pay the shipping fee again
+// ------------------------------------------------------------
+const ROLLBACK_TRANSFER_REASONS = [
+  "Wrong customer ID assigned",
+  "Duplicate / mistaken scan",
+  "Customer requested correction",
+  "Other",
+];
+
+function RollbackTransferModal({
+  open,
+  tk,
+  fromLabel,
+  paidAmount = 0,
+  paidMethod = "",
+  onClose,
+  onDone,
+}) {
+  const { user } = useAuth();
+  const [reason, setReason] = useState("");
+  const [notes, setNotes] = useState("");
+  const [transferType, setTransferType] = useState("uid");
+  const [query, setQuery] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const { matched: selectedCustomer, loading: customerLoading } =
+    useCustomerLookup(transferType, query);
+
+  useEffect(() => {
+    if (open) {
+      setReason("");
+      setNotes("");
+      setTransferType("uid");
+      setQuery("");
+      setError("");
+    }
+  }, [open]);
+
+  if (!open) return null;
+
+  const toLabel = selectedCustomer
+    ? `${selectedCustomer.id} · ${selectedCustomer.name}`
+    : null;
+  const sameCustomer = Boolean(toLabel && fromLabel && toLabel === fromLabel);
+  const canSubmit = Boolean(
+    selectedCustomer &&
+    selectedCustomer.uuid &&
+    !sameCustomer &&
+    reason &&
+    !customerLoading &&
+    !saving,
+  );
+  const paid = Number(paidAmount) || 0;
+  const viaWallet = String(paidMethod || "").toLowerCase() === "wallet";
+
+  async function handleSubmit(e) {
+    e?.preventDefault?.();
+    if (!canSubmit) return;
+    if (!supabase) return setError("Connect to Supabase first.");
+    setSaving(true);
+    setError("");
+    try {
+      requirePermission(user, "support.rollback");
+      const { data, error: rpcErr } = await supabase.rpc(
+        "rollback_transfer_shipment",
+        {
+          p_tk: tk,
+          p_new_customer_id: selectedCustomer.uuid,
+          p_new_customer_label: toLabel,
+          p_reason: reason,
+          p_notes: notes.trim() || null,
+          p_by: cnBy(user),
+        },
+      );
+      if (rpcErr)
+        throw new Error(
+          /could not find the function|schema cache/i.test(rpcErr.message || "")
+            ? "Run rollback_transfer_shipment.sql in Supabase first."
+            : rpcErr.message,
+        );
+      const refunded = Number(data?.refunded) || 0;
+      const cashDue = Number(data?.cash_refund_due) || 0;
+      emitCBToast(
+        "ok",
+        "Order rolled back & transferred",
+        `${tk} → ${toLabel}` +
+          (refunded > 0 ? ` · ${money(refunded)} refunded to wallet` : "") +
+          (cashDue > 0 ? ` · return ${money(cashDue)} cash by hand` : ""),
+      );
+      onDone?.(toLabel, data);
+      onClose();
+    } catch (err) {
+      setError(err.message || "Unable to rollback & transfer.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <AppModal
+      title="Rollback Completed Order"
+      subtitle={`TK: ${tk}`}
+      maxW="max-w-lg"
+      className="cbx-modal-fin"
+      onClose={onClose}
+      onSubmit={handleSubmit}
+      busy={saving}
+      error={error}
+      submitLabel="Confirm"
+      busyLabel="Processing..."
+      submitDisabled={!canSubmit}
+    >
+      <div>
+        <span className={FIN_LABEL}>From</span>
+        <div className="mt-2 flex min-h-12 items-center rounded-lg border border-slate-200 bg-slate-50 px-3.5 text-[15px] font-medium text-slate-800">
+          {fromLabel || "—"}
+        </div>
+      </div>
+
+      <TransferAccountLookup
+        transferType={transferType}
+        onTransferTypeChange={(t) => {
+          setTransferType(t);
+          setQuery("");
+        }}
+        query={query}
+        onQueryChange={setQuery}
+        matched={selectedCustomer}
+        loading={customerLoading}
+      />
+      {selectedCustomer && sameCustomer && (
+        <p className="text-sm text-red-600">
+          This is already the same customer — please choose a different
+          customer.
+        </p>
+      )}
+
+      <div>
+        <label className={FIN_LABEL}>
+          Reason <span className="text-red-500">*</span>
+        </label>
+        <select
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          className={`mt-2 ${FIN_FIELD}`}
+          style={WTU_NO_RING}
+        >
+          <option value="">Select an option...</option>
+          {ROLLBACK_TRANSFER_REASONS.map((r) => (
+            <option key={r} value={r}>
+              {r}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div>
+        <label className={FIN_LABEL}>
+          Notes{" "}
+          <span className="float-right font-normal text-slate-400">
+            optional
+          </span>
+        </label>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={4}
+          placeholder="Optional additional notes"
+          className={`mt-2 ${FIN_FIELD} h-auto py-2`}
+          style={WTU_NO_RING}
+        />
+      </div>
+
+      <div className="rounded-lg border border-orange-200 bg-orange-50 px-3.5 py-3 text-sm font-medium text-orange-800">
+        This action will revert the order back to Inbound Warehouse status,
+        reassign it to the new customer
+        {paid > 0
+          ? viaWallet
+            ? `, and automatically refund ${money(paid)} to the old customer's wallet.`
+            : `. It was paid in cash (${money(paid)}): the payment is cleared but the cash must be returned by hand.`
+          : ". No shipping payment was recorded, so nothing is refunded."}
       </div>
     </AppModal>
   );
@@ -31793,7 +31990,8 @@ function PackageDetail() {
   const timeline = getTimeline(tk);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [detailTab, setDetailTab] = useState("overview");
-  const [showTransfer, setShowTransfer] = useState(false);
+  const [showRollbackTransfer, setShowRollbackTransfer] = useState(false);
+  const [showCustomerTransfer, setShowCustomerTransfer] = useState(false);
   const [showTrackingHistory, setShowTrackingHistory] = useState(false);
   const [showLabel, setShowLabel] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -31849,6 +32047,20 @@ function PackageDetail() {
     hasPermission(user, "tk.edit") &&
     PACKAGE_STAGES.indexOf(currentStage) >=
       PACKAGE_STAGES.indexOf("Inbound Origin");
+  // Rollback & Transfer: Completed Shipment TKs only (Parse Link is excluded).
+  const canRollbackTransfer =
+    !isCustomerRole &&
+    hasPermission(user, "support.rollback") &&
+    !data.cn_order_id &&
+    currentStage === "Completed";
+  // Once a TK is Completed, only "Rollback & Transfer Order" is offered; the
+  // edit-type actions come back after it is rolled back to Inbound Warehouse.
+  const isCompletedStage = currentStage === "Completed";
+  // Customer ID Transfer: Shipment TKs only (Parse Link / CN orders can't be moved).
+  const canCustomerTransfer =
+    !isCustomerRole &&
+    hasPermission(user, "customer_transfer.view") &&
+    !data.cn_order_id;
   // Print Label is available once the TK reaches Cambodia (Arrived Destination or later).
   const canPrintLabel =
     !isCustomerRole &&
@@ -32239,6 +32451,16 @@ function PackageDetail() {
                   Complete Order
                 </button>
               )}
+              {canRollbackTransfer && (
+                <button
+                  type="button"
+                  onClick={() => setShowRollbackTransfer(true)}
+                  className="flex items-center gap-1.5 bg-orange-600 text-white text-sm font-semibold px-3.5 py-1.5 rounded-md hover:bg-orange-500"
+                >
+                  Rollback &amp; Transfer Order
+                  <ChevronDown size={14} />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setShowTrackingHistory(true)}
@@ -32290,7 +32512,7 @@ function PackageDetail() {
                     {(canAdvanceStatus || canMoveToOutbound) && (
                       <div className="border-t border-slate-100" />
                     )}
-                    {canPrintLabel && (
+                    {canPrintLabel && !isCompletedStage && (
                       <button
                         type="button"
                         onClick={() => {
@@ -32303,12 +32525,12 @@ function PackageDetail() {
                         Print Label
                       </button>
                     )}
-                    {!data.cn_order_id && (
+                    {canCustomerTransfer && !isCompletedStage && (
                       <button
                         type="button"
                         onClick={() => {
                           setActionMenuOpen(false);
-                          setShowTransfer(true);
+                          setShowCustomerTransfer(true);
                         }}
                         className="w-full flex items-center gap-3 whitespace-nowrap px-4 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 text-left"
                       >
@@ -32316,19 +32538,21 @@ function PackageDetail() {
                         Customer ID Transfer
                       </button>
                     )}
-                    {canChangeInternalWarehouse && data.customer_id && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setActionMenuOpen(false);
-                          setShowInternalWarehouse(true);
-                        }}
-                        className="w-full flex items-center gap-3 whitespace-nowrap px-4 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 text-left"
-                      >
-                        <Icons.MapPin size={18} />
-                        Change Internal Warehouse
-                      </button>
-                    )}
+                    {canChangeInternalWarehouse &&
+                      data.customer_id &&
+                      !isCompletedStage && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActionMenuOpen(false);
+                            setShowInternalWarehouse(true);
+                          }}
+                          className="w-full flex items-center gap-3 whitespace-nowrap px-4 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 text-left"
+                        >
+                          <Icons.MapPin size={18} />
+                          Change Internal Warehouse
+                        </button>
+                      )}
                     {canChangeTk && (
                       <button
                         type="button"
@@ -32344,28 +32568,32 @@ function PackageDetail() {
                     )}
                     {canProcessStatus && (
                       <>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActionMenuOpen(false);
-                            setShowUpdatePkg(true);
-                          }}
-                          className="w-full flex items-center gap-3 whitespace-nowrap px-4 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 text-left"
-                        >
-                          <Icons.Package size={18} />
-                          Edit Package
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActionMenuOpen(false);
-                            setShowEdit(true);
-                          }}
-                          className="w-full flex items-center gap-3 whitespace-nowrap px-4 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 text-left"
-                        >
-                          <Icons.FileText size={18} />
-                          Edit Details
-                        </button>
+                        {!isCompletedStage && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActionMenuOpen(false);
+                                setShowUpdatePkg(true);
+                              }}
+                              className="w-full flex items-center gap-3 whitespace-nowrap px-4 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 text-left"
+                            >
+                              <Icons.Package size={18} />
+                              Edit Package
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActionMenuOpen(false);
+                                setShowEdit(true);
+                              }}
+                              className="w-full flex items-center gap-3 whitespace-nowrap px-4 py-3 text-sm font-semibold text-slate-900 hover:bg-slate-50 text-left"
+                            >
+                              <Icons.FileText size={18} />
+                              Edit Details
+                            </button>
+                          </>
+                        )}
                         <button
                           type="button"
                           onClick={() => {
@@ -32886,13 +33114,35 @@ function PackageDetail() {
           }}
         />
       )}
-      <TransferPackageModal
-        open={showTransfer}
-        tk={data.tk}
-        fromLabel={customerLabel}
-        onClose={() => setShowTransfer(false)}
-        onTransferred={() => setShowTransfer(false)}
-      />
+      {canCustomerTransfer && (
+        <TransferPackageModal
+          open={showCustomerTransfer}
+          tk={data.tk}
+          fromLabel={customerLabel}
+          onClose={() => setShowCustomerTransfer(false)}
+          onTransferred={(toLabel) => {
+            setLivePackage((prev) => ({
+              ...(prev || data),
+              customer: toLabel,
+            }));
+            window.dispatchEvent(new Event("focus")); // re-read the TK
+          }}
+        />
+      )}
+      {canRollbackTransfer && (
+        <RollbackTransferModal
+          open={showRollbackTransfer}
+          tk={data.tk}
+          fromLabel={customerLabel}
+          paidAmount={data.paid_amount}
+          paidMethod={data.paid_method}
+          onClose={() => setShowRollbackTransfer(false)}
+          onDone={() => {
+            setShowRollbackTransfer(false);
+            window.dispatchEvent(new Event("focus")); // re-read the TK
+          }}
+        />
+      )}
       {canPrintLabel && (
         <PrintLabelModal
           open={showLabel}
@@ -43797,6 +44047,10 @@ const CustomerApp = (() => {
         "បានបង់ថ្លៃដឹក (សាច់ប្រាក់)",
       ),
       shipping_payment_wallet: tr("Shipping payment", "ការបង់ថ្លៃដឹក"),
+      shipping_payment_refund: tr(
+        "Shipping fee refunded",
+        "សងប្រាក់ថ្លៃដឹកវិញ",
+      ),
       cn_order_payment: tr("CN order payment", "ការបង់ប្រាក់ CN Order"),
       cn_order_payment_wallet: tr(
         "CN order payment from Wallet",
@@ -57008,84 +57262,55 @@ function AirTransferModal({ open, row, onClose, onSaved }) {
     }
   }
   return (
-    <div
-      className="fixed inset-0 z-50 bg-slate-950/40 backdrop-blur-sm flex items-center justify-center p-4"
-      onClick={onClose}
+    <AppModal
+      title="Transfer AIR Order"
+      subtitle={row.order_id}
+      maxW="max-w-lg"
+      className="cbx-modal-fin"
+      onClose={onClose}
+      onSubmit={submit}
+      busy={busy}
+      error={error}
+      submitLabel="Confirm"
+      busyLabel="Transferring…"
+      submitDisabled={!canSubmit}
     >
-      <form
-        onSubmit={submit}
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md max-h-[85vh] overflow-y-auto rounded-2xl bg-white shadow-2xl"
-      >
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-          <div>
-            <h3 className="font-bold text-lg">Transfer AIR Order</h3>
-            <p className="text-xs text-slate-500 mt-1">{row.order_id}</p>
-          </div>
-          <button type="button" onClick={onClose}>
-            <Icons.X size={18} />
-          </button>
+      <div>
+        <span className={FIN_LABEL}>From</span>
+        <div className="mt-2 flex min-h-12 items-center rounded-lg border border-slate-200 bg-slate-50 px-3.5 text-[15px] font-medium text-slate-800">
+          {row.customer || "—"}
         </div>
-        <div className="p-5 space-y-3.5">
-          {error && (
-            <div className="rounded-xl bg-red-50 text-red-700 px-3 py-2 text-sm">
-              {error}
-            </div>
-          )}
-          <div>
-            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
-              From
-            </div>
-            <div className="rounded-xl bg-slate-50 border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-800">
-              {row.customer || "—"}
-            </div>
-          </div>
-          <TransferAccountLookup
-            transferType={transferType}
-            onTransferTypeChange={(t) => {
-              setTransferType(t);
-              setQuery("");
-            }}
-            query={query}
-            onQueryChange={setQuery}
-            matched={matched}
-            loading={loading}
-            noteText="This transfer takes effect immediately — the AIR Order will be removed from the original customer and appear under the new customer."
-          />
-          {matched && same && (
-            <p className="text-xs text-red-600">
-              This is already the same customer — please choose a different
-              customer.
-            </p>
-          )}
-          <div>
-            <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
-              Reason
-            </label>
-            <input
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              className={INPUT_CLS}
-            />
-          </div>
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-10 px-4 rounded-xl border border-slate-200 text-sm font-semibold"
-          >
-            Cancel
-          </button>
-          <button
-            disabled={!canSubmit}
-            className="h-10 px-5 rounded-xl bg-blue-600 text-white text-sm font-bold disabled:opacity-50"
-          >
-            {busy ? "Transferring…" : "Confirm"}
-          </button>
-        </div>
-      </form>
-    </div>
+      </div>
+      <TransferAccountLookup
+        transferType={transferType}
+        onTransferTypeChange={(t) => {
+          setTransferType(t);
+          setQuery("");
+        }}
+        query={query}
+        onQueryChange={setQuery}
+        matched={matched}
+        loading={loading}
+        noteText="This transfer takes effect immediately. The AIR Order will be removed from the original customer and appear under the new customer."
+      />
+      {matched && same && (
+        <p className="text-sm text-red-600">
+          This is already the same customer. Please choose a different customer.
+        </p>
+      )}
+      <div>
+        <label className={FIN_LABEL} htmlFor="air-transfer-reason">
+          Reason
+        </label>
+        <input
+          id="air-transfer-reason"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          className={`mt-2 ${FIN_FIELD}`}
+          style={WTU_NO_RING}
+        />
+      </div>
+    </AppModal>
   );
 }
 function AirHistoryModal({ row, onClose }) {
@@ -77152,6 +77377,7 @@ function CustomerDetailPage() {
             shipping_payment: "Shipping payment",
             shipping_payment_cash: "Paid by admin",
             shipping_payment_wallet: "Shipping payment (wallet)",
+            shipping_payment_refund: "Shipping fee refunded (rollback)",
             cn_order_payment_cash: "CN order paid by admin",
             cn_order_payment_wallet: "CN order payment (wallet)",
             shop_order_payment_wallet: "Shop order payment (wallet)",
@@ -79760,6 +79986,7 @@ const PAY_KIND = {
   shipping_payment: ["Shipping Fee", "Wallet", "pay"],
   shipping_payment_wallet: ["Shipping Fee", "Wallet", "pay"],
   shipping_payment_cash: ["Shipping Fee", "Cash", "pay"],
+  shipping_payment_refund: ["Shipping Fee", "Wallet", "refund"],
   cn_order_payment: ["CN Order", "Wallet", "pay"],
   cn_order_payment_wallet: ["CN Order", "Wallet", "pay"],
   cn_order_payment_cash: ["CN Order", "Cash", "pay"],
