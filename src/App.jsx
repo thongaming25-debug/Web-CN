@@ -24,6 +24,7 @@ import {
   Link,
   NavLink,
   useNavigate,
+  useNavigationType,
   Outlet,
   useLocation,
   Navigate,
@@ -41529,6 +41530,14 @@ const CustomerApp = (() => {
     const first = useRef(true);
     const shellRef = useRef(null);
     const bottomNavRef = useRef(null);
+    // Every new page opens at the top (like a native app). Back/forward keeps
+    // the browser's own position, and the Shop list keeps its saved position.
+    const navType = useNavigationType();
+    useLayoutEffect(() => {
+      if (navType === "POP") return;
+      if (/\/shop\/?$/.test(pathname) && shopCache?.ui?.y > 0) return;
+      window.scrollTo(0, 0);
+    }, [pathname]); // eslint-disable-line react-hooks/exhaustive-deps
     // Active-tab check that ignores a trailing slash / index.html. A PWA
     // opened from the Home Screen can start at "/customer/" (manifest
     // start_url), which NavLink's strict `end` match treats as NOT Home.
@@ -41887,9 +41896,11 @@ const CustomerApp = (() => {
               {tr("Loading account permissions…", "កំពុងទាញយកសិទ្ធិគណនី…")}
             </div>
           )}
-          <PullToRefresh key={pathname} onRefresh={handlePullRefresh}>
-            <Outlet />
-          </PullToRefresh>
+          <div key={pathname} className="jz-page-in">
+            <PullToRefresh key={pathname} onRefresh={handlePullRefresh}>
+              <Outlet />
+            </PullToRefresh>
+          </div>
           {toast && (
             <div className="jz-toast fixed bottom-24 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-sm px-4 py-2 rounded-full shadow-lg z-50">
               {toast}
@@ -94694,6 +94705,15 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:var(--
 .jz-customer button:not(:disabled),.jz-customer [role="tab"],.jz-customer .jz-bottom-nav a{-webkit-tap-highlight-color:transparent;transition-property:background-color,color,border-color,box-shadow,opacity,scale;transition-duration:.18s;transition-timing-function:cubic-bezier(.22,1.2,.36,1);}
 .jz-customer button:not(:disabled):active,.jz-customer [role="tab"]:active{scale:.96;transition-duration:.08s;}
 .jz-customer .jz-chip-row>button:active{scale:.94;}
+/* Smooth page entry: opacity only (a transform here would re-anchor the fixed order bars while it plays). */
+.jz-customer .jz-page-in{animation:jz-fade 200ms ease-out;}
+/* Touch comfort: instant taps, no grey flash / long-press menu, and a soft press state on links and cards. */
+.jz-customer :is(a,button,[role="button"],label,summary){touch-action:manipulation;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;}
+.jz-customer a[href]:not(.jz-bottom-nav a){transition:opacity .15s ease;}
+.jz-customer a[href]:not(.jz-bottom-nav a):active{opacity:.72;transition-duration:.06s;}
+/* iOS zooms the page when a field under 16px is focused: keep fields at 16px so nothing jumps. */
+.jz-customer :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),select,textarea){font-size:16px;}
+.jz-customer :is(a,button,input,select,textarea):focus-visible{outline:2px solid #3b82f6;outline-offset:2px;}
 @media (prefers-reduced-motion:reduce){.jz-customer button:active,.jz-customer [role="tab"]:active{scale:1;}}
 /* iOS haptic overlay: a real finger tap must land on a native switch (iOS 26.5+). Kept near-transparent, full-cover, and scroll-friendly. */
 .jz-hx{position:absolute;inset:0;z-index:5;display:block;margin:0;padding:0;border-radius:inherit;opacity:.01;touch-action:pan-x pan-y;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;cursor:pointer;}
