@@ -3184,6 +3184,7 @@ const NAV_SECTIONS = [
     label: "Finance",
     items: [
       { label: "Wallet Top Up", icon: "Wallet", path: "/wallet-top-up" },
+      { label: "Payments", icon: "CreditCard", path: "/payments" },
       { label: "Service Charge", icon: "Receipt", path: "/service-charge" },
       { label: "Loyalty Points", icon: "Gift", path: "/loyalty" },
     ],
@@ -3443,6 +3444,7 @@ const PERMISSION_GROUPS = [
       ["audit.view", "View Audit Logs"],
       ["report.view", "View Reports"],
       ["payment.manage", "Top Up Wallet & Record Shipping Payments"],
+      ["payment.view", "View Payments (menu & list)"],
       ["points.view", "View Customer Points, Rewards & Redemptions"],
       [
         "points.manage",
@@ -3525,6 +3527,7 @@ const PATH_VIEW = {
   "/warehouse-operations": "warehouse_ops.view",
   "/exceptions": "exception.view",
   "/wallet-top-up": "payment.manage",
+  "/payments": "payment.view",
   "/service-charge": "service_charge.view",
   "/loyalty": "points.view",
   "/shop/dashboard": "shop.report",
@@ -16483,6 +16486,7 @@ function DataTable({
   rowActions,
   onRowClick,
   rowKey,
+  rowClassName,
   minWidth,
   caption,
   error = null,
@@ -16539,7 +16543,7 @@ function DataTable({
             rows.map((row, i) => (
               <tr
                 key={rowKey ? rowKey(row, i) : i}
-                className={`cbx-row transition-colors ${onRowClick ? "cursor-pointer hover:bg-blue-50/40" : ""}`}
+                className={`cbx-row transition-colors ${onRowClick ? "cursor-pointer hover:bg-blue-50/40" : ""} ${rowClassName ? rowClassName(row) : ""}`}
                 onClick={
                   onRowClick
                     ? (e) => {
@@ -41542,7 +41546,7 @@ const CustomerApp = (() => {
     const hideNav =
       /\/shop\/(p\/[^/]+|cart|checkout|orders\/[^/]+)\/?$/.test(pathname) ||
       /\/(shipments|cn-orders)\/[^/]+\/?$/.test(pathname) ||
-      /\/(wallet(\/[^/]+)?|points|addresses|notifications|warehouse|change-password|change-pin|profile\/(settings|help))\/?$/.test(
+      /\/(wallet(\/[^/]+)?|points|addresses|notifications|warehouse|change-password|change-pin|search-tracking|profile\/(settings|help))\/?$/.test(
         pathname,
       );
     // Use the actual dock height: language, enabled tabs and screen size can
@@ -44014,9 +44018,6 @@ const CustomerApp = (() => {
                           >
                             {n > 0 ? "+" : n < 0 ? "−" : ""}
                             {money(Math.abs(n))}
-                          </p>
-                          <p className="text-[11px] text-slate-400">
-                            {tr("Bal", "សមតុល្យ")} {moneyS(t._after)}
                           </p>
                         </div>
                         {/* same width on every row so the amounts line up */}
@@ -46896,6 +46897,13 @@ const CustomerApp = (() => {
   function SearchTracking() {
     const { me, ships, cnOrders, tr, say } = useApp();
     const nav = useNavigate();
+    // Open at the top: the page used to inherit the Profile page's scroll
+    // position, which pushed the search box under the header.
+    useLayoutEffect(() => {
+      window.scrollTo(0, 0);
+      document.documentElement.scrollTop = 0;
+      document.body.scrollTop = 0;
+    }, []);
     const [q, setQ] = useState("");
     const [res, setRes] = useState({ busy: false, rows: null, err: "" });
     const seq = useRef(0);
@@ -67742,7 +67750,6 @@ function FixDuplicateOrderIdPage() {
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
   const [result, setResult] = useState(null); // null = nothing searched yet
   const [confirmKey, setConfirmKey] = useState("");
   const [note, setNote] = useState("");
@@ -67756,12 +67763,11 @@ function FixDuplicateOrderIdPage() {
       : d.toLocaleString("en-GB", { timeZone: "Asia/Phnom_Penh" });
   };
 
-  async function search(value, keepSuccess = false) {
+  async function search(value) {
     setBusy(true);
     setError("");
     setConfirmKey("");
     setNote("");
-    if (!keepSuccess) setSuccess("");
     try {
       setResult(await findOrderIdRecords(value ?? query));
     } catch (e) {
@@ -67796,17 +67802,23 @@ function FixDuplicateOrderIdPage() {
       if (err) throw err;
       if (rec.source === "parse_link" && data?.new_id)
         CN_ORDER_NO_BY_ID[rec.row.id] = data.new_id;
-      setSuccess(
-        `Renumbered ${rec.source === "shipment" ? "Shipment" : "Parse Link"} order: ${data?.old_id} → ${data?.new_id}`,
+      emitCBToast(
+        "ok",
+        "Order ID renumbered",
+        `${rec.source === "shipment" ? "Shipment" : "Parse Link"}: ${data?.old_id} → ${data?.new_id}`,
       );
       try {
         await refetch?.();
       } catch {
         /* lists refresh on the next realtime event / focus */
       }
-      await search(result.id, true);
+      await search(result.id);
     } catch (e) {
-      setError(e.message || "Could not renumber this order.");
+      emitCBToast(
+        "err",
+        "Renumber failed",
+        e.message || "Could not renumber this order.",
+      );
     } finally {
       setFixing(false);
     }
@@ -67885,12 +67897,6 @@ function FixDuplicateOrderIdPage() {
             {error && (
               <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
                 {error}
-              </div>
-            )}
-            {success && (
-              <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-                <Icons.CheckCircle2 size={16} className="mt-0.5 shrink-0" />
-                <span>{success}</span>
               </div>
             )}
 
@@ -77162,16 +77168,8 @@ function CustomerDetailPage() {
         // shipping payments store the TK in `reference`
         const tk =
           r.tk || (/^shipping_payment/.test(r.type || "") ? r.reference : null);
-        return tk ? (
-          <Link
-            to={`/packages/${encodeURIComponent(tk)}`}
-            className="font-semibold text-blue-700 hover:underline"
-          >
-            {tk}
-          </Link>
-        ) : (
-          "—"
-        );
+        // Plain text (not a link): the TK is shown as-is.
+        return tk ? <span className="text-slate-800">{tk}</span> : "—";
       },
     },
     {
@@ -79740,6 +79738,1221 @@ function LoyaltyPage() {
 }
 
 // ============================================================
+// PAYMENTS (Finance) — /payments  (DRSB "Payments" look)
+// Every payment that was PAID (shipping fee, CN order, shop product order)
+// plus refunds, read from wallet_transactions. "Paid By" is Customer when the
+// customer paid from the app (created_by = "Customer"), otherwise the admin
+// who recorded it. Permission: payment.view
+// ============================================================
+// type -> [what was paid, method, flow]
+const PAY_KIND = {
+  shipping_payment: ["Shipping Fee", "Wallet", "pay"],
+  shipping_payment_wallet: ["Shipping Fee", "Wallet", "pay"],
+  shipping_payment_cash: ["Shipping Fee", "Cash", "pay"],
+  cn_order_payment: ["CN Order", "Wallet", "pay"],
+  cn_order_payment_wallet: ["CN Order", "Wallet", "pay"],
+  cn_order_payment_cash: ["CN Order", "Cash", "pay"],
+  shop_order_payment_wallet: ["Product Order", "Wallet", "pay"],
+  cn_order_refund: ["CN Order", "Wallet", "refund"],
+  cn_order_refund_reversal: ["CN Order", "Wallet", "reversal"],
+  shop_order_refund_wallet: ["Product Order", "Wallet", "refund"],
+};
+const PAY_TABS = ["All", "Paid", "Refunded"];
+
+function payPaidBy(r) {
+  const by = String(r.created_by || "").trim();
+  if (!by) return { kind: "unknown", name: "" };
+  if (by.toLowerCase() === "customer") return { kind: "customer", name: "" };
+  return { kind: "admin", name: by };
+}
+// Cash / bank payments keep the wallet untouched (amount = 0): the real
+// money received is in cash_amount.
+function payAmount(r) {
+  const cash = /_cash$/.test(r.type || "") ? Number(r.cash_amount) || 0 : 0;
+  return cash > 0 ? cash : Math.abs(Number(r.amount) || 0);
+}
+async function payInChunks(table, select, col, values) {
+  const vals = [...new Set((values || []).filter(Boolean).map(String))];
+  const out = [];
+  for (let i = 0; i < vals.length; i += 100) {
+    const { data } = await supabase
+      .from(table)
+      .select(select)
+      .in(col, vals.slice(i, i + 100));
+    if (data) out.push(...data);
+  }
+  return out;
+}
+const PAY_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// ---- Server-side paging ---------------------------------------------------
+// The table asks the database for ONE page (pageSize rows, 15 by default) and
+// only looks up the customers / orders of those rows. The summary cards and
+// tab counts come from a separate light query (a few columns, all matching
+// rows) so they stay correct without slowing the table down.
+const PAY_COLS =
+  "id,type,amount,cash_amount,created_at,created_by,customer_id,reference,note,ref_no";
+
+// Which wallet_transactions.type values match the kind / method / tab filters.
+function payTypesFor(f, withTab = true) {
+  return Object.keys(PAY_KIND).filter((t) => {
+    const [kind, method, flow] = PAY_KIND[t];
+    if (f.kind && kind !== f.kind) return false;
+    if (f.method && method !== f.method) return false;
+    if (withTab && f.tab === "Paid" && flow !== "pay") return false;
+    if (withTab && f.tab === "Refunded" && flow === "pay") return false;
+    return true;
+  });
+}
+
+// Search text -> one PostgREST "or" clause (customer, order, tracking, admin).
+async function payResolveSearch(raw) {
+  const s = String(raw || "")
+    .replace(/[,()"'\\%*]/g, " ")
+    .trim();
+  if (!s) return "";
+  const like = `%${s}%`;
+  const safe = async (p) => {
+    try {
+      const { data } = await p;
+      return data || [];
+    } catch {
+      return [];
+    }
+  };
+  const [custs, cns, shops, pkgs] = await Promise.all([
+    safe(
+      supabase
+        .from("customers")
+        .select("id")
+        .or(
+          `customer_code.ilike.${like},name.ilike.${like},phone.ilike.${like}`,
+        )
+        .limit(200),
+    ),
+    safe(
+      supabase
+        .from("cn_orders")
+        .select("id,order_id")
+        .ilike("order_id", like)
+        .limit(200),
+    ),
+    safe(
+      supabase
+        .from("shop_orders")
+        .select("id,order_no")
+        .ilike("order_no", like)
+        .limit(200),
+    ),
+    safe(supabase.from("packages").select("tk").ilike("tk", like).limit(200)),
+  ]);
+  const cnIds = cns.map((c) => c.id).filter(Boolean);
+  const cnPk = cnIds.length
+    ? await safe(
+        supabase
+          .from("packages")
+          .select("tk")
+          .in("cn_order_id", cnIds)
+          .limit(500),
+      )
+    : [];
+  const okVal = (v) => /^[\w\-./]+$/.test(String(v));
+  const refs = new Set(
+    [
+      ...cns.flatMap((c) => [c.id, c.order_id]),
+      ...shops.flatMap((c) => [c.id, c.order_no]),
+      ...pkgs.map((p) => p.tk),
+      ...cnPk.map((p) => p.tk),
+    ]
+      .filter((v) => v != null && okVal(v))
+      .map(String),
+  );
+  const parts = [
+    `reference.ilike.${like}`,
+    `ref_no.ilike.${like}`,
+    `created_by.ilike.${like}`,
+    `note.ilike.${like}`,
+  ];
+  const custIds = custs.map((c) => c.id).filter((v) => v != null && okVal(v));
+  if (custIds.length) parts.push(`customer_id.in.(${custIds.join(",")})`);
+  if (refs.size)
+    parts.push(`reference.in.(${[...refs].slice(0, 400).join(",")})`);
+  return parts.join(",");
+}
+
+// Payments are kept in the wallet ledger even after their order was deleted.
+// Find the CN / shop order references that no longer exist so the Payments
+// list can skip them. Any lookup error -> hide nothing (never hide by mistake).
+async function payLoadOrphans() {
+  const { data, error } = await fetchAllRows(({ count, stable }) => {
+    const q = supabase
+      .from("wallet_transactions")
+      .select("id,type,reference", count ? { count: "exact" } : undefined)
+      .in("type", Object.keys(PAY_KIND))
+      .not("reference", "is", null)
+      .order("created_at", { ascending: false });
+    return stable ? q.order("id", { ascending: false }) : q;
+  });
+  if (error) throw error;
+  const cnRefs = new Set();
+  const shopRefs = new Set();
+  for (const r of data || []) {
+    const ref = String(r.reference || "").trim();
+    if (!ref) continue;
+    if (/^cn_order/.test(r.type)) {
+      if (PAY_UUID.test(ref) || /^JZE\d+$/i.test(ref)) cnRefs.add(ref);
+    } else if (/^shop_order/.test(r.type)) {
+      if (PAY_UUID.test(ref)) shopRefs.add(ref);
+    }
+  }
+  const existing = async (table, select, col, vals) => {
+    const out = new Set();
+    for (let i = 0; i < vals.length; i += 100) {
+      const { data: rows, error: e } = await supabase
+        .from(table)
+        .select(select)
+        .in(col, vals.slice(i, i + 100));
+      if (e) throw e;
+      (rows || []).forEach((row) =>
+        Object.values(row).forEach((v) => v != null && out.add(String(v))),
+      );
+    }
+    return out;
+  };
+  const cnList = [...cnRefs];
+  const cnHave = new Set([
+    ...(await existing(
+      "cn_orders",
+      "id,order_id",
+      "order_id",
+      cnList.filter((v) => !PAY_UUID.test(v)),
+    )),
+    ...(await existing(
+      "cn_orders",
+      "id,order_id",
+      "id",
+      cnList.filter((v) => PAY_UUID.test(v)),
+    )),
+  ]);
+  const shopList = [...shopRefs];
+  const shopHave = await existing("shop_orders", "id", "id", shopList);
+  return [
+    ...cnList.filter((v) => !cnHave.has(v)),
+    ...shopList.filter((v) => !shopHave.has(v)),
+  ];
+}
+
+function payApplyFilters(qb, f, types, orClause) {
+  let out = qb.in("type", types);
+  const hide = f.hideRefs || [];
+  for (let i = 0; i < hide.length; i += 100)
+    out = out.or(
+      `reference.is.null,reference.not.in.(${hide.slice(i, i + 100).join(",")})`,
+    );
+  const { from, to } = resolveDateRange(f.dateRange);
+  if (from)
+    out = out.gte("created_at", new Date(`${from}T00:00:00`).toISOString());
+  if (to) {
+    const next = new Date(`${to}T00:00:00`);
+    next.setDate(next.getDate() + 1);
+    out = out.lt("created_at", next.toISOString());
+  }
+  if (f.by === "customer") out = out.ilike("created_by", "customer");
+  else if (f.by === "admin")
+    out = out
+      .not("created_by", "is", null)
+      .neq("created_by", "")
+      .not("created_by", "ilike", "customer");
+  else if (f.by === "unknown")
+    out = out.or("created_by.is.null,created_by.eq.");
+  if (orClause) out = out.or(orClause);
+  return out;
+}
+
+// ONE page of payments (+ the related customers / orders of just those rows).
+async function loadPaymentPage(f, orClause, page, pageSize) {
+  const types = payTypesFor(f);
+  if (!types.length) return { rows: [], total: 0 };
+  const from = page * pageSize;
+  const { data, error, count } = await payApplyFilters(
+    supabase.from("wallet_transactions").select(PAY_COLS, { count: "exact" }),
+    f,
+    types,
+    orClause,
+  )
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .range(from, from + pageSize - 1);
+  if (error) throw error;
+  return { rows: await enrichPaymentRows(data || []), total: count ?? 0 };
+}
+
+function payStatsOf(list) {
+  const s = {
+    paidTotal: 0,
+    refundTotal: 0,
+    reversalTotal: 0,
+    customerAmt: 0,
+    customerN: 0,
+    adminAmt: 0,
+    adminN: 0,
+    paidN: 0,
+    refundedN: 0,
+    otherN: 0,
+    count: 0,
+  };
+  const custs = new Set();
+  for (const r of list) {
+    const flow = PAY_KIND[r.type]?.[2];
+    if (!flow) continue;
+    const amt = payAmount(r);
+    s.count += 1;
+    custs.add(r.customer_id);
+    if (flow === "pay") {
+      s.paidTotal += amt;
+      s.paidN += 1;
+      if (payPaidBy(r).kind === "customer") {
+        s.customerAmt += amt;
+        s.customerN += 1;
+      } else {
+        s.adminAmt += amt;
+        s.adminN += 1;
+      }
+    } else {
+      s.otherN += 1;
+      if (flow === "refund") {
+        s.refundTotal += amt;
+        s.refundedN += 1;
+      } else s.reversalTotal += amt;
+    }
+  }
+  return {
+    net: s.paidTotal - s.refundTotal + s.reversalTotal,
+    paidTotal: s.paidTotal,
+    refundTotal: s.refundTotal - s.reversalTotal,
+    customerAmt: s.customerAmt,
+    customerN: s.customerN,
+    adminAmt: s.adminAmt,
+    adminN: s.adminN,
+    count: s.count,
+    refundedN: s.refundedN,
+    paidN: s.paidN,
+    otherN: s.otherN,
+    customers: custs.size,
+  };
+}
+
+// Summary cards + tab counts: every matching row, but only 5 light columns.
+async function loadPaymentStats(f, orClause) {
+  const types = payTypesFor(f, false);
+  if (!types.length) return payStatsOf([]);
+  const { data, error } = await fetchAllRows(({ count, stable }) => {
+    const q = payApplyFilters(
+      supabase
+        .from("wallet_transactions")
+        .select(
+          "id,type,amount,cash_amount,created_by,customer_id",
+          count ? { count: "exact" } : undefined,
+        ),
+      f,
+      types,
+      orClause,
+    ).order("created_at", { ascending: false });
+    return stable ? q.order("id", { ascending: false }) : q;
+  });
+  if (error) throw error;
+  return payStatsOf(data || []);
+}
+
+async function enrichPaymentRows(list) {
+  // Related records are optional lookups: a failure only means a plainer row.
+  const refOf = (r) =>
+    String(r.reference || "").trim() ||
+    (String(r.note || "").match(/JZE\d{9}/) || [""])[0];
+  const isShip = (r) => /^shipping_payment/.test(r.type);
+  const isCn = (r) => /^cn_order/.test(r.type);
+  const isShop = (r) => /^shop_order/.test(r.type);
+  const cnRefs = list.filter(isCn).map(refOf);
+  const shopRefs = list.filter(isShop).map(refOf);
+  const [custs, pkgs, cnByNo, cnById, shopByNo, shopById] = await Promise.all([
+    payInChunks(
+      "customers",
+      "id,customer_code,name,phone",
+      "id",
+      list.map((r) => r.customer_id),
+    ),
+    payInChunks(
+      "packages",
+      "tk,order_no,cn_order_id",
+      "tk",
+      list.filter(isShip).map((r) => r.reference),
+    ),
+    payInChunks(
+      "cn_orders",
+      "id,order_id",
+      "order_id",
+      cnRefs.filter((v) => !PAY_UUID.test(v)),
+    ),
+    payInChunks(
+      "cn_orders",
+      "id,order_id",
+      "id",
+      cnRefs.filter((v) => PAY_UUID.test(v)),
+    ),
+    payInChunks(
+      "shop_orders",
+      "id,order_no",
+      "order_no",
+      shopRefs.filter((v) => !PAY_UUID.test(v)),
+    ),
+    payInChunks(
+      "shop_orders",
+      "id,order_no",
+      "id",
+      shopRefs.filter((v) => PAY_UUID.test(v)),
+    ),
+  ]);
+  // Second pass: CN orders reached only through a package, and every TK that
+  // belongs to the CN orders shown here (so the row can list its tracking).
+  const knownCn = new Set([...cnByNo, ...cnById].map((c) => String(c.id)));
+  const extraCnIds = pkgs
+    .map((p) => p.cn_order_id)
+    .filter((v) => v && !knownCn.has(String(v)));
+  const cnExtra = await payInChunks(
+    "cn_orders",
+    "id,order_id",
+    "id",
+    extraCnIds,
+  );
+  const allCn = [...cnByNo, ...cnById, ...cnExtra];
+  const cnPkgs = await payInChunks(
+    "packages",
+    "tk,cn_order_id",
+    "cn_order_id",
+    allCn.map((c) => c.id),
+  );
+  const custBy = Object.fromEntries(custs.map((c) => [String(c.id), c]));
+  const pkgBy = Object.fromEntries(pkgs.map((p) => [String(p.tk), p]));
+  const cnNo = Object.fromEntries(cnByNo.map((c) => [String(c.order_id), c]));
+  const cnId = Object.fromEntries(allCn.map((c) => [String(c.id), c]));
+  const shNo = Object.fromEntries(shopByNo.map((c) => [String(c.order_no), c]));
+  const shId = Object.fromEntries(shopById.map((c) => [String(c.id), c]));
+  const tksOfCn = {};
+  cnPkgs.forEach((p) => {
+    (tksOfCn[String(p.cn_order_id)] ||= []).push(p.tk);
+  });
+  const pkgTo = (tk) => (tk ? `/packages/${encodeURIComponent(tk)}` : null);
+  // CN order detail is addressed by its JZE number (same as the other pages).
+  const cnTo = (no) => (no ? `/cn-orders/${encodeURIComponent(no)}` : null);
+
+  return list.map((r) => {
+    const [kind, method, flow] = PAY_KIND[r.type];
+    const ref = refOf(r);
+    // main/to = the Order ID and where it opens; tks = tracking numbers
+    let order = { main: ref || "—", to: null, tks: [] };
+    if (isShip(r)) {
+      const p = pkgBy[String(r.reference)];
+      const c = p?.cn_order_id ? cnId[String(p.cn_order_id)] : null;
+      if (c)
+        order = { main: c.order_id, to: cnTo(c.order_id), tks: [r.reference] };
+      else if (p?.order_no)
+        order = {
+          main: p.order_no,
+          to: pkgTo(r.reference),
+          tks: [r.reference],
+        };
+      else
+        order = {
+          main: r.reference || "—",
+          to: pkgTo(r.reference),
+          tks: [],
+        };
+    } else if (isCn(r)) {
+      const c = cnNo[ref] || cnId[ref];
+      const no = c?.order_id || ref;
+      order = {
+        main: no || "—",
+        to: /^JZE/i.test(no || "") ? cnTo(no) : null,
+        tks: c ? tksOfCn[String(c.id)] || [] : [],
+      };
+    } else if (isShop(r)) {
+      const sh = shNo[ref] || shId[ref];
+      if (sh)
+        order = {
+          main: sh.order_no,
+          to: `/shop/orders/${encodeURIComponent(sh.id)}`,
+          tks: [],
+        };
+    }
+    return {
+      ...r,
+      _c: custBy[String(r.customer_id)] || null,
+      _kind: kind,
+      _method: method,
+      _flow: flow,
+      _by: payPaidBy(r),
+      _amt: payAmount(r),
+      _order: order,
+    };
+  });
+}
+
+// ---- Delete wallet transactions (Super Admin only) -----------------------
+// Calls the admin_delete_wallet_transactions RPC (delete_wallet_transactions.sql):
+// it checks Super Admin on the server, copies the rows to
+// wallet_transactions_deleted_backup, optionally undoes their effect on
+// customers.balance, then deletes them.
+async function deleteWalletTransactions(ids, adjustBalance) {
+  if (!supabase) throw new Error("Supabase is not connected");
+  const { data, error } = await supabase.rpc(
+    "admin_delete_wallet_transactions",
+    { p_ids: ids, p_adjust_balance: !!adjustBalance },
+  );
+  if (error) {
+    const m = error.message || "";
+    throw new Error(
+      /does not exist|schema cache/i.test(m)
+        ? "Run delete_wallet_transactions.sql in Supabase first."
+        : /permission_denied/.test(m)
+          ? "Only Super Admin can delete transactions."
+          : m || "Unable to delete transactions",
+    );
+  }
+  return data || {};
+}
+
+function WalletTxDeleteModal({ ids, onClose, onDone }) {
+  const [adjust, setAdjust] = useState(false);
+  const [phrase, setPhrase] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const matches = phrase.trim() === "DELETE";
+  const label = `${ids.length} transaction${ids.length === 1 ? "" : "s"}`;
+  async function submit() {
+    if (busy || !matches) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const res = await deleteWalletTransactions(ids, adjust);
+      const n = res.deleted ?? ids.length;
+      emitCBToast(
+        "ok",
+        "Deleted",
+        `${n} transaction${n === 1 ? "" : "s"} permanently removed.`,
+      );
+      onDone?.();
+      onClose();
+    } catch (ex) {
+      setErr(ex.message || "Unable to delete transactions");
+    } finally {
+      setBusy(false);
+    }
+  }
+  // Same look as the "Delete Package" (TK) modal.
+  return (
+    <CrModalShell
+      title="Delete Transaction"
+      danger
+      maxW="max-w-[520px]"
+      onClose={onClose}
+      busy={busy}
+      error={err}
+      footer={
+        <>
+          <button
+            type="submit"
+            form="delete-wallet-tx-form"
+            disabled={busy || !matches}
+            className="inline-flex h-11 items-center gap-1.5 rounded-lg bg-red-600 px-7 text-sm font-bold text-white transition hover:bg-red-700 disabled:opacity-40"
+          >
+            {busy && <Icons.Loader2 size={15} className="animate-spin" />}
+            {busy ? "Deleting..." : "Delete"}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className={CR_BTN_GHOST}
+          >
+            <Icons.X size={14} />
+            Cancel
+          </button>
+        </>
+      }
+    >
+      <form
+        id="delete-wallet-tx-form"
+        className="space-y-5"
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+      >
+        <p className="text-[15px] leading-relaxed text-slate-700">
+          Are you sure you want to permanently delete{" "}
+          <b className="text-slate-900">{label}</b>? This action cannot be
+          undone. A copy is kept in{" "}
+          <b className="text-slate-900">wallet_transactions_deleted_backup</b>.
+        </p>
+        <label className="flex cursor-pointer items-start gap-2.5 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={adjust}
+            onChange={(e) => setAdjust(e.target.checked)}
+            className="mt-0.5 h-[18px] w-[18px] shrink-0 cursor-pointer accent-red-600"
+          />
+          <span>
+            Also undo their effect on customer balances (balance − deleted
+            amounts). Leave unchecked for test data.
+          </span>
+        </label>
+        <div>
+          <label className={CR_LABEL} htmlFor="del-wtx-confirm">
+            Type DELETE to confirm <span className="text-red-500">*</span>
+          </label>
+          <input
+            id="del-wtx-confirm"
+            autoFocus
+            value={phrase}
+            onChange={(e) => setPhrase(e.target.value)}
+            autoComplete="off"
+            style={WTU_NO_RING}
+            className={CR_FIELD}
+          />
+        </div>
+      </form>
+    </CrModalShell>
+  );
+}
+
+// Checkbox column (select all on this page) for the transaction tables.
+function walletTxSelectCol(rows, sel, setSel) {
+  const selectedHere = rows.filter((r) => sel.has(r.id)).length;
+  const allOn = rows.length > 0 && selectedHere === rows.length;
+  const someOn = selectedHere > 0 && !allOn;
+  const toggle = (id) =>
+    setSel((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+  // 40px click area around an 18px checkbox: easy to hit with a finger/trackpad.
+  const hitCls =
+    "-mx-2 -my-2 flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg hover:bg-slate-100";
+  const boxCls = "h-[18px] w-[18px] cursor-pointer accent-blue-600";
+  return {
+    key: "_sel",
+    className: "w-14",
+    label: (
+      <label
+        className={hitCls}
+        title={allOn ? "Unselect all on this page" : "Select all on this page"}
+      >
+        <input
+          type="checkbox"
+          aria-label="Select all on this page"
+          className={boxCls}
+          checked={allOn}
+          ref={(el) => {
+            if (el) el.indeterminate = someOn;
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onChange={() =>
+            setSel((prev) => {
+              const n = new Set(prev);
+              rows.forEach((r) => (allOn ? n.delete(r.id) : n.add(r.id)));
+              return n;
+            })
+          }
+        />
+      </label>
+    ),
+    render: (r) => (
+      <label className={hitCls}>
+        <input
+          type="checkbox"
+          aria-label="Select transaction"
+          className={boxCls}
+          checked={sel.has(r.id)}
+          onClick={(e) => e.stopPropagation()}
+          onChange={() => toggle(r.id)}
+        />
+      </label>
+    ),
+  };
+}
+
+// Highlight for selected rows (pass to DataTable rowClassName).
+const walletTxRowCls = (sel) => (r) =>
+  sel.has(r.id) ? "bg-blue-50/80 shadow-[inset_3px_0_0_#2563eb]" : "";
+
+// Floating action bar: always visible at the bottom, no need to scroll up.
+function WalletTxSelectBar({ count, onDelete, onClear }) {
+  useEffect(() => {
+    const onKey = (e) => {
+      // Esc closes an open modal first; it only clears the selection when none is open.
+      if (e.key === "Escape" && !document.querySelector('[role="dialog"]'))
+        onClear?.();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClear]);
+  return (
+    <div
+      role="region"
+      aria-live="polite"
+      className="cb-fade-in fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded-2xl bg-slate-900 px-4 py-3 text-sm text-white shadow-2xl"
+    >
+      <span className="font-semibold">{count} selected</span>
+      <button
+        type="button"
+        onClick={onClear}
+        className="h-9 rounded-lg px-3 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white"
+        title="Clear selection (Esc)"
+      >
+        Clear
+      </button>
+      <button
+        type="button"
+        onClick={onDelete}
+        className="flex h-9 items-center gap-1.5 rounded-lg bg-red-600 px-4 text-xs font-bold text-white hover:bg-red-700"
+      >
+        <Icons.Trash2 size={14} /> Delete
+      </button>
+    </div>
+  );
+}
+
+function PayStatusBadge({ flow }) {
+  const [label, tone] =
+    flow === "refund"
+      ? ["Refunded", "border-red-200 bg-red-50 text-red-600"]
+      : flow === "reversal"
+        ? ["Refund Reversed", "border-violet-200 bg-violet-50 text-violet-700"]
+        : ["Paid", "border-emerald-200 bg-emerald-50 text-emerald-700"];
+  return (
+    <span
+      className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-semibold ${tone}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function PaymentsPage() {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const canDelete = user?.role === SUPER_ADMIN;
+  const [sel, setSel] = useState(() => new Set());
+  const [delOpen, setDelOpen] = useState(false);
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(15);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [reload, setReload] = useState(0);
+  const [tab, setTab] = useState("All");
+  const [search, setSearch] = useState("");
+  const [dq, setDq] = useState(""); // debounced search text
+  const [dateRange, setDateRange] = useState(EMPTY_DATE_RANGE);
+  const [fType, setFType] = useState("");
+  const [fMethod, setFMethod] = useState("");
+  const [fBy, setFBy] = useState("");
+  const [crit, setCrit] = useState(null); // resolved filters (search -> clause)
+  const orphanRef = useRef({ key: -1, refs: [] }); // deleted-order references
+  const [stats, setStats] = useState(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDq(search.trim()), 350);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  // Filters changed (or Refresh): resolve the search text once, go back to
+  // page 1, and let the page + summary loaders below run with that snapshot.
+  useEffect(() => {
+    let alive = true;
+    if (!supabase) {
+      setLoading(false);
+      setError("Supabase is not configured.");
+      return undefined;
+    }
+    (async () => {
+      let or = "";
+      try {
+        or = await payResolveSearch(dq);
+      } catch {
+        or = "";
+      }
+      let hide =
+        orphanRef.current.key === reload ? orphanRef.current.refs : null;
+      if (!hide) {
+        try {
+          hide = await payLoadOrphans();
+        } catch {
+          hide = [];
+        }
+        orphanRef.current = { key: reload, refs: hide };
+      }
+      if (!alive) return;
+      setPage(0);
+      setCrit({
+        f: {
+          kind: fType,
+          method: fMethod,
+          by: fBy,
+          dateRange,
+          hideRefs: hide,
+        },
+        or,
+      });
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dq, JSON.stringify(dateRange), fType, fMethod, fBy, reload]);
+
+  // ONE page from the server (15 rows by default); next page = next request.
+  useEffect(() => {
+    if (!crit) return undefined;
+    let alive = true;
+    setLoading(true);
+    loadPaymentPage({ ...crit.f, tab }, crit.or, page, pageSize)
+      .then(({ rows: list, total: t }) => {
+        if (!alive) return;
+        if (!list.length && t > 0 && page > 0) {
+          // The last page vanished (rows removed / filter changed): go back.
+          setPage(Math.max(0, Math.ceil(t / pageSize) - 1));
+          return;
+        }
+        setRows(list);
+        setTotal(t);
+        setSel(new Set());
+        setError("");
+        setLoading(false);
+      })
+      .catch((e) => {
+        if (!alive) return;
+        setRows([]);
+        setTotal(0);
+        setError(e?.message || "Unable to load payments.");
+        setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [crit, tab, page, pageSize]);
+
+  // Summary cards + tab counts (independent of the page and of the tab).
+  useEffect(() => {
+    if (!crit) return undefined;
+    let alive = true;
+    loadPaymentStats(crit.f, crit.or)
+      .then((s) => {
+        if (alive) setStats(s);
+      })
+      .catch(() => {
+        if (alive) setStats(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [crit]);
+
+  const ready = !!stats;
+  const st = stats || {};
+  const dash = (v) => (ready ? v : "—");
+  const counts = {
+    All: dash(st.count),
+    Paid: dash(st.paidN),
+    Refunded: dash(st.otherN),
+  };
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const curPage = Math.min(page, pageCount - 1);
+  const shownN = Math.max(0, Math.min(pageSize, total - curPage * pageSize));
+  const hasFilter =
+    search ||
+    fType ||
+    fMethod ||
+    fBy ||
+    dateRange.preset ||
+    dateRange.from ||
+    dateRange.to;
+
+  const cols = [
+    {
+      key: "paid_at",
+      label: "Paid At",
+      render: (r) => (
+        <>
+          <div className="font-semibold text-slate-800">
+            {cdDate(r.created_at)}
+          </div>
+          <div className="text-[11px] text-slate-400">
+            {cdAgo(r.created_at)}
+          </div>
+        </>
+      ),
+    },
+    {
+      key: "customer",
+      label: "Customer",
+      render: (r) =>
+        r._c ? (
+          <div>
+            <div className="font-semibold text-slate-800">
+              <HoverCopy value={r._c.name} label="Copy customer name">
+                <span>{r._c.name}</span>
+              </HoverCopy>
+            </div>
+            {r._c.customer_code && (
+              <HoverCopy
+                value={fmtCustomerId(r._c.customer_code)}
+                label="Copy customer ID"
+              >
+                <Link
+                  to={`/customers/${encodeURIComponent(r._c.customer_code)}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-xs text-blue-700 hover:underline"
+                >
+                  {fmtCustomerId(r._c.customer_code)}
+                </Link>
+              </HoverCopy>
+            )}
+          </div>
+        ) : (
+          "—"
+        ),
+    },
+    {
+      key: "order",
+      label: "Order",
+      render: (r) => (
+        <div>
+          <div className="font-bold text-slate-900">
+            <HoverCopy
+              value={r._order.main === "—" ? "" : r._order.main}
+              label="Copy order ID"
+            >
+              <span>{r._order.main}</span>
+            </HoverCopy>
+          </div>
+          {r._order.tks.slice(0, 2).map((tk) => (
+            <div key={tk} className="text-xs text-slate-500">
+              <HoverCopy value={tk} label="Copy tracking number">
+                <span>{tk}</span>
+              </HoverCopy>
+            </div>
+          ))}
+          {r._order.tks.length > 2 && (
+            <div className="text-xs text-slate-400">
+              +{r._order.tks.length - 2} more
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: "method",
+      label: "Method",
+      render: (r) => (
+        <span
+          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${r._method === "Wallet" ? "bg-slate-100 text-slate-700" : "bg-blue-50 text-blue-700"}`}
+        >
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${r._method === "Wallet" ? "bg-slate-400" : "bg-blue-500"}`}
+          />
+          {r._method}
+        </span>
+      ),
+    },
+    {
+      key: "amount",
+      label: "Amount",
+      numeric: true,
+      render: (r) => (
+        <span
+          className={`font-bold ${r._flow === "pay" ? "text-slate-900" : "text-emerald-600"}`}
+        >
+          {r._flow === "pay" ? "−" : "+"}
+          {money(r._amt)}
+        </span>
+      ),
+    },
+    {
+      key: "type",
+      label: "Type",
+      render: (r) => (
+        <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700">
+          {r._kind}
+        </span>
+      ),
+    },
+    {
+      key: "status",
+      label: "Status",
+      render: (r) => <PayStatusBadge flow={r._flow} />,
+    },
+    {
+      key: "by",
+      label: r0Label(tab),
+      render: (r) =>
+        r._by.kind === "customer" ? (
+          <div>
+            <div className="text-xs font-semibold text-emerald-700">
+              Customer
+            </div>
+            <div className="text-slate-700">{r._c?.phone || "—"}</div>
+          </div>
+        ) : r._by.kind === "admin" ? (
+          <div>
+            <div className="text-xs font-semibold text-violet-700">Admin</div>
+            <div className="text-slate-700">{r._by.name}</div>
+          </div>
+        ) : (
+          <span className="text-xs text-slate-400">Unknown</span>
+        ),
+    },
+  ];
+
+  const tabBtn = (t) => (
+    <button
+      key={t}
+      type="button"
+      onClick={() => {
+        setTab(t);
+        setPage(0);
+      }}
+      className={`relative -mb-px flex items-center gap-2 border-b-2 px-1 pb-3 pt-1 text-sm font-semibold transition ${tab === t ? "border-blue-600 text-blue-700" : "border-transparent text-slate-500 hover:border-blue-600 hover:text-blue-700"}`}
+    >
+      {t}
+      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">
+        {counts[t]}
+      </span>
+    </button>
+  );
+  const selCls =
+    "h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
+
+  return (
+    <div className="w-full min-w-0">
+      <h1 className="cb-page-title mb-4 text-2xl font-extrabold text-slate-900">
+        Payments
+      </h1>
+
+      <div className="mb-5 grid overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:grid-cols-2 xl:grid-cols-4">
+        <div className="border-b border-slate-200 p-5 xl:border-b-0 xl:border-r">
+          <div className="text-xs font-semibold text-slate-500">Paid (net)</div>
+          <div className="mt-1 text-2xl font-extrabold text-slate-900">
+            {ready ? money(st.net) : "—"}
+          </div>
+          <div className="mt-3 space-y-0.5 text-xs text-slate-500">
+            <div>
+              <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-blue-500" />
+              Paid{" "}
+              <b className="text-slate-800">
+                {ready ? money(st.paidTotal) : "—"}
+              </b>
+            </div>
+            <div>
+              <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-red-500" />
+              Refunded{" "}
+              <b className="text-slate-800">
+                {ready ? money(st.refundTotal) : "—"}
+              </b>
+            </div>
+          </div>
+        </div>
+        <div className="border-b border-slate-200 p-5 sm:border-l-0 xl:border-b-0 xl:border-r">
+          <div className="text-xs font-semibold text-slate-500">
+            Paid by Customer
+          </div>
+          <div className="mt-1 text-2xl font-extrabold text-slate-900">
+            {ready ? money(st.customerAmt) : "—"}
+          </div>
+          <div className="mt-3 text-xs text-slate-500">
+            <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-emerald-500" />
+            {dash(st.customerN)} payments
+          </div>
+        </div>
+        <div className="border-b border-slate-200 p-5 sm:border-b-0 xl:border-r">
+          <div className="text-xs font-semibold text-slate-500">
+            Paid by Admin
+          </div>
+          <div className="mt-1 text-2xl font-extrabold text-slate-900">
+            {ready ? money(st.adminAmt) : "—"}
+          </div>
+          <div className="mt-3 text-xs text-slate-500">
+            <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-violet-500" />
+            {dash(st.adminN)} payments
+          </div>
+        </div>
+        <div className="p-5">
+          <div className="text-xs font-semibold text-slate-500">Payments</div>
+          <div className="mt-1 text-2xl font-extrabold text-slate-900">
+            {ready ? st.count.toLocaleString("en-US") : "—"}
+          </div>
+          <div className="mt-3 space-y-0.5 text-xs text-slate-500">
+            <div>
+              <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-red-500" />
+              {dash(st.refundedN)} refunded
+            </div>
+            <div>{dash(st.customers)} customers</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <div className="relative min-w-[220px] flex-1 sm:max-w-xs">
+            <Icons.Search
+              size={15}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+            />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search customer, order, tracking…"
+              className="h-10 w-full rounded-xl border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+            />
+          </div>
+          <DateRangeFilter
+            label="Paid Between"
+            value={dateRange}
+            onChange={setDateRange}
+          />
+          <select
+            value={fType}
+            onChange={(e) => setFType(e.target.value)}
+            className={selCls}
+            aria-label="Payment type"
+          >
+            <option value="">Payment Type</option>
+            <option value="Shipping Fee">Shipping Fee</option>
+            <option value="CN Order">CN Order</option>
+            <option value="Product Order">Product Order</option>
+          </select>
+          <select
+            value={fMethod}
+            onChange={(e) => setFMethod(e.target.value)}
+            className={selCls}
+            aria-label="Payment method"
+          >
+            <option value="">Payment Method</option>
+            <option value="Wallet">Wallet</option>
+            <option value="Cash">Cash</option>
+          </select>
+          <select
+            value={fBy}
+            onChange={(e) => setFBy(e.target.value)}
+            className={selCls}
+            aria-label="Paid by"
+          >
+            <option value="">User Paid By</option>
+            <option value="customer">Customer</option>
+            <option value="admin">Admin</option>
+            <option value="unknown">Unknown</option>
+          </select>
+          {hasFilter && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearch("");
+                setFType("");
+                setFMethod("");
+                setFBy("");
+                setDateRange(EMPTY_DATE_RANGE);
+              }}
+              className="flex h-10 items-center gap-1.5 rounded-xl bg-red-50 px-3 text-sm font-semibold text-red-600 hover:bg-red-100"
+            >
+              <Icons.X size={14} /> Clear
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setReload((n) => n + 1)}
+            title="Refresh"
+            className="ml-auto flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50"
+          >
+            <Icons.RefreshCw
+              size={15}
+              className={loading ? "animate-spin" : ""}
+            />
+          </button>
+        </div>
+
+        <div className="mb-4 flex gap-6 border-b border-slate-200">
+          {PAY_TABS.map(tabBtn)}
+        </div>
+
+        {canDelete && sel.size > 0 && (
+          <WalletTxSelectBar
+            count={sel.size}
+            onDelete={() => setDelOpen(true)}
+            onClear={() => setSel(new Set())}
+          />
+        )}
+        <div className="overflow-hidden rounded-xl border border-slate-200">
+          <DataTable
+            caption="Payments"
+            columns={
+              canDelete ? [walletTxSelectCol(rows, sel, setSel), ...cols] : cols
+            }
+            rows={rows}
+            rowKey={(r) => r.id}
+            rowClassName={walletTxRowCls(sel)}
+            // Whole row opens its detail: Parse Link -> CN Order detail,
+            // Shipment -> Shipment (TK) detail, Shop -> Shop order.
+            onRowClick={(r, e) => {
+              const to = r._order.to;
+              if (!to) return;
+              if (e && (e.metaKey || e.ctrlKey)) window.open(to, "_blank");
+              else navigate(to);
+            }}
+            loading={loading}
+            skeletonRows={Math.min(pageSize, 8)}
+            minWidth={1000}
+            error={error ? { title: error } : null}
+            onRetry={() => setReload((n) => n + 1)}
+            emptyTitle="You don't have any data available yet."
+          />
+          {!error && total > 0 && (
+            <PaginationBar
+              page={curPage}
+              pageCount={pageCount}
+              total={total}
+              shown={shownN}
+              onPage={setPage}
+              pageSize={pageSize}
+              onPageSize={(n) => {
+                setPageSize(n);
+                setPage(0);
+              }}
+            />
+          )}
+        </div>
+      </div>
+      {delOpen && (
+        <WalletTxDeleteModal
+          ids={[...sel]}
+          onClose={() => setDelOpen(false)}
+          onDone={() => {
+            setSel(new Set());
+            setReload((n) => n + 1);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+function r0Label(tab) {
+  return tab === "Refunded" ? "Done By" : "User Paid By";
+}
+
+// ============================================================
 // SERVICE CHARGE (Finance) — /service-charge  (DRSB "Service Charge" look)
 // Staff files a Service Charge Request (customer + amount + service type);
 // an approver then Approves it and the amount is DEDUCTED from the customer's
@@ -80671,6 +81884,9 @@ function WalletTopUpPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const canTopUp = hasPermission(user, "payment.manage");
+  const canDelete = user?.role === SUPER_ADMIN;
+  const [sel, setSel] = useState(() => new Set());
+  const [delOpen, setDelOpen] = useState(false);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -80729,6 +81945,7 @@ function WalletTopUpPage() {
       setRows(
         (tx || []).map((r) => ({ ...r, _c: byId[String(r.customer_id)] })),
       );
+      setSel(new Set());
       setError("");
       setLoading(false);
     })();
@@ -80987,12 +82204,24 @@ function WalletTopUpPage() {
           </div>
         </div>
 
+        {canDelete && sel.size > 0 && (
+          <WalletTxSelectBar
+            count={sel.size}
+            onDelete={() => setDelOpen(true)}
+            onClear={() => setSel(new Set())}
+          />
+        )}
         <div className="overflow-hidden rounded-xl border border-slate-200">
           <DataTable
             caption="Wallet top-ups"
-            columns={wtuCols}
+            columns={
+              canDelete
+                ? [walletTxSelectCol(shown, sel, setSel), ...wtuCols]
+                : wtuCols
+            }
             rows={shown}
             rowKey={(r) => r.id}
+            rowClassName={walletTxRowCls(sel)}
             loading={loading && rows.length === 0}
             skeletonRows={6}
             minWidth={820}
@@ -81033,6 +82262,16 @@ function WalletTopUpPage() {
           onClose={() => setCreate(false)}
           onDone={() => {
             setCreate(false);
+            setReload((n) => n + 1);
+          }}
+        />
+      )}
+      {delOpen && (
+        <WalletTxDeleteModal
+          ids={[...sel]}
+          onClose={() => setDelOpen(false)}
+          onDone={() => {
+            setSel(new Set());
             setReload((n) => n + 1);
           }}
         />
@@ -92730,6 +93969,7 @@ function AdminApp() {
                 element={<CustomerRecoveryPage />}
               />
               <Route path="/wallet-top-up" element={<WalletTopUpPage />} />
+              <Route path="/payments" element={<PaymentsPage />} />
               <Route path="/service-charge" element={<ServiceChargePage />} />
               <Route
                 path="/service-charge/tx/:id"
