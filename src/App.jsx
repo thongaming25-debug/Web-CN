@@ -45049,9 +45049,11 @@ const CustomerApp = (() => {
 
                     {row.method === "aba_pay" && row.deeplink && (
                       <>
+                        {/* NOT data-haptic: on iPhone that adds an invisible <input switch> inside
+                            the element and a link wrapping an input never navigates. */}
                         <a
                           href={row.deeplink}
-                          data-haptic
+                          data-haptic-soft
                           onClick={() => {
                             // If ABA Mobile did not take over the screen, fall back to the QR.
                             setTimeout(() => {
