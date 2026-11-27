@@ -3186,6 +3186,7 @@ const NAV_SECTIONS = [
     items: [
       { label: "Wallet Top Up", icon: "Wallet", path: "/wallet-top-up" },
       { label: "Payments", icon: "CreditCard", path: "/payments" },
+      { label: "Payment Gateway", icon: "Landmark", path: "/payment-gateway" },
       { label: "Service Charge", icon: "Receipt", path: "/service-charge" },
       { label: "Loyalty Points", icon: "Gift", path: "/loyalty" },
     ],
@@ -3446,6 +3447,16 @@ const PERMISSION_GROUPS = [
       ["report.view", "View Reports"],
       ["payment.manage", "Top Up Wallet & Record Shipping Payments"],
       ["payment.view", "View Payments (menu & list)"],
+      ["payment_gateway.view", "Payment Gateway: view overview & settings"],
+      [
+        "payment_gateway.transactions",
+        "Payment Gateway: view all transactions",
+      ],
+      [
+        "payment_gateway.reconcile",
+        "Payment Gateway: recheck payment status with ABA",
+      ],
+      ["payment_gateway.logs", "Payment Gateway: view callback & audit logs"],
       ["points.view", "View Customer Points, Rewards & Redemptions"],
       [
         "points.manage",
@@ -3529,6 +3540,7 @@ const PATH_VIEW = {
   "/exceptions": "exception.view",
   "/wallet-top-up": "payment.manage",
   "/payments": "payment.view",
+  "/payment-gateway": "payment_gateway.view",
   "/service-charge": "service_charge.view",
   "/loyalty": "points.view",
   "/shop/dashboard": "shop.report",
@@ -38276,6 +38288,13 @@ const CUSTOMER_FEATURES = [
   },
   {
     group: "Wallet & Payment",
+    key: "wallet_online_topup",
+    label: "Online top up (ABA PayWay)",
+    kh: "បញ្ចូលទឹកប្រាក់តាមអនឡាញ (ABA PayWay)",
+    desc: "Top Up button in My Wallet: customers add money with ABA Pay / KHQR. Keep OFF until ABA PayWay is configured and approved.",
+  },
+  {
+    group: "Wallet & Payment",
     key: "wallet_tx_detail",
     label: "Wallet transaction detail",
     kh: "ព័ត៌មានលម្អិតប្រតិបត្តិការកាបូប",
@@ -44188,6 +44207,17 @@ const CustomerApp = (() => {
             </div>
           </div>
 
+          {feat("wallet_online_topup") && (
+            <Link
+              to={P("/wallet/topup")}
+              data-haptic
+              className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white py-3.5 text-[15px] font-bold text-blue-600 shadow-[0_2px_12px_-4px_rgba(15,40,90,.12)] active:bg-slate-50"
+            >
+              <Icons.Plus size={18} />
+              {tr("Top Up", "បញ្ចូលទឹកប្រាក់")}
+            </Link>
+          )}
+
           {walletReady && wallet.balance < 0 && (
             <p className="rounded-2xl bg-red-50 text-red-700 text-xs font-semibold px-3.5 py-3">
               {tr(
@@ -44309,6 +44339,791 @@ const CustomerApp = (() => {
                 {tr("No transactions yet", "មិនទាន់មានប្រតិបត្តិការទេ")}
               </p>
             </Card>
+          )}
+        </div>
+      </>
+    );
+  }
+
+  // ---------- Wallet · Online Top Up via ABA PayWay (ABA Mobile / KHQR) ----------
+  // This page NEVER decides that a payment succeeded and never touches the
+  // balance. It only asks the `payment-gateway` Edge Function to create a QR and
+  // then shows the status the backend reports. The backend verifies the payment
+  // with ABA (Check transaction) and credits the wallet exactly once.
+  // Needs: supabase/functions/payment-gateway deployed + ABA_* secrets set.
+  // Payment-method logos (112px, shown at 48px). Embedded so the page needs no extra files.
+  const PAY_LOGO_ABA =
+    "data:image/png;base64,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";
+  const PAY_LOGO_KHQR =
+    "data:image/png;base64,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";
+
+  function WalletOnlineTopUpPage() {
+    const { wallet, walletReady, refreshMoney, tr } = useApp();
+    const nav = useNavigate();
+    const LS_KEY = "jz_online_topup_pending";
+    const SUGGEST = [5, 10, 20, 50, 100];
+    const ico = (n, fb = "Circle") => Icons[n] || Icons[fb] || Icons.Circle;
+    const SpinIcon = ico("Loader2", "RefreshCw");
+    const OkIcon = ico("CheckCircle2", "Check");
+    const BadIcon = ico("XCircle", "X");
+    const ClockIcon = ico("Clock", "Timer");
+    const WarnIcon = ico("AlertTriangle", "AlertCircle");
+    const PhoneIcon = ico("Smartphone", "Phone");
+    const QrIcon = ico("QrCode", "Grid3x3");
+
+    const [step, setStep] = useState("amount"); // amount | method | pay
+    const [amount, setAmount] = useState("");
+    const [method, setMethod] = useState("aba_pay");
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
+    const [row, setRow] = useState(null); // payment row reported by the backend
+    const [qrImg, setQrImg] = useState(null);
+    const [links, setLinks] = useState({ app_store: null, play_store: null });
+    const [now, setNow] = useState(Date.now());
+    const [resuming, setResuming] = useState(false);
+
+    const amountNum = Number(amount);
+    const amountOk =
+      amount !== "" &&
+      Number.isFinite(amountNum) &&
+      amountNum > 0 &&
+      Math.round(amountNum * 100) / 100 === amountNum;
+
+    // Calls the Edge Function. Throws Error(code) with `.extra` for known errors.
+    const callGw = async (route, body) => {
+      const { data: s } = await supabase.auth.getSession();
+      const { data, error } = await supabase.functions.invoke(
+        `payment-gateway/${route}`,
+        {
+          body,
+          headers: { Authorization: `Bearer ${s.session?.access_token}` },
+        },
+      );
+      if (error) {
+        let j = null;
+        try {
+          j = await error.context.json();
+        } catch {
+          /* network error or non-JSON reply */
+        }
+        const e = new Error(j?.error || "network");
+        e.extra = j || {};
+        throw e;
+      }
+      if (data?.error) {
+        const e = new Error(data.error);
+        e.extra = data;
+        throw e;
+      }
+      return data;
+    };
+
+    const errText = (e) => {
+      const code = e?.message;
+      const x = e?.extra || {};
+      switch (code) {
+        case "unauthorized":
+          return tr("Please sign in again.", "សូមចូលគណនីម្តងទៀត។");
+        case "gateway_not_configured":
+        case "production_locked":
+        case "invalid_env":
+          return tr(
+            "Online top up is not available yet.",
+            "ការបញ្ចូលប្រាក់តាមអនឡាញមិនទាន់អាចប្រើបានទេ។",
+          );
+        case "sandbox_test_customers_only":
+          return tr(
+            "Online top up is still being tested and is not open for your account yet.",
+            "ការបញ្ចូលប្រាក់តាមអនឡាញកំពុងស្ថិតក្នុងការសាកល្បង ហើយមិនទាន់បើកសម្រាប់គណនីរបស់អ្នកទេ។",
+          );
+        case "amount_out_of_range":
+          return x.max == null
+            ? tr(
+                `Amount must be at least ${money(x.min)}.`,
+                `ចំនួនទឹកប្រាក់ត្រូវមានយ៉ាងតិច ${money(x.min)}។`,
+              )
+            : tr(
+                `Amount must be between ${money(x.min)} and ${money(x.max)}.`,
+                `ចំនួនទឹកប្រាក់ត្រូវនៅចន្លោះ ${money(x.min)} និង ${money(x.max)}។`,
+              );
+        case "invalid_amount":
+          return tr(
+            "Please enter a valid amount (up to 2 decimals).",
+            "សូមបញ្ចូលចំនួនទឹកប្រាក់ត្រឹមត្រូវ (រហូតដល់ ២ខ្ទង់ក្រោយក្បៀស)។",
+          );
+        case "too_many_pending":
+          return tr(
+            "You have several unfinished top-ups. Please wait a few minutes and try again.",
+            "អ្នកមានការបញ្ចូលប្រាក់ជាច្រើនដែលមិនទាន់បញ្ចប់។ សូមរង់ចាំបន្តិចហើយព្យាយាមម្តងទៀត។",
+          );
+        case "network":
+          return tr(
+            "No connection. Please check your internet and try again.",
+            "គ្មានអ៊ីនធឺណិត។ សូមពិនិត្យការតភ្ជាប់ ហើយព្យាយាមម្តងទៀត។",
+          );
+        default:
+          return tr(
+            "Could not create the payment. Please try again.",
+            "មិនអាចបង្កើតការបង់ប្រាក់បានទេ។ សូមព្យាយាមម្តងទៀត។",
+          );
+      }
+    };
+
+    const overall = row?.overall_status || null;
+    const terminal =
+      overall === "completed" ||
+      overall === "failed" ||
+      overall === "expired" ||
+      overall === "cancelled" ||
+      overall === "needs_review";
+
+    const applyRow = (r) => {
+      setRow(r);
+      if (!r) return;
+      if (r.overall_status === "completed") {
+        try {
+          localStorage.removeItem(LS_KEY);
+        } catch {
+          /* private mode */
+        }
+        refreshMoney();
+      } else if (
+        r.overall_status === "failed" ||
+        r.overall_status === "expired" ||
+        r.overall_status === "cancelled" ||
+        r.overall_status === "needs_review"
+      ) {
+        try {
+          localStorage.removeItem(LS_KEY);
+        } catch {
+          /* private mode */
+        }
+      }
+    };
+
+    // Resume an unfinished payment after a refresh / app switch.
+    useEffect(() => {
+      let id = null;
+      try {
+        id = localStorage.getItem(LS_KEY);
+      } catch {
+        /* private mode */
+      }
+      if (!id) return;
+      let dead = false;
+      setResuming(true);
+      callGw("status", { payment_id: id })
+        .then((r) => {
+          if (dead || !r?.payment) return;
+          applyRow(r.payment);
+          setStep("pay");
+        })
+        .catch(() => {
+          try {
+            localStorage.removeItem(LS_KEY);
+          } catch {
+            /* private mode */
+          }
+        })
+        .finally(() => !dead && setResuming(false));
+      return () => {
+        dead = true;
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Poll the backend while the payment is open. The backend (not this page)
+    // checks ABA and credits the wallet; polling only refreshes what we show.
+    const payId = row?.id || null;
+    useEffect(() => {
+      if (step !== "pay" || !payId || terminal) return;
+      let stop = false;
+      let timer = null;
+      const tick = async () => {
+        clearTimeout(timer);
+        if (stop) return;
+        if (!document.hidden) {
+          try {
+            const r = await callGw("status", { payment_id: payId });
+            if (!stop && r?.payment) applyRow(r.payment);
+          } catch {
+            /* offline: keep trying, the payment continues on the server */
+          }
+        }
+        if (!stop) timer = setTimeout(tick, 4000);
+      };
+      timer = setTimeout(tick, 2500);
+      // Coming back from ABA Mobile: check right away.
+      const onVis = () => {
+        if (!document.hidden) tick();
+      };
+      document.addEventListener("visibilitychange", onVis);
+      window.addEventListener("focus", onVis);
+      return () => {
+        stop = true;
+        clearTimeout(timer);
+        document.removeEventListener("visibilitychange", onVis);
+        window.removeEventListener("focus", onVis);
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [step, payId, terminal]);
+
+    // Countdown tick
+    useEffect(() => {
+      if (step !== "pay" || terminal) return;
+      const t = setInterval(() => setNow(Date.now()), 1000);
+      return () => clearInterval(t);
+    }, [step, terminal]);
+
+    // Local QR fallback when ABA's own image is not available (e.g. after a refresh)
+    useEffect(() => {
+      if (qrImg || !row?.qr_string) return;
+      let dead = false;
+      import("qrcode")
+        .then(({ default: QR }) =>
+          QR.toDataURL(row.qr_string, { margin: 2, width: 480 }),
+        )
+        .then((u) => !dead && setQrImg(u))
+        .catch(() => {});
+      return () => {
+        dead = true;
+      };
+    }, [row?.qr_string, qrImg]);
+
+    const createPayment = async () => {
+      setErr("");
+      setBusy(true);
+      try {
+        const r = await callGw("create", { amount: amountNum, method });
+        try {
+          localStorage.setItem(LS_KEY, r.payment_id);
+        } catch {
+          /* private mode */
+        }
+        setQrImg(r.qr_image || null);
+        setLinks({ app_store: r.app_store, play_store: r.play_store });
+        setRow({
+          id: r.payment_id,
+          merchant_ref: r.merchant_ref,
+          amount: r.amount,
+          currency: r.currency,
+          method: r.method,
+          payment_status: "pending",
+          wallet_status: "waiting",
+          overall_status: "pending",
+          expires_at: r.expires_at,
+          qr_string: r.qr_string,
+          deeplink: r.deeplink,
+          environment: r.environment,
+        });
+        setStep("pay");
+      } catch (e) {
+        setErr(errText(e));
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    const secsLeft = row?.expires_at
+      ? Math.max(
+          0,
+          Math.floor((new Date(row.expires_at).getTime() - now) / 1000),
+        )
+      : null;
+    const mmss =
+      secsLeft == null
+        ? ""
+        : `${String(Math.floor(secsLeft / 60)).padStart(2, "0")}:${String(secsLeft % 60).padStart(2, "0")}`;
+
+    const isMobile =
+      typeof navigator !== "undefined" &&
+      /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+    const isIOS =
+      typeof navigator !== "undefined" &&
+      /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+    const storeLink = isIOS ? links.app_store : links.play_store;
+
+    const resetAll = () => {
+      try {
+        localStorage.removeItem(LS_KEY);
+      } catch {
+        /* private mode */
+      }
+      setRow(null);
+      setQrImg(null);
+      setErr("");
+      setStep("amount");
+    };
+
+    // ---- shared pieces ----
+    const SandboxBanner = () =>
+      row?.environment === "sandbox" ? (
+        <p className="rounded-2xl bg-amber-50 px-3.5 py-2.5 text-center text-xs font-semibold text-amber-700">
+          {tr(
+            "SANDBOX · test payment, no real money",
+            "SANDBOX · ការបង់សាកល្បង មិនមែនលុយពិតទេ",
+          )}
+        </p>
+      ) : null;
+
+    const ResultCard = ({ tone, Icon, title, text, children }) => {
+      const tones = {
+        ok: "bg-emerald-50 text-emerald-600",
+        bad: "bg-red-50 text-red-600",
+        warn: "bg-amber-50 text-amber-600",
+        wait: "bg-blue-50 text-blue-600",
+      };
+      return (
+        <Card className="p-6 text-center">
+          <span
+            className={`mx-auto mb-3 grid h-16 w-16 place-items-center rounded-full ${tones[tone]}`}
+          >
+            <Icon size={32} />
+          </span>
+          <h2 className="text-lg font-extrabold">{title}</h2>
+          {text && <p className="mt-1.5 text-sm text-slate-500">{text}</p>}
+          {children}
+        </Card>
+      );
+    };
+
+    return (
+      <>
+        <Top title={tr("Top Up", "បញ្ចូលទឹកប្រាក់")} back />
+        <div className="px-4 pt-4 pb-10 space-y-4">
+          {resuming && (
+            <Card className="p-6 text-center">
+              <SpinIcon
+                size={26}
+                className="mx-auto animate-spin text-blue-600"
+              />
+              <p className="mt-2 text-sm text-slate-500">
+                {tr(
+                  "Checking your payment…",
+                  "កំពុងពិនិត្យការបង់ប្រាក់របស់អ្នក…",
+                )}
+              </p>
+            </Card>
+          )}
+
+          {/* ---------- 1. Amount ---------- */}
+          {!resuming && step === "amount" && (
+            <>
+              <Card className="p-4 flex items-center justify-between">
+                <p className="text-[13px] font-medium text-slate-500">
+                  {tr("Current balance", "សមតុល្យបច្ចុប្បន្ន")}
+                </p>
+                <p className="text-lg font-extrabold">
+                  {walletReady ? moneyS(wallet.balance) : "…"}
+                </p>
+              </Card>
+              <Card className="p-4 space-y-3">
+                <label className="block text-[13px] font-semibold text-slate-600">
+                  {tr("Amount (USD)", "ចំនួនទឹកប្រាក់ (USD)")}
+                </label>
+                <div className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 transition-colors focus-within:border-slate-400">
+                  <span className="text-xl font-bold text-slate-400">$</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    autoComplete="off"
+                    value={amount}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(",", ".");
+                      if (/^\d{0,6}(\.\d{0,2})?$/.test(v)) setAmount(v);
+                    }}
+                    placeholder="0.00"
+                    className="w-full min-w-0 bg-transparent text-[22px] font-extrabold text-slate-900 placeholder:text-slate-300"
+                    style={{
+                      fontSize: 22,
+                      border: 0,
+                      outline: "none",
+                      boxShadow: "none",
+                      background: "transparent",
+                      padding: 0,
+                      WebkitAppearance: "none",
+                      appearance: "none",
+                    }}
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {SUGGEST.map((v) => (
+                    <button
+                      key={v}
+                      type="button"
+                      data-haptic
+                      onClick={() => setAmount(String(v))}
+                      className={`rounded-full px-4 py-2 text-sm font-bold transition-colors ${
+                        amountNum === v
+                          ? "bg-blue-600 text-white"
+                          : "bg-slate-100 text-slate-700 active:bg-slate-200"
+                      }`}
+                    >
+                      ${v}
+                    </button>
+                  ))}
+                </div>
+                {amount !== "" && !amountOk && (
+                  <p className="text-xs font-semibold text-red-600">
+                    {tr(
+                      "Enter a valid amount (up to 2 decimals).",
+                      "សូមបញ្ចូលចំនួនទឹកប្រាក់ត្រឹមត្រូវ (រហូតដល់ ២ខ្ទង់ក្រោយក្បៀស)។",
+                    )}
+                  </p>
+                )}
+              </Card>
+              <button
+                type="button"
+                data-haptic
+                disabled={!amountOk}
+                onClick={() => setStep("method")}
+                className="w-full rounded-2xl bg-blue-600 py-4 text-[15px] font-bold text-white disabled:opacity-40 active:bg-blue-700"
+              >
+                {tr("Continue", "បន្ត")}
+              </button>
+            </>
+          )}
+
+          {/* ---------- 2. Payment method ---------- */}
+          {!resuming && step === "method" && (
+            <>
+              <Card className="p-4 flex items-center justify-between">
+                <p className="text-[13px] font-medium text-slate-500">
+                  {tr("Top up amount", "ចំនួនបញ្ចូល")}
+                </p>
+                <p className="text-lg font-extrabold">{money(amountNum)}</p>
+              </Card>
+              {[
+                {
+                  key: "aba_pay",
+                  logo: PAY_LOGO_ABA,
+                  title: "ABA Pay",
+                  desc: tr(
+                    "Open ABA Mobile to confirm. A QR code is shown if the app does not open.",
+                    "បើក ABA Mobile ដើម្បីបញ្ជាក់។ មាន QR បង្ហាញ ប្រសិនបើកម្មវិធីមិនបើក។",
+                  ),
+                },
+                {
+                  key: "khqr",
+                  logo: PAY_LOGO_KHQR,
+                  title: "KHQR",
+                  desc: tr(
+                    "Scan the QR with ABA Mobile or any Cambodian bank app that supports KHQR.",
+                    "ស្កេន QR ជាមួយ ABA Mobile ឬកម្មវិធីធនាគារកម្ពុជាណាមួយដែលគាំទ្រ KHQR។",
+                  ),
+                },
+              ].map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  data-haptic
+                  onClick={() => setMethod(m.key)}
+                  className={`w-full text-left rounded-2xl border-2 bg-white p-4 flex items-center gap-3 transition-colors ${
+                    method === m.key ? "border-blue-600" : "border-transparent"
+                  } shadow-[0_2px_12px_-4px_rgba(15,40,90,.12)]`}
+                >
+                  <img
+                    src={m.logo}
+                    alt={m.title}
+                    width={48}
+                    height={48}
+                    draggable={false}
+                    className="h-12 w-12 shrink-0 rounded-xl object-cover"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[15px] font-bold">
+                      {m.title}
+                    </span>
+                    <span className="block text-xs text-slate-500">
+                      {m.desc}
+                    </span>
+                  </span>
+                  <span
+                    className={`h-5 w-5 shrink-0 rounded-full border-2 ${
+                      method === m.key
+                        ? "border-blue-600 bg-blue-600 shadow-[inset_0_0_0_3px_#fff]"
+                        : "border-slate-300"
+                    }`}
+                  />
+                </button>
+              ))}
+              {err && (
+                <p className="rounded-2xl bg-red-50 px-3.5 py-3 text-xs font-semibold text-red-700">
+                  {err}
+                </p>
+              )}
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setErr("");
+                    setStep("amount");
+                  }}
+                  className="rounded-2xl bg-slate-100 px-5 py-4 text-[15px] font-bold text-slate-700 disabled:opacity-40"
+                >
+                  {tr("Back", "ត្រឡប់")}
+                </button>
+                <button
+                  type="button"
+                  data-haptic
+                  disabled={busy}
+                  onClick={createPayment}
+                  className="flex-1 rounded-2xl bg-blue-600 py-4 text-[15px] font-bold text-white disabled:opacity-60 active:bg-blue-700"
+                >
+                  {busy ? (
+                    <span className="inline-flex items-center gap-2">
+                      <SpinIcon size={18} className="animate-spin" />
+                      {tr("Creating payment…", "កំពុងបង្កើតការបង់ប្រាក់…")}
+                    </span>
+                  ) : (
+                    tr(`Pay ${money(amountNum)}`, `បង់ ${money(amountNum)}`)
+                  )}
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* ---------- 3. Payment screen ---------- */}
+          {!resuming && step === "pay" && row && (
+            <>
+              <SandboxBanner />
+
+              {overall === "completed" && (
+                <ResultCard
+                  tone="ok"
+                  Icon={OkIcon}
+                  title={tr("Top up successful", "បញ្ចូលទឹកប្រាក់បានជោគជ័យ")}
+                  text={tr(
+                    `Your wallet has been credited with ${money(row.amount)}.`,
+                    `កាបូបរបស់អ្នកត្រូវបានបញ្ចូល ${money(row.amount)}។`,
+                  )}
+                >
+                  <div className="mt-4 divide-y divide-slate-100 rounded-2xl bg-slate-50 text-left text-sm">
+                    {[
+                      [tr("Amount", "ចំនួន"), money(row.amount)],
+                      [
+                        tr("Method", "វិធីបង់"),
+                        row.method === "khqr" ? "KHQR" : "ABA Pay",
+                      ],
+                      [tr("Reference", "លេខយោង"), row.merchant_ref],
+                      [
+                        tr("Date", "កាលបរិច្ឆេទ"),
+                        fmtDate(row.wallet_credited_at || row.created_at),
+                      ],
+                      [
+                        tr("New balance", "សមតុល្យថ្មី"),
+                        moneyS(wallet.balance),
+                      ],
+                    ].map(([k, v]) => (
+                      <div
+                        key={k}
+                        className="flex justify-between gap-3 px-4 py-2.5"
+                      >
+                        <span className="text-slate-500">{k}</span>
+                        <span className="break-all text-right font-semibold">
+                          {v}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    data-haptic
+                    onClick={() => nav(P("/wallet"), { replace: true })}
+                    className="mt-4 w-full rounded-2xl bg-blue-600 py-3.5 text-[15px] font-bold text-white active:bg-blue-700"
+                  >
+                    {tr("Back to wallet", "ត្រឡប់ទៅកាបូប")}
+                  </button>
+                </ResultCard>
+              )}
+
+              {overall === "failed" && (
+                <ResultCard
+                  tone="bad"
+                  Icon={BadIcon}
+                  title={tr("Payment failed", "ការបង់ប្រាក់បរាជ័យ")}
+                  text={tr(
+                    "Nothing was added to your wallet. You can try again.",
+                    "គ្មានប្រាក់ត្រូវបានបញ្ចូលទៅកាបូបទេ។ អ្នកអាចព្យាយាមម្តងទៀត។",
+                  )}
+                >
+                  <button
+                    type="button"
+                    onClick={resetAll}
+                    className="mt-4 w-full rounded-2xl bg-blue-600 py-3.5 text-[15px] font-bold text-white"
+                  >
+                    {tr("Try again", "ព្យាយាមម្តងទៀត")}
+                  </button>
+                </ResultCard>
+              )}
+
+              {overall === "expired" && (
+                <ResultCard
+                  tone="warn"
+                  Icon={ClockIcon}
+                  title={tr("Payment expired", "ការបង់ប្រាក់ផុតកំណត់")}
+                  text={tr(
+                    "This QR is no longer valid. If you already paid, your wallet will still be updated automatically or reviewed by our team. Please do not pay twice.",
+                    "QR នេះលែងមានសុពលភាព។ ប្រសិនបើអ្នកបានបង់រួចហើយ កាបូបរបស់អ្នកនឹងត្រូវបានធ្វើបច្ចុប្បន្នភាពដោយស្វ័យប្រវត្តិ ឬត្រូវបានបុគ្គលិកពិនិត្យ។ សូមកុំបង់ពីរដង។",
+                  )}
+                >
+                  <button
+                    type="button"
+                    onClick={resetAll}
+                    className="mt-4 w-full rounded-2xl bg-blue-600 py-3.5 text-[15px] font-bold text-white"
+                  >
+                    {tr("Create a new top up", "បង្កើតការបញ្ចូលថ្មី")}
+                  </button>
+                </ResultCard>
+              )}
+
+              {overall === "cancelled" && (
+                <ResultCard
+                  tone="warn"
+                  Icon={BadIcon}
+                  title={tr("Payment cancelled", "ការបង់ប្រាក់ត្រូវបានលុបចោល")}
+                >
+                  <button
+                    type="button"
+                    onClick={resetAll}
+                    className="mt-4 w-full rounded-2xl bg-blue-600 py-3.5 text-[15px] font-bold text-white"
+                  >
+                    {tr("Try again", "ព្យាយាមម្តងទៀត")}
+                  </button>
+                </ResultCard>
+              )}
+
+              {overall === "needs_review" && (
+                <ResultCard
+                  tone="warn"
+                  Icon={WarnIcon}
+                  title={tr("Payment needs review", "ការបង់ប្រាក់ត្រូវពិនិត្យ")}
+                  text={
+                    tr(
+                      "We received your payment but could not add it to your wallet automatically. Our team will review it. Please do not pay again. Reference: ",
+                      "យើងបានទទួលការបង់ប្រាក់របស់អ្នក ប៉ុន្តែមិនអាចបញ្ចូលទៅកាបូបដោយស្វ័យប្រវត្តិបានទេ។ ក្រុមការងាររបស់យើងនឹងពិនិត្យ។ សូមកុំបង់ម្តងទៀត។ លេខយោង៖ ",
+                    ) + row.merchant_ref
+                  }
+                >
+                  <button
+                    type="button"
+                    onClick={() => nav(P("/wallet"), { replace: true })}
+                    className="mt-4 w-full rounded-2xl bg-slate-100 py-3.5 text-[15px] font-bold text-slate-700"
+                  >
+                    {tr("Back to wallet", "ត្រឡប់ទៅកាបូប")}
+                  </button>
+                </ResultCard>
+              )}
+
+              {!terminal && row.payment_status === "verified" && (
+                <ResultCard
+                  tone="wait"
+                  Icon={SpinIcon}
+                  title={tr("Payment received", "បានទទួលការបង់ប្រាក់")}
+                  text={tr(
+                    "Adding it to your wallet… this only takes a moment.",
+                    "កំពុងបញ្ចូលទៅកាបូប… ចំណាយពេលតែបន្តិចប៉ុណ្ណោះ។",
+                  )}
+                />
+              )}
+
+              {!terminal && row.payment_status !== "verified" && (
+                <>
+                  <Card className="p-5 text-center">
+                    <p className="text-[13px] font-medium text-slate-500">
+                      {row.method === "khqr"
+                        ? tr(
+                            "Scan to pay with KHQR",
+                            "ស្កេនដើម្បីបង់ជាមួយ KHQR",
+                          )
+                        : tr("Pay with ABA", "បង់ជាមួយ ABA")}
+                    </p>
+                    <p className="mt-1 text-[30px] font-extrabold leading-none">
+                      {money(row.amount)}
+                    </p>
+
+                    {row.method === "aba_pay" && row.deeplink && (
+                      <>
+                        <a
+                          href={row.deeplink}
+                          data-haptic
+                          className="mt-4 block w-full rounded-2xl bg-blue-600 py-3.5 text-[15px] font-bold text-white active:bg-blue-700"
+                        >
+                          {tr("Open ABA Mobile", "បើក ABA Mobile")}
+                        </a>
+                        <p className="mt-2 text-xs text-slate-400">
+                          {tr(
+                            "If ABA Mobile does not open, scan the QR below or install the app.",
+                            "ប្រសិនបើ ABA Mobile មិនបើក សូមស្កេន QR ខាងក្រោម ឬដំឡើងកម្មវិធី។",
+                          )}
+                        </p>
+                        {storeLink && (
+                          <a
+                            href={storeLink}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-1 inline-block text-xs font-semibold text-blue-600 underline"
+                          >
+                            {tr("Get ABA Mobile", "ទាញយក ABA Mobile")}
+                          </a>
+                        )}
+                      </>
+                    )}
+
+                    <div className="mx-auto mt-4 grid w-full max-w-[260px] place-items-center rounded-2xl border border-slate-100 bg-white p-2">
+                      {qrImg ? (
+                        <img
+                          src={qrImg}
+                          alt="KHQR"
+                          className="h-auto w-full"
+                          draggable={false}
+                        />
+                      ) : (
+                        <div className="grid h-[240px] place-items-center">
+                          <SpinIcon
+                            size={26}
+                            className="animate-spin text-slate-300"
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {row.method === "khqr" && isMobile && (
+                      <p className="mt-3 text-xs text-slate-500">
+                        {tr(
+                          "On the same phone? Take a screenshot, then open your bank app and scan or upload it from your gallery.",
+                          "ប្រើទូរស័ព្ទតែមួយ? ថតអេក្រង់ ហើយបើកកម្មវិធីធនាគារ ស្កេន ឬជ្រើសរូបភាពពីវិចិត្រសាល។",
+                        )}
+                      </p>
+                    )}
+
+                    <div className="mt-4 flex items-center justify-center gap-2 text-sm">
+                      <ClockIcon size={16} className="text-slate-400" />
+                      <span className="font-semibold tabular-nums">
+                        {secsLeft === 0
+                          ? tr(
+                              "Checking final status…",
+                              "កំពុងពិនិត្យស្ថានភាពចុងក្រោយ…",
+                            )
+                          : tr(`Expires in ${mmss}`, `ផុតកំណត់ក្នុង ${mmss}`)}
+                      </span>
+                    </div>
+                    <p className="mt-1 break-all text-[11px] text-slate-400">
+                      {tr("Reference", "លេខយោង")} · {row.merchant_ref}
+                    </p>
+                  </Card>
+
+                  <p className="flex items-center justify-center gap-2 text-xs text-slate-500">
+                    <SpinIcon size={14} className="animate-spin" />
+                    {tr(
+                      "Waiting for payment. You can leave this page; your wallet updates automatically once the payment is confirmed.",
+                      "កំពុងរង់ចាំការបង់ប្រាក់។ អ្នកអាចចាកចេញពីទំព័រនេះ កាបូបនឹងធ្វើបច្ចុប្បន្នភាពដោយស្វ័យប្រវត្តិ នៅពេលបានបញ្ជាក់។",
+                    )}
+                  </p>
+                </>
+              )}
+            </>
           )}
         </div>
       </>
@@ -51607,6 +52422,16 @@ const CustomerApp = (() => {
               element={
                 <Gate k="wallet">
                   <WalletPage />
+                </Gate>
+              }
+            />
+            <Route
+              path="wallet/topup"
+              element={
+                <Gate k="wallet">
+                  <Gate k="wallet_online_topup">
+                    <WalletOnlineTopUpPage />
+                  </Gate>
                 </Gate>
               }
             />
@@ -80436,6 +81261,1425 @@ async function enrichPaymentRows(list) {
   });
 }
 
+// ============================================================
+// PAYMENT GATEWAY (Finance) — /payment-gateway and /payment-gateway/:id
+// ABA PayWay online top-ups: overview, transactions, settings, detail.
+// All numbers come from the database RPCs payment_gateway_stats / _list /
+// _detail (permission-checked in Postgres). Admins can only ask the backend to
+// RE-CHECK a payment with ABA; nobody can mark a bank payment as paid.
+// ============================================================
+const PG_PAY_STATUS = {
+  pending: ["Pending", "bg-amber-50 text-amber-700"],
+  verified: ["Verified", "bg-emerald-50 text-emerald-700"],
+  failed: ["Failed", "bg-red-50 text-red-600"],
+  expired: ["Expired", "bg-slate-100 text-slate-600"],
+  cancelled: ["Cancelled", "bg-slate-100 text-slate-600"],
+};
+const PG_WALLET_STATUS = {
+  waiting: ["Waiting", "bg-slate-100 text-slate-600"],
+  processing: ["Processing", "bg-blue-50 text-blue-700"],
+  credited: ["Credited", "bg-emerald-50 text-emerald-700"],
+  failed: ["Failed", "bg-red-50 text-red-600"],
+  retrying: ["Retrying", "bg-amber-50 text-amber-700"],
+  not_credited: ["Not Credited", "bg-slate-100 text-slate-600"],
+};
+const PG_OVERALL_STATUS = {
+  pending: ["Pending", "bg-amber-50 text-amber-700"],
+  processing: ["Processing", "bg-blue-50 text-blue-700"],
+  completed: ["Completed", "bg-emerald-50 text-emerald-700"],
+  needs_review: ["Needs Review", "bg-red-100 text-red-700"],
+  recovering: ["Recovering", "bg-violet-50 text-violet-700"],
+  failed: ["Failed", "bg-red-50 text-red-600"],
+  expired: ["Expired", "bg-slate-100 text-slate-600"],
+  cancelled: ["Cancelled", "bg-slate-100 text-slate-600"],
+};
+
+function PgBadge({ map, value }) {
+  const [label, tone] = map[value] || [
+    value || "—",
+    "bg-slate-100 text-slate-600",
+  ];
+  return (
+    <span
+      className={`inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-bold ${tone}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+const pgMethodLabel = (m) =>
+  m === "khqr" ? "KHQR" : m === "aba_pay" ? "ABA Pay" : m || "—";
+
+// Calls the payment-gateway Edge Function with the staff JWT.
+async function pgCall(route, body = {}) {
+  const { data: s } = await supabase.auth.getSession();
+  const { data, error } = await supabase.functions.invoke(
+    `payment-gateway/${route}`,
+    {
+      body,
+      headers: { Authorization: `Bearer ${s.session?.access_token}` },
+    },
+  );
+  if (error) {
+    let j = null;
+    try {
+      j = await error.context.json();
+    } catch {
+      /* non-JSON reply */
+    }
+    throw new Error(j?.error || error.message || "request_failed");
+  }
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
+const pgErrText = (e) => {
+  const c = String(e?.message || e || "");
+  if (c === "forbidden") return "You do not have permission for this action.";
+  if (c === "gateway_not_configured")
+    return "ABA PayWay is not configured yet (Merchant ID / API Key missing).";
+  if (c === "production_locked") return "Production mode is locked.";
+  if (c === "environment_mismatch")
+    return "This payment belongs to a different environment than the gateway is set to.";
+  if (c === "not_found") return "Payment not found.";
+  if (/Permission denied/i.test(c))
+    return "You do not have permission to view this.";
+  return c || "Something went wrong.";
+};
+
+// DateRangeFilter value -> ISO timestamps (local midnight start, end exclusive)
+function pgIsoRange(range) {
+  const { from, to } = resolveDateRange(range);
+  const f = from
+    ? new Date(`${from}T00:00:00`)
+    : new Date("2020-01-01T00:00:00");
+  const t = to ? new Date(`${to}T00:00:00`) : new Date();
+  t.setDate(t.getDate() + 1);
+  return { from: f.toISOString(), to: t.toISOString() };
+}
+
+const pgDateTime = (v) => (v ? `${cdDate(v)} ${cdTime(v)}` : "—");
+
+function PaymentGatewayPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { user } = useAuth();
+  const canTx = hasPermission(user, "payment_gateway.transactions");
+  const initialTab = new URLSearchParams(location.search).get("tab");
+  const [tab, setTab] = useState(
+    initialTab === "transactions" && canTx
+      ? "transactions"
+      : initialTab === "settings"
+        ? "settings"
+        : "overview",
+  );
+  const [env, setEnv] = useState("sandbox");
+  const [dateRange, setDateRange] = useState({
+    preset: "today",
+    from: "",
+    to: "",
+  });
+  const [reload, setReload] = useState(0);
+
+  // overview
+  const [stats, setStats] = useState(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [statsError, setStatsError] = useState("");
+  const [attention, setAttention] = useState([]);
+  const [hoverBar, setHoverBar] = useState(null);
+
+  // transactions
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
+  const [statusF, setStatusF] = useState("");
+  const [methodF, setMethodF] = useState("");
+  const [bankF, setBankF] = useState("");
+  const [banks, setBanks] = useState([]);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(15);
+  const [exporting, setExporting] = useState(false);
+
+  // settings
+  const [cfg, setCfg] = useState(null);
+  const [cfgLoading, setCfgLoading] = useState(false);
+  const [cfgError, setCfgError] = useState("");
+
+  const range = useMemo(() => pgIsoRange(dateRange), [dateRange]);
+
+  // Default the environment view to whatever the gateway is currently set to.
+  useEffect(() => {
+    let alive = true;
+    pgCall("admin-settings")
+      .then((c) => {
+        if (!alive) return;
+        setCfg(c);
+        if (c?.environment) setEnv(c.environment);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setSearch(searchInput.trim());
+      setPage(0);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  useEffect(() => {
+    if (tab !== "overview") return;
+    let alive = true;
+    setStatsLoading(true);
+    (async () => {
+      const { data, error: e } = await supabase.rpc("payment_gateway_stats", {
+        p_from: range.from,
+        p_to: range.to,
+        p_env: env,
+      });
+      if (!alive) return;
+      if (e) {
+        setStatsError(pgErrText(e));
+        setStats(null);
+      } else {
+        setStatsError("");
+        setStats(data);
+      }
+      if (canTx) {
+        const { data: l } = await supabase.rpc("payment_gateway_list", {
+          p_from: range.from,
+          p_to: range.to,
+          p_env: env,
+          p_status: "needs_review",
+          p_limit: 5,
+          p_offset: 0,
+        });
+        if (alive) setAttention(l?.rows || []);
+      }
+      if (alive) setStatsLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [tab, range, env, reload, canTx]);
+
+  useEffect(() => {
+    if (tab !== "transactions" || !canTx) return;
+    let alive = true;
+    setLoading(true);
+    (async () => {
+      const { data, error: e } = await supabase.rpc("payment_gateway_list", {
+        p_from: range.from,
+        p_to: range.to,
+        p_env: env,
+        p_status: statusF || null,
+        p_method: methodF || null,
+        p_search: search || null,
+        p_limit: pageSize,
+        p_offset: page * pageSize,
+        p_bank: bankF || null,
+      });
+      if (!alive) return;
+      if (e) {
+        setError(pgErrText(e));
+        setRows([]);
+        setTotal(0);
+      } else {
+        setError("");
+        setRows(data?.rows || []);
+        setTotal(Number(data?.total) || 0);
+      }
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [
+    tab,
+    range,
+    env,
+    statusF,
+    methodF,
+    bankF,
+    search,
+    page,
+    pageSize,
+    reload,
+    canTx,
+  ]);
+
+  useEffect(() => {
+    if (tab !== "transactions" || !canTx) return;
+    let alive = true;
+    supabase.rpc("payment_gateway_banks", { p_env: env }).then(({ data }) => {
+      if (alive && Array.isArray(data)) setBanks(data);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [tab, env, canTx, reload]);
+
+  useEffect(() => {
+    if (tab !== "settings") return;
+    let alive = true;
+    setCfgLoading(true);
+    pgCall("admin-settings")
+      .then((c) => {
+        if (!alive) return;
+        setCfg(c);
+        setCfgError("");
+      })
+      .catch((e) => alive && setCfgError(pgErrText(e)))
+      .finally(() => alive && setCfgLoading(false));
+    return () => {
+      alive = false;
+    };
+  }, [tab, reload]);
+
+  const exportCsv = async () => {
+    setExporting(true);
+    try {
+      const all = [];
+      for (let off = 0; off < 2000; off += 100) {
+        const { data, error: e } = await supabase.rpc("payment_gateway_list", {
+          p_from: range.from,
+          p_to: range.to,
+          p_env: env,
+          p_status: statusF || null,
+          p_method: methodF || null,
+          p_search: search || null,
+          p_limit: 100,
+          p_offset: off,
+          p_bank: bankF || null,
+        });
+        if (e) throw e;
+        all.push(...(data?.rows || []));
+        if ((data?.rows || []).length < 100) break;
+      }
+      const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+      const head = [
+        "Transaction ID",
+        "Customer ID",
+        "Customer Name",
+        "Gateway",
+        "Method",
+        "Payer Bank",
+        "Payment Type",
+        "Bank Reference",
+        "Amount",
+        "Paid Amount",
+        "Currency",
+        "Payment Status",
+        "Wallet Status",
+        "Overall Status",
+        "Environment",
+        "Created",
+        "Paid",
+      ];
+      const lines = all.map((r) =>
+        [
+          r.merchant_ref,
+          r.customer_code,
+          r.customer_name,
+          "ABA PayWay",
+          pgMethodLabel(r.method),
+          r.bank_name,
+          r.payment_type,
+          r.bank_ref,
+          r.amount,
+          r.paid_amount,
+          r.currency,
+          r.payment_status,
+          r.wallet_status,
+          r.overall_status,
+          r.environment,
+          r.created_at,
+          r.paid_at,
+        ]
+          .map(esc)
+          .join(","),
+      );
+      const blob = new Blob(
+        ["﻿" + [head.map(esc).join(","), ...lines].join("\n")],
+        {
+          type: "text/csv;charset=utf-8",
+        },
+      );
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `payment-gateway-${env}-${localDayKey(new Date())}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      emitCBToast("ok", "Export ready", `${all.length} transactions exported.`);
+    } catch (e) {
+      emitCBToast("err", "Export failed", pgErrText(e));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const stat = (icon, tone, label, value, hint) => {
+    const Ic = Icons[icon] || Icons.Circle;
+    return (
+      <div className="flex items-center gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div
+          className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-white ${tone}`}
+        >
+          <Ic size={20} />
+        </div>
+        <div className="min-w-0">
+          <div className="text-xs font-semibold text-slate-500">{label}</div>
+          <div className="text-xl font-extrabold text-slate-900">{value}</div>
+          {hint && <div className="text-[11px] text-slate-400">{hint}</div>}
+        </div>
+      </div>
+    );
+  };
+  const sk = <Skeleton className="h-6 w-20 rounded-md" />;
+  const S = stats;
+  const sv = (v, fmt = (x) => x) => (statsLoading ? sk : S ? fmt(v) : "—");
+
+  const cols = [
+    {
+      key: "ref",
+      label: "Transaction ID",
+      render: (r) => (
+        <span className="font-mono text-[12px] font-semibold text-slate-800">
+          {r.merchant_ref}
+        </span>
+      ),
+    },
+    {
+      key: "cid",
+      label: "Customer ID",
+      render: (r) => (
+        <span className="font-semibold text-blue-700">
+          {r.customer_code ? fmtCustomerId(r.customer_code) : "—"}
+        </span>
+      ),
+    },
+    {
+      key: "cname",
+      label: "Customer Name",
+      render: (r) => (
+        <span className="text-slate-800">{r.customer_name || "—"}</span>
+      ),
+    },
+    {
+      key: "gw",
+      label: "Gateway",
+      render: () => <span className="text-slate-600">ABA PayWay</span>,
+    },
+    {
+      key: "method",
+      label: "Method",
+      render: (r) => (
+        <span className="font-semibold">{pgMethodLabel(r.method)}</span>
+      ),
+    },
+    {
+      key: "bankname",
+      label: "Bank Name",
+      render: (r) =>
+        r.bank_name ? (
+          <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-700">
+            {r.bank_name}
+          </span>
+        ) : (
+          <span className="text-slate-400">—</span>
+        ),
+    },
+    {
+      key: "bank",
+      label: "Bank Ref",
+      render: (r) => (
+        <span className="font-mono text-[12px] text-slate-500">
+          {r.bank_ref || "—"}
+        </span>
+      ),
+    },
+    {
+      key: "amount",
+      label: "Amount",
+      numeric: true,
+      render: (r) => <span className="font-bold">{money(r.amount)}</span>,
+    },
+    {
+      key: "cur",
+      label: "Currency",
+      render: (r) => <span className="text-slate-500">{r.currency}</span>,
+    },
+    {
+      key: "ps",
+      label: "Payment Status",
+      render: (r) => <PgBadge map={PG_PAY_STATUS} value={r.payment_status} />,
+    },
+    {
+      key: "ws",
+      label: "Wallet Status",
+      render: (r) => <PgBadge map={PG_WALLET_STATUS} value={r.wallet_status} />,
+    },
+    {
+      key: "os",
+      label: "Overall",
+      render: (r) => (
+        <PgBadge map={PG_OVERALL_STATUS} value={r.overall_status} />
+      ),
+    },
+    {
+      key: "created",
+      label: "Created",
+      render: (r) => (
+        <>
+          <div className="font-semibold text-slate-800">
+            {cdDate(r.created_at)}
+          </div>
+          <div className="text-[11px] text-slate-400">
+            {cdTime(r.created_at)}
+          </div>
+        </>
+      ),
+    },
+    {
+      key: "paid",
+      label: "Paid",
+      render: (r) => (
+        <span className="text-slate-500">
+          {r.paid_at ? pgDateTime(r.paid_at) : "—"}
+        </span>
+      ),
+    },
+  ];
+
+  // Daily bar chart (plain SVG, hover tooltip)
+  const daily = S?.daily || [];
+  const maxBar = Math.max(1, ...daily.map((d) => Number(d.received) || 0));
+  const chart = (
+    <div className="relative">
+      <svg
+        viewBox="0 0 600 190"
+        className="h-48 w-full"
+        role="img"
+        aria-label="Payments received per day"
+      >
+        {[0, 0.5, 1].map((g) => (
+          <g key={g}>
+            <line
+              x1="44"
+              x2="596"
+              y1={160 - g * 140}
+              y2={160 - g * 140}
+              stroke="#e2e8f0"
+              strokeWidth="1"
+            />
+            <text
+              x="40"
+              y={164 - g * 140}
+              textAnchor="end"
+              fontSize="10"
+              fill="#94a3b8"
+            >
+              {money(maxBar * g).replace(".00", "")}
+            </text>
+          </g>
+        ))}
+        {daily.map((d, i) => {
+          const n = daily.length;
+          const slot = 552 / Math.max(n, 1);
+          const w = Math.min(36, slot * 0.6);
+          const h = ((Number(d.received) || 0) / maxBar) * 140;
+          const x = 48 + i * slot + (slot - w) / 2;
+          return (
+            <g
+              key={d.day}
+              onMouseEnter={() => setHoverBar(d)}
+              onMouseLeave={() => setHoverBar(null)}
+            >
+              <rect
+                x={48 + i * slot}
+                y="20"
+                width={slot}
+                height="140"
+                fill="transparent"
+              />
+              <rect
+                x={x}
+                y={160 - h}
+                width={w}
+                height={Math.max(h, 1)}
+                rx="4"
+                fill="#2563eb"
+                opacity={hoverBar && hoverBar.day !== d.day ? 0.45 : 1}
+              />
+              {(n <= 14 || i % Math.ceil(n / 12) === 0) && (
+                <text
+                  x={x + w / 2}
+                  y="178"
+                  textAnchor="middle"
+                  fontSize="10"
+                  fill="#94a3b8"
+                >
+                  {String(d.day).slice(5)}
+                </text>
+              )}
+            </g>
+          );
+        })}
+      </svg>
+      {hoverBar && (
+        <div className="pointer-events-none absolute right-2 top-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs shadow-lg">
+          <div className="font-bold text-slate-800">{hoverBar.day}</div>
+          <div className="text-slate-600">
+            Received: <b>{money(hoverBar.received)}</b>
+          </div>
+          <div className="text-slate-600">
+            Requests: <b>{hoverBar.n}</b>
+          </div>
+        </div>
+      )}
+      {!statsLoading && daily.length === 0 && (
+        <div className="absolute inset-0 grid place-items-center text-sm text-slate-400">
+          No payments in this period
+        </div>
+      )}
+    </div>
+  );
+
+  const tabBtn = (key, label, icon) => {
+    const Ic = Icons[icon] || Icons.Circle;
+    return (
+      <button
+        key={key}
+        type="button"
+        onClick={() => setTab(key)}
+        className={`flex h-10 items-center gap-2 rounded-xl px-4 text-sm font-bold transition-colors ${
+          tab === key
+            ? "bg-blue-600 text-white"
+            : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+        }`}
+      >
+        <Ic size={15} /> {label}
+      </button>
+    );
+  };
+
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const filterBar = (
+    <div className="mb-4 flex flex-wrap items-center gap-2">
+      {tab === "transactions" && (
+        <div className="relative min-w-[220px] flex-1 sm:max-w-xs">
+          <Icons.Search
+            size={15}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+          />
+          <input
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Transaction ID, Customer ID, name, bank…"
+            className="h-10 w-full rounded-xl border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+          />
+        </div>
+      )}
+      <DateRangeFilter
+        label="Date"
+        value={dateRange}
+        onChange={(v) => {
+          setDateRange(v);
+          setPage(0);
+        }}
+      />
+      {tab === "transactions" && (
+        <>
+          <select
+            value={statusF}
+            onChange={(e) => {
+              setStatusF(e.target.value);
+              setPage(0);
+            }}
+            className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm"
+          >
+            <option value="">All statuses</option>
+            {Object.entries(PG_OVERALL_STATUS).map(([k, [l]]) => (
+              <option key={k} value={k}>
+                {l}
+              </option>
+            ))}
+          </select>
+          <select
+            value={methodF}
+            onChange={(e) => {
+              setMethodF(e.target.value);
+              setPage(0);
+            }}
+            className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm"
+          >
+            <option value="">All methods</option>
+            <option value="aba_pay">ABA Pay</option>
+            <option value="khqr">KHQR</option>
+          </select>
+          <select
+            value={bankF}
+            onChange={(e) => {
+              setBankF(e.target.value);
+              setPage(0);
+            }}
+            className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm"
+            title="Payer bank (as reported by ABA)"
+          >
+            <option value="">All banks</option>
+            {banks.map((b) => (
+              <option key={b} value={b}>
+                {b}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
+      <select
+        value={env}
+        onChange={(e) => {
+          setEnv(e.target.value);
+          setPage(0);
+        }}
+        className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm"
+        title="Which environment's records to show (does not change how payments are processed)"
+      >
+        <option value="sandbox">Sandbox data</option>
+        <option value="production">Production data</option>
+      </select>
+      <div className="ml-auto flex items-center gap-2">
+        {tab === "transactions" && canTx && (
+          <button
+            type="button"
+            onClick={exportCsv}
+            disabled={exporting || total === 0}
+            className="flex h-10 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+          >
+            <Icons.Download size={15} />{" "}
+            {exporting ? "Exporting…" : "Export CSV"}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => setReload((n) => n + 1)}
+          title="Refresh"
+          className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+        >
+          <Icons.RefreshCw
+            size={15}
+            className={loading || statsLoading ? "animate-spin" : ""}
+          />
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="w-full min-w-0">
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <h1 className="cb-page-title text-2xl font-extrabold text-slate-900">
+          Payment Gateway
+        </h1>
+        {cfg && (
+          <span
+            className={`rounded-full px-3 py-1 text-[11px] font-extrabold uppercase tracking-wide ${cfg.environment === "production" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}
+          >
+            {cfg.environment}
+          </span>
+        )}
+        {cfg && !cfg.configured && (
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-bold text-slate-600">
+            Not configured
+          </span>
+        )}
+      </div>
+
+      <div className="mb-5 flex flex-wrap gap-2">
+        {tabBtn("overview", "Overview", "LayoutDashboard")}
+        {canTx && tabBtn("transactions", "All Transactions", "List")}
+        {tabBtn("settings", "Gateway Settings", "Settings")}
+      </div>
+
+      {tab !== "settings" && filterBar}
+
+      {/* ---------------- Overview ---------------- */}
+      {tab === "overview" && (
+        <>
+          {statsError && (
+            <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
+              {statsError}
+            </div>
+          )}
+          {!statsLoading && S && Number(S.n_review) > 0 && (
+            <div className="mb-5 rounded-2xl border border-red-200 bg-red-50/70 p-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <Icons.TriangleAlert size={18} className="text-red-600" />
+                <div className="min-w-0 flex-1 text-sm font-bold text-red-700">
+                  {S.n_review} transaction{Number(S.n_review) > 1 ? "s" : ""}{" "}
+                  need review · {money(S.uncredited)} paid but not in a customer
+                  wallet
+                </div>
+                {canTx && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStatusF("needs_review");
+                      setTab("transactions");
+                    }}
+                    className="h-8 rounded-lg bg-red-600 px-3 text-xs font-bold text-white hover:bg-red-700"
+                  >
+                    Review now
+                  </button>
+                )}
+              </div>
+              {attention.length > 0 && (
+                <div className="mt-3 divide-y divide-red-100">
+                  {attention.map((r) => (
+                    <button
+                      key={r.id}
+                      type="button"
+                      onClick={() => navigate(`/payment-gateway/${r.id}`)}
+                      className="flex w-full items-center gap-3 py-2 text-left text-sm hover:bg-red-100/50"
+                    >
+                      <span className="font-mono text-[12px] font-semibold">
+                        {r.merchant_ref}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-slate-700">
+                        {r.customer_name} · {r.error_code || "needs review"}
+                      </span>
+                      <b>{money(r.paid_amount ?? r.amount)}</b>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {stat(
+              "ArrowDownToLine",
+              "bg-blue-500",
+              "Total Payment Received",
+              sv(S?.received, money),
+              "Verified with ABA",
+            )}
+            {stat(
+              "Wallet",
+              "bg-emerald-500",
+              "Total Wallet Credited",
+              sv(S?.credited, money),
+            )}
+            {stat(
+              "TriangleAlert",
+              S && Number(S.uncredited) > 0 ? "bg-red-500" : "bg-slate-400",
+              "Uncredited Amount",
+              sv(S?.uncredited, money),
+              "Paid but not in wallet",
+            )}
+            {stat(
+              "CircleCheck",
+              "bg-emerald-500",
+              "Successful",
+              sv(S?.n_completed),
+            )}
+            {stat("Clock", "bg-amber-500", "Pending", sv(S?.n_pending))}
+            {stat("CircleX", "bg-red-500", "Failed", sv(S?.n_failed))}
+            {stat("Timer", "bg-slate-500", "Expired", sv(S?.n_expired))}
+            {stat(
+              "ShieldAlert",
+              S && Number(S.n_review) > 0 ? "bg-red-600" : "bg-slate-400",
+              "Needs Review",
+              sv(S?.n_review),
+            )}
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm lg:col-span-2">
+              <h2 className="mb-3 text-sm font-extrabold text-slate-800">
+                Payments received per day
+              </h2>
+              {statsLoading ? (
+                <Skeleton className="h-48 w-full rounded-xl" />
+              ) : (
+                chart
+              )}
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="mb-3 text-sm font-extrabold text-slate-800">
+                By payment method
+              </h2>
+              {[
+                ["ABA Pay", S?.aba_pay_amount, S?.aba_pay_count, "bg-blue-600"],
+                ["KHQR", S?.khqr_amount, S?.khqr_count, "bg-emerald-500"],
+              ].map(([label, amt, cnt, color]) => {
+                const tot =
+                  (Number(S?.aba_pay_amount) || 0) +
+                  (Number(S?.khqr_amount) || 0);
+                const pct =
+                  tot > 0 ? Math.round(((Number(amt) || 0) / tot) * 100) : 0;
+                return (
+                  <div key={label} className="mb-4">
+                    <div className="mb-1 flex items-baseline justify-between text-sm">
+                      <span className="font-semibold text-slate-700">
+                        {label}
+                      </span>
+                      <span className="font-bold text-slate-900">
+                        {statsLoading ? "…" : money(amt)}{" "}
+                        <span className="text-xs font-normal text-slate-400">
+                          · {cnt ?? 0} paid
+                        </span>
+                      </span>
+                    </div>
+                    <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className={`h-full rounded-full ${color}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+              <p className="mt-2 text-[11px] text-slate-400">
+                Counts include only payments ABA confirmed. Refunds are not part
+                of this module yet.
+              </p>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* ---------------- Transactions ---------------- */}
+      {tab === "transactions" && canTx && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="overflow-hidden rounded-xl border border-slate-200">
+            <DataTable
+              caption="Payment gateway transactions"
+              columns={cols}
+              rows={rows}
+              rowKey={(r) => r.id}
+              rowClassName={(r) =>
+                r.overall_status === "needs_review" ? "bg-red-50/60" : ""
+              }
+              loading={loading && rows.length === 0}
+              skeletonRows={6}
+              minWidth={1280}
+              onRowClick={(r) => navigate(`/payment-gateway/${r.id}`)}
+              error={error ? { title: error } : null}
+              onRetry={() => setReload((n) => n + 1)}
+              emptyTitle="No transactions found."
+              emptyHint="Try another date range, status or search."
+            />
+            <PaginationBar
+              page={page}
+              pageCount={pageCount}
+              total={total}
+              shown={rows.length}
+              onPage={setPage}
+              pageSize={pageSize}
+              onPageSize={(n) => {
+                setPageSize(n);
+                setPage(0);
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- Settings ---------------- */}
+      {tab === "settings" && (
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          {cfgError && (
+            <p className="mb-4 rounded-xl bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
+              {cfgError}
+            </p>
+          )}
+          {cfgLoading && !cfg ? (
+            <Skeleton className="h-64 w-full rounded-xl" />
+          ) : cfg ? (
+            <>
+              <div className="divide-y divide-slate-100 text-sm">
+                {[
+                  ["Payment provider", cfg.provider],
+                  ["Current environment", cfg.environment],
+                  [
+                    "Gateway credentials",
+                    cfg.configured
+                      ? "Configured"
+                      : `Not configured (${cfg.not_ready_reason || "missing secrets"})`,
+                  ],
+                  ["Merchant ID", cfg.merchant_id_masked || "—"],
+                  [
+                    "Supported payment methods",
+                    cfg.methods.map(pgMethodLabel).join(", "),
+                  ],
+                  [
+                    "ABA Mobile deep link",
+                    cfg.deeplink_available
+                      ? "Available (returned by ABA with each QR)"
+                      : "Not available until configured",
+                  ],
+                  [
+                    "KHQR",
+                    cfg.khqr_available
+                      ? "Available"
+                      : "Not available until configured",
+                  ],
+                  [
+                    "Amount limits",
+                    cfg.min_amount != null
+                      ? cfg.max_amount == null
+                        ? `From ${money(cfg.min_amount)} · no maximum`
+                        : `${money(cfg.min_amount)} – ${money(cfg.max_amount)}`
+                      : "—",
+                  ],
+                  [
+                    "QR lifetime",
+                    cfg.qr_lifetime_min != null
+                      ? `${cfg.qr_lifetime_min} minutes`
+                      : "—",
+                  ],
+                  [
+                    "Last successful verification",
+                    cfg.last_verified_at
+                      ? pgDateTime(cfg.last_verified_at)
+                      : "None yet",
+                  ],
+                  [
+                    "Last callback received",
+                    cfg.last_callback_at
+                      ? pgDateTime(cfg.last_callback_at)
+                      : "None yet",
+                  ],
+                  [
+                    "Open pending / needs review",
+                    `${cfg.pending_count} / ${cfg.needs_review_count}`,
+                  ],
+                ].map(([k, v]) => (
+                  <div
+                    key={k}
+                    className="flex flex-wrap justify-between gap-3 py-3"
+                  >
+                    <span className="text-slate-500">{k}</span>
+                    <span className="font-semibold text-slate-900">{v}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm">
+                <div className="mb-1 font-bold text-slate-700">
+                  Callback URL to give ABA
+                </div>
+                <div className="flex items-center gap-2">
+                  <code className="min-w-0 flex-1 break-all text-[12px] text-slate-700">
+                    {cfg.callback_url}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard?.writeText(cfg.callback_url);
+                      emitCBToast("ok", "Copied", "Callback URL copied.");
+                    }}
+                    className="h-8 rounded-lg border border-slate-200 bg-white px-3 text-xs font-bold text-slate-700 hover:bg-slate-100"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+              <p className="mt-4 text-xs text-slate-400">
+                API keys are stored only as server secrets and are never shown
+                here. Switching to Production is not possible from this screen:
+                it needs business approval, ABA approval, separate credentials
+                and a security review.
+              </p>
+            </>
+          ) : null}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// Detail page: /payment-gateway/:id
+// ------------------------------------------------------------
+function PaymentGatewayDetailPage() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const canRecheck = hasPermission(user, "payment_gateway.reconcile");
+  const canLogs = hasPermission(user, "payment_gateway.logs");
+  const [d, setD] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    (async () => {
+      const { data, error: e } = await supabase.rpc("payment_gateway_detail", {
+        p_id: id,
+      });
+      if (!alive) return;
+      if (e) setError(pgErrText(e));
+      else if (!data) setError("Payment not found.");
+      else {
+        setError("");
+        setD(data);
+      }
+      setLoading(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [id, reload]);
+
+  const recheck = async () => {
+    setBusy(true);
+    try {
+      const r = await pgCall("admin-recheck", { payment_id: id });
+      const msg = {
+        credited: [
+          "success",
+          "Payment confirmed",
+          "ABA confirmed the payment and the wallet is credited.",
+        ],
+        pending: [
+          "ok",
+          "Still pending",
+          "ABA does not show this payment as approved yet.",
+        ],
+        expired: [
+          "ok",
+          "Expired",
+          "The request expired and ABA shows no approved payment.",
+        ],
+        needs_review: [
+          "ok",
+          "Needs review",
+          "ABA confirmed the payment but it could not be credited automatically.",
+        ],
+        throttled: [
+          "ok",
+          "Too soon",
+          "This payment was just checked. Try again in a moment.",
+        ],
+      }[r.result] || ["success", "Checked", `Result: ${r.result}`];
+      emitCBToast(msg[0], msg[1], msg[2]);
+      setReload((n) => n + 1);
+    } catch (e) {
+      emitCBToast("err", "Recheck failed", pgErrText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (loading && !d) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-10 w-72 rounded-xl" />
+        <Skeleton className="h-64 w-full rounded-2xl" />
+      </div>
+    );
+  }
+  if (error && !d) {
+    return (
+      <div className="w-full">
+        <Link
+          to="/payment-gateway?tab=transactions"
+          className="text-sm font-bold text-blue-700"
+        >
+          ← Payment Gateway
+        </Link>
+        <p className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
+          {error}
+        </p>
+      </div>
+    );
+  }
+  const p = d.payment;
+  const c = d.customer;
+  const w = d.wallet_tx;
+  const mismatch =
+    p.paid_amount != null && Number(p.paid_amount) !== Number(p.amount);
+
+  // Timeline built only from facts we actually recorded.
+  const events = [
+    {
+      at: p.created_at,
+      tone: "bg-slate-400",
+      title: "Payment request created",
+      text: `${pgMethodLabel(p.method)} · ${money(p.amount)} · ${p.environment}`,
+    },
+  ];
+  (d.webhooks || []).forEach((l) =>
+    events.push({
+      at: l.received_at,
+      tone: "bg-blue-500",
+      title: "Callback received from ABA",
+      text: l.result ? `Result: ${l.result}` : "Logged",
+    }),
+  );
+  if (p.verified_at)
+    events.push({
+      at: p.verified_at,
+      tone: "bg-emerald-500",
+      title: "Payment verified with ABA",
+      text: p.bank_ref
+        ? `Bank ref ${p.bank_ref}`
+        : mismatch
+          ? `ABA reported ${money(p.paid_amount)} ${p.paid_currency || ""}`
+          : "Approved",
+    });
+  if (p.wallet_credited_at)
+    events.push({
+      at: p.wallet_credited_at,
+      tone: "bg-emerald-600",
+      title: "Wallet credited",
+      text: `${money(p.amount)} added to the customer's wallet`,
+    });
+  if (p.wallet_status === "failed" || p.error_code)
+    events.push({
+      at: p.updated_at,
+      tone: "bg-red-500",
+      title: "Problem recorded",
+      text: `${p.error_code || "error"}${p.error_message ? `: ${p.error_message}` : ""}`,
+    });
+  (d.audit || []).forEach((a) =>
+    events.push({
+      at: a.created_at,
+      tone: "bg-violet-500",
+      title: `Admin action: ${a.action}`,
+      text: `${a.actor_name || "Admin"}${a.detail?.result ? ` · result ${a.detail.result}` : ""}`,
+    }),
+  );
+  events.sort((a, b) => new Date(a.at) - new Date(b.at));
+
+  const row = (k, v) => (
+    <div
+      key={k}
+      className="flex flex-wrap justify-between gap-3 py-2.5 text-sm"
+    >
+      <span className="text-slate-500">{k}</span>
+      <span className="break-all text-right font-semibold text-slate-900">
+        {v}
+      </span>
+    </div>
+  );
+  const card = (title, children) => (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h2 className="mb-2 text-sm font-extrabold text-slate-800">{title}</h2>
+      <div className="divide-y divide-slate-100">{children}</div>
+    </div>
+  );
+
+  return (
+    <div className="w-full min-w-0">
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={() => navigate(-1)}
+          className="grid h-9 w-9 place-items-center rounded-xl border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+          aria-label="Back"
+        >
+          <Icons.ArrowLeft size={16} />
+        </button>
+        <h1 className="cb-page-title font-mono text-xl font-extrabold text-slate-900">
+          {p.merchant_ref}
+        </h1>
+        <PgBadge map={PG_OVERALL_STATUS} value={p.overall_status} />
+        <span
+          className={`rounded-full px-3 py-1 text-[11px] font-extrabold uppercase ${p.environment === "production" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}`}
+        >
+          {p.environment}
+        </span>
+        <div className="ml-auto flex flex-wrap gap-2">
+          {canRecheck && (
+            <button
+              type="button"
+              onClick={recheck}
+              disabled={busy}
+              className="flex h-10 items-center gap-1.5 rounded-xl bg-blue-600 px-4 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-60"
+            >
+              <Icons.RefreshCw
+                size={15}
+                className={busy ? "animate-spin" : ""}
+              />{" "}
+              {busy ? "Checking…" : "Recheck Payment Status"}
+            </button>
+          )}
+          {w?.id && (
+            <Link
+              to={`/wallet-top-up/${encodeURIComponent(w.id)}`}
+              className="flex h-10 items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700 hover:bg-slate-50"
+            >
+              <Icons.Wallet size={15} /> Wallet transaction
+            </Link>
+          )}
+        </div>
+      </div>
+
+      {p.overall_status === "needs_review" && (
+        <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">
+          {p.payment_status === "verified"
+            ? `ABA confirmed ${money(p.paid_amount ?? p.amount)}, but it is not in the customer's wallet (${p.error_code || "needs review"}). Use Recheck once the cause is fixed; the system never credits the same payment twice.`
+            : "This payment needs review."}
+        </div>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        {card("Payment Information", [
+          row(
+            "Transaction ID",
+            <span className="font-mono">{p.merchant_ref}</span>,
+          ),
+          row("Payment provider", "ABA PayWay"),
+          row("Payment method", pgMethodLabel(p.method)),
+          row("Payer bank", p.bank_name || "—"),
+          row("Payer account", p.payer_account || "—"),
+          row("Payment type (ABA)", p.payment_type || "—"),
+          row("Bank reference", p.bank_ref || "—"),
+          row("Approval code (APV)", p.apv || "—"),
+          row("Amount requested", `${money(p.amount)} ${p.currency}`),
+          row(
+            "Amount ABA reported",
+            p.paid_amount != null ? (
+              <span className={mismatch ? "text-red-600" : ""}>
+                {money(p.paid_amount)} {p.paid_currency || ""}
+              </span>
+            ) : (
+              "—"
+            ),
+          ),
+          row(
+            "Payment status",
+            <PgBadge map={PG_PAY_STATUS} value={p.payment_status} />,
+          ),
+          row(
+            "Wallet status",
+            <PgBadge map={PG_WALLET_STATUS} value={p.wallet_status} />,
+          ),
+          row("Created", pgDateTime(p.created_at)),
+          row("Expires", pgDateTime(p.expires_at)),
+          row("Paid", pgDateTime(p.paid_at)),
+        ])}
+        <div className="space-y-4">
+          {card("Customer Information", [
+            row(
+              "Customer ID",
+              c?.customer_code ? (
+                <Link
+                  to={`/customers/${encodeURIComponent(c.customer_code)}`}
+                  className="text-blue-700 hover:underline"
+                >
+                  {fmtCustomerId(c.customer_code)}
+                </Link>
+              ) : (
+                "—"
+              ),
+            ),
+            row("Name", c?.name || "—"),
+            row("Phone", c?.phone || "—"),
+            row("Current wallet balance", c ? moneyS(c.balance) : "—"),
+          ])}
+          {card("Wallet Information", [
+            row(
+              "Balance before credit",
+              p.balance_before != null ? moneyS(p.balance_before) : "—",
+            ),
+            row(
+              "Credited amount",
+              p.wallet_tx_id ? money(p.amount) : "Not credited",
+            ),
+            row(
+              "Balance after credit",
+              p.balance_after != null ? moneyS(p.balance_after) : "—",
+            ),
+            row("Wallet transaction", w?.ref_no || "—"),
+            row("Credit time", pgDateTime(p.wallet_credited_at)),
+          ])}
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="mb-3 text-sm font-extrabold text-slate-800">
+            Transaction Timeline
+          </h2>
+          <ol className="space-y-4">
+            {events.map((ev, i) => (
+              <li key={i} className="flex gap-3">
+                <span
+                  className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${ev.tone}`}
+                />
+                <div className="min-w-0">
+                  <div className="text-sm font-bold text-slate-800">
+                    {ev.title}
+                  </div>
+                  <div className="break-words text-xs text-slate-500">
+                    {ev.text}
+                  </div>
+                  <div className="text-[11px] text-slate-400">
+                    {pgDateTime(ev.at)}
+                  </div>
+                </div>
+              </li>
+            ))}
+            {p.overall_status === "pending" && (
+              <li className="flex gap-3">
+                <span className="mt-1.5 h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-amber-400" />
+                <div className="text-sm font-bold text-amber-700">
+                  Awaiting payment confirmation
+                </div>
+              </li>
+            )}
+          </ol>
+        </div>
+        {canLogs && (
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="mb-3 text-sm font-extrabold text-slate-800">
+              Callback History
+            </h2>
+            {(d.webhooks || []).length === 0 ? (
+              <p className="text-sm text-slate-400">
+                No callbacks received for this payment.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {d.webhooks.map((l) => (
+                  <div
+                    key={l.id}
+                    className="rounded-xl bg-slate-50 p-3 text-xs"
+                  >
+                    <div className="mb-1 flex justify-between gap-2">
+                      <b>{pgDateTime(l.received_at)}</b>
+                      <span className="text-slate-500">{l.result || "—"}</span>
+                    </div>
+                    <code className="block break-all text-[11px] text-slate-600">
+                      {JSON.stringify(l.payload)}
+                    </code>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="mt-3 text-[11px] text-slate-400">
+              ABA callbacks carry no signature, so every callback is re-checked
+              with ABA before anything is credited.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---- Delete wallet transactions (Super Admin only) -----------------------
 // Calls the admin_delete_wallet_transactions RPC (delete_wallet_transactions.sql):
 // it checks Super Admin on the server, copies the rows to
@@ -94208,6 +96452,11 @@ function AdminApp() {
               />
               <Route path="/wallet-top-up" element={<WalletTopUpPage />} />
               <Route path="/payments" element={<PaymentsPage />} />
+              <Route path="/payment-gateway" element={<PaymentGatewayPage />} />
+              <Route
+                path="/payment-gateway/:id"
+                element={<PaymentGatewayDetailPage />}
+              />
               <Route path="/service-charge" element={<ServiceChargePage />} />
               <Route
                 path="/service-charge/tx/:id"
@@ -94260,6 +96509,7 @@ function AdminApp() {
                     "/customer-recovery", // custom page above
                     "/settings",
                     "/wallet-top-up",
+                    "/payment-gateway", // custom page above
                     "/loyalty", // custom page above
                     "/shop/dashboard", // custom pages above
                     "/shop/reports",
