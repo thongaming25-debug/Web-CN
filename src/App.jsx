@@ -44379,6 +44379,9 @@ const CustomerApp = (() => {
     const [row, setRow] = useState(null); // payment row reported by the backend
     const [qrImg, setQrImg] = useState(null);
     const [links, setLinks] = useState({ app_store: null, play_store: null });
+    // ABA Pay on a phone: the button opens ABA Mobile; the QR is only for paying from another
+    // bank app / another phone, so it stays hidden until asked (or until the app did not open).
+    const [showQr, setShowQr] = useState(false);
     const [now, setNow] = useState(Date.now());
     const [resuming, setResuming] = useState(false);
 
@@ -44651,6 +44654,7 @@ const CustomerApp = (() => {
       }
       setRow(null);
       setQrImg(null);
+      setShowQr(false);
       setErr("");
       setStep("amount");
     };
@@ -45048,16 +45052,46 @@ const CustomerApp = (() => {
                         <a
                           href={row.deeplink}
                           data-haptic
+                          onClick={() => {
+                            // If ABA Mobile did not take over the screen, fall back to the QR.
+                            setTimeout(() => {
+                              if (
+                                typeof document !== "undefined" &&
+                                !document.hidden
+                              )
+                                setShowQr(true);
+                            }, 2500);
+                          }}
                           className="mt-4 block w-full rounded-2xl bg-blue-600 py-3.5 text-[15px] font-bold text-white active:bg-blue-700"
                         >
                           {tr("Open ABA Mobile", "បើក ABA Mobile")}
                         </a>
                         <p className="mt-2 text-xs text-slate-400">
-                          {tr(
-                            "If ABA Mobile does not open, scan the QR below or install the app.",
-                            "ប្រសិនបើ ABA Mobile មិនបើក សូមស្កេន QR ខាងក្រោម ឬដំឡើងកម្មវិធី។",
-                          )}
+                          {isMobile
+                            ? tr(
+                                "Tap the button to pay in ABA Mobile. Paying from another bank app or another phone? Show the QR.",
+                                "ចុចប៊ូតុងដើម្បីបង់ក្នុង ABA Mobile។ បង់ពីកម្មវិធីធនាគារផ្សេង ឬទូរស័ព្ទផ្សេង? បង្ហាញ QR។",
+                              )
+                            : tr(
+                                "Scan the QR below with ABA Mobile or any KHQR bank app.",
+                                "ស្កេន QR ខាងក្រោមជាមួយ ABA Mobile ឬកម្មវិធីធនាគារដែលគាំទ្រ KHQR។",
+                              )}
                         </p>
+                        {isMobile && (
+                          <button
+                            type="button"
+                            data-haptic
+                            onClick={() => setShowQr((v) => !v)}
+                            className="mt-1 text-xs font-semibold text-blue-600 underline"
+                          >
+                            {showQr
+                              ? tr("Hide QR", "លាក់ QR")
+                              : tr(
+                                  "Show QR (other bank app)",
+                                  "បង្ហាញ QR (កម្មវិធីធនាគារផ្សេង)",
+                                )}
+                          </button>
+                        )}
                         {storeLink && (
                           <a
                             href={storeLink}
@@ -45071,23 +45105,30 @@ const CustomerApp = (() => {
                       </>
                     )}
 
-                    <div className="mx-auto mt-4 grid w-full max-w-[260px] place-items-center rounded-2xl border border-slate-100 bg-white p-2">
-                      {qrImg ? (
-                        <img
-                          src={qrImg}
-                          alt="KHQR"
-                          className="h-auto w-full"
-                          draggable={false}
-                        />
-                      ) : (
-                        <div className="grid h-[240px] place-items-center">
-                          <SpinIcon
-                            size={26}
-                            className="animate-spin text-slate-300"
+                    {!(
+                      row.method === "aba_pay" &&
+                      row.deeplink &&
+                      isMobile &&
+                      !showQr
+                    ) && (
+                      <div className="mx-auto mt-4 grid w-full max-w-[260px] place-items-center rounded-2xl border border-slate-100 bg-white p-2">
+                        {qrImg ? (
+                          <img
+                            src={qrImg}
+                            alt="KHQR"
+                            className="h-auto w-full"
+                            draggable={false}
                           />
-                        </div>
-                      )}
-                    </div>
+                        ) : (
+                          <div className="grid h-[240px] place-items-center">
+                            <SpinIcon
+                              size={26}
+                              className="animate-spin text-slate-300"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {row.method === "khqr" && isMobile && (
                       <p className="mt-3 text-xs text-slate-500">
