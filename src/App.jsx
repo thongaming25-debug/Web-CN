@@ -235,7 +235,7 @@ function JzBannerStyle() {
   return (
     <style>{`
     .jzb{--b-bg:var(--jz-c-card,#fff);--b-text:var(--jz-c-text,#17263e);--b-muted:var(--jz-c-muted,#66758b);--b-line:var(--jz-c-border,#e4e9f1);color:var(--b-text)}
-    .cb-admin-dark .jzb{--b-bg:#142137;--b-text:#e8eef8;--b-muted:#a1b1ca;--b-line:#2b3b52}
+    .cb-admin-dark .jzb{--b-bg:#1b1b1b;--b-text:#e8eef8;--b-muted:#a1b1ca;--b-line:#2b3b52}
     .jzb *{box-sizing:border-box}.jzb button,.jzb a,.jzb input,.jzb textarea,.jzb select{font:inherit}
     .jzb button{cursor:pointer}.jzb button:disabled{opacity:.4;cursor:not-allowed}
     .jzb button:focus-visible,.jzb a:focus-visible{outline:3px solid #fb923c;outline-offset:3px}
@@ -1823,14 +1823,14 @@ const DESIGN_TOKENS_CSS = `
   --cbx-avatar-bg:#172B4D; --cbx-menu-shadow:0 12px 32px rgba(23,43,77,.14);
 }
 html.cb-admin-dark{
-  --cbx-blue-soft:rgba(96,165,250,.14); --cbx-page:#0b1120; --cbx-card:#151c2c;
-  --cbx-text:#e2e8f0; --cbx-muted:#94a3b8; --cbx-border:#263043;
-  --cbx-side-bg:#0f1626; --cbx-side-border:#1e2638;
-  --cbx-side-title:#f1f5f9; --cbx-side-sub:#94a3b8; --cbx-side-group:#7c89a3;
-  --cbx-side-text:#d3dcea; --cbx-side-hover-bg:#1b2436; --cbx-side-hover-text:#f1f5f9;
+  --cbx-blue-soft:rgba(96,165,250,.14); --cbx-page:#0f0f0f; --cbx-card:#1b1b1b;
+  --cbx-text:#e2e8f0; --cbx-muted:#a3a3a3; --cbx-border:#2c2c2c;
+  --cbx-side-bg:#141414; --cbx-side-border:#262626;
+  --cbx-side-title:#f1f5f9; --cbx-side-sub:#a3a3a3; --cbx-side-group:#7c89a3;
+  --cbx-side-text:#d3dcea; --cbx-side-hover-bg:#262626; --cbx-side-hover-text:#f1f5f9;
   --cbx-side-active-bg:rgba(96,165,250,.16); --cbx-side-active-text:#93c5fd; --cbx-side-bar:#60a5fa;
-  --cbx-tip-bg:#e2e8f0; --cbx-tip-text:#0b1120;
-  --cbx-hover:#1b2436; --cbx-border-strong:#3a4763;
+  --cbx-tip-bg:#e2e8f0; --cbx-tip-text:#0f0f0f;
+  --cbx-hover:#262626; --cbx-border-strong:#3a3a3a;
   --cbx-warn-soft:rgba(251,191,36,.14); --cbx-warn-text:#fbbf24;
   --cbx-danger-soft:rgba(248,113,113,.14); --cbx-danger-text:#fca5a5;
   --cbx-ok-soft:rgba(74,222,128,.14); --cbx-ok-text:#86efac;
@@ -2056,7 +2056,7 @@ html.cb-admin-dark{
   --cbx-overlay:rgba(2,6,23,.62);
   --cbx-modal-shadow:0 24px 64px rgba(0,0,0,.6);
   --cbx-primary:#3B82F6; --cbx-primary-hover:#60A5FA;
-  --cbx-input-bg:#0f1626; --cbx-input-border:#3a4763;
+  --cbx-input-bg:#141414; --cbx-input-border:#3a3a3a;
 }
 
 /* ---- Buttons (extend .cbx-btn) ---- */
@@ -5093,6 +5093,24 @@ function advanceTimeline(timeline, proceedBy) {
   });
 }
 
+// Admin date style everywhere: "2026-11-27" and "2026-11-27 01:27 PM".
+function fmtIsoDay(v) {
+  if (!v) return "—";
+  const d = v instanceof Date ? v : new Date(v);
+  if (Number.isNaN(d.getTime())) return "—";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+function fmtIsoDayTime(v) {
+  if (!v) return "—";
+  const d = v instanceof Date ? v : new Date(v);
+  if (Number.isNaN(d.getTime())) return String(v);
+  let h = d.getHours();
+  const ap = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return `${fmtIsoDay(d)} ${String(h).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")} ${ap}`;
+}
+
 function formatNowTimestamp() {
   const d = new Date();
   const day = d.getDate();
@@ -5664,11 +5682,7 @@ function CreatedAtCell({ iso }) {
   if (!iso) return <span className="text-ink-600/40">—</span>;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return <span>{String(iso)}</span>;
-  const date = d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
+  const date = fmtIsoDay(d);
   const time = d.toLocaleTimeString("en-US", {
     hour: "2-digit",
     minute: "2-digit",
@@ -5763,24 +5777,46 @@ function DateRangeFilter({
   const shownFrom = draftStart || resolved.from;
   const shownTo = draftStart ? "" : resolved.to;
   const todayKey = localDayKey(new Date());
-  const fmt = (key) =>
-    key
-      ? new Date(`${key}T12:00:00`).toLocaleDateString("en-GB", {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-        })
-      : "";
-  const pickDay = (key) => {
+  const fmt = (key) => (key ? key : "");
+  // Fast selection: press on a day and drag to another day (release = done),
+  // or click a start day and then click an end day.
+  const dragging = useRef(false);
+  useEffect(() => {
+    const up = () => {
+      dragging.current = false;
+    };
+    document.addEventListener("mouseup", up);
+    return () => document.removeEventListener("mouseup", up);
+  }, []);
+  const commitRange = (a, b) => {
+    const from = a <= b ? a : b;
+    const to = a <= b ? b : a;
+    dragging.current = false;
+    onChange({ preset: "", from, to });
+    closeAll();
+  };
+  const dayDown = (key, e) => {
+    if (e.button !== 0) return;
     if (!draftStart) {
       setDraftStart(key);
       setHover(key);
-      return;
+      dragging.current = true;
+    } else {
+      commitRange(draftStart, key);
     }
-    const from = draftStart <= key ? draftStart : key;
-    const to = draftStart <= key ? key : draftStart;
-    onChange({ preset: "", from, to });
-    closeAll();
+  };
+  const dayUp = (key) => {
+    if (dragging.current && draftStart && key !== draftStart)
+      commitRange(draftStart, key);
+    dragging.current = false;
+  };
+  const dayKey = (key, e) => {
+    // keyboard activation only (mouse is handled by down/up above)
+    if (e.detail !== 0) return;
+    if (!draftStart) {
+      setDraftStart(key);
+      setHover(key);
+    } else commitRange(draftStart, key);
   };
   const shift = (months) =>
     setMonth(new Date(month.getFullYear(), month.getMonth() + months, 1));
@@ -5874,9 +5910,13 @@ function DateRangeFilter({
               <button
                 key={key}
                 type="button"
-                onMouseEnter={() => draftStart && setHover(key)}
-                onClick={() => pickDay(key)}
-                className={`relative h-8 text-xs transition-colors ${
+                onMouseEnter={() =>
+                  draftStart && hover !== key && setHover(key)
+                }
+                onMouseDown={(e) => dayDown(key, e)}
+                onMouseUp={() => dayUp(key)}
+                onClick={(e) => dayKey(key, e)}
+                className={`relative h-8 select-none text-xs ${
                   inRange && !edge ? "bg-signal-blue/10 text-ink-800" : ""
                 } ${key === rs && rs !== re ? "rounded-l-full" : ""} ${key === re && rs !== re ? "rounded-r-full" : ""} ${
                   edge
@@ -5980,7 +6020,7 @@ function DateRangeFilter({
               <p className="mt-2 text-[11px] text-ink-600/50">
                 {draftStart
                   ? "Now pick the end date"
-                  : "Click to pick a start and end date"}
+                  : "Click or drag across days to pick a range"}
               </p>
             </div>
           </div>
@@ -6565,13 +6605,7 @@ function formatIso(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return String(iso);
-  return d.toLocaleString("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return fmtIsoDayTime(d);
 }
 
 // cn_orders.id -> "CN000001" for TKs that belong to a CN Purchase Order.
@@ -17552,6 +17586,19 @@ const readAdminTheme = () => {
     return "light";
   }
 };
+// Apply the saved dark theme as early as possible (module load) so the admin
+// never flashes white before React mounts. Customer routes are left alone.
+try {
+  if (
+    typeof document !== "undefined" &&
+    !/^\/customer(\/|$)/.test(window.location.pathname) &&
+    (readAdminTheme() === "dark" ||
+      (readAdminTheme() === "system" &&
+        window.matchMedia &&
+        window.matchMedia("(prefers-color-scheme: dark)").matches))
+  )
+    document.documentElement.classList.add("cb-admin-dark");
+} catch {}
 const readAdminLang = () => {
   try {
     const v = localStorage.getItem(ADMIN_LANG_KEY);
@@ -17677,60 +17724,60 @@ const ADMIN_KM = {
 };
 
 const ADMIN_DARK_CSS = String.raw`
-html.cb-admin-dark{--cb-bg:#0b1120;--cb-border:#263043;--cb-text:#e2e8f0;--cb-muted:#94a3b8;color-scheme:dark}
-html.cb-admin-dark body{background:#0b1120;color:#e2e8f0}
-html.cb-admin-dark .bg-\[\#f4f7fb\]{background-color:#0b1120}
-html.cb-admin-dark .cb-surface{background:#151c2c;border-color:#263043;box-shadow:0 8px 30px rgba(0,0,0,.25)}
-html.cb-admin-dark .cb-topbar{background:rgba(15,22,38,.9);border-bottom-color:#1e2638}
-html.cb-admin-dark .cb-input{background:#0f1626;border-color:#263043;color:#f1f5f9}
-html.cb-admin-dark .cb-input:focus{background:#0f1626;border-color:#60a5fa;box-shadow:0 0 0 4px rgba(96,165,250,.14)}
+html.cb-admin-dark{--cb-bg:#0f0f0f;--cb-border:#2c2c2c;--cb-text:#e2e8f0;--cb-muted:#a3a3a3;color-scheme:dark}
+html.cb-admin-dark body{background:#0f0f0f;color:#e2e8f0}
+html.cb-admin-dark .bg-\[\#f4f7fb\]{background-color:#0f0f0f}
+html.cb-admin-dark .cb-surface{background:#1b1b1b;border-color:#2c2c2c;box-shadow:0 8px 30px rgba(0,0,0,.25)}
+html.cb-admin-dark .cb-topbar{background:rgba(15,22,38,.9);border-bottom-color:#262626}
+html.cb-admin-dark .cb-input{background:#141414;border-color:#2c2c2c;color:#f1f5f9}
+html.cb-admin-dark .cb-input:focus{background:#141414;border-color:#60a5fa;box-shadow:0 0 0 4px rgba(96,165,250,.14)}
 html.cb-admin-dark .cb-card{box-shadow:0 8px 28px rgba(0,0,0,.28)!important}
-html.cb-admin-dark .cb-table-row:hover{background:#1b2436}
-html.cb-admin-dark .cb-dot{border-color:#0f1626}
-html.cb-admin-dark .cb-bell-btn,html.cb-admin-dark .cb-user-pill{background-color:#151c2c;border-color:#263043}
-html.cb-admin-dark .cb-bell-btn:hover,html.cb-admin-dark .cb-user-pill:hover{background-color:#1b2436}
-html.cb-admin-dark .cb-badge{border-color:#0f1626}
-html.cb-admin-dark .cb-confirm-card{background-color:#151c2c;box-shadow:0 30px 70px -20px rgba(0,0,0,.7),inset 0 0 0 1px rgba(148,163,184,.12)}
-html.cb-admin-dark .cb-confirm-cancel{background-color:#1b2436;border-color:#2a3550;color:#e2e8f0}
-html.cb-admin-dark .cb-confirm-x{color:#94a3b8}
-html.cb-admin-dark .cb-confirm-x:hover{background-color:#1e2638;color:#e2e8f0}
+html.cb-admin-dark .cb-table-row:hover{background:#262626}
+html.cb-admin-dark .cb-dot{border-color:#141414}
+html.cb-admin-dark .cb-bell-btn,html.cb-admin-dark .cb-user-pill{background-color:#1b1b1b;border-color:#2c2c2c}
+html.cb-admin-dark .cb-bell-btn:hover,html.cb-admin-dark .cb-user-pill:hover{background-color:#262626}
+html.cb-admin-dark .cb-badge{border-color:#141414}
+html.cb-admin-dark .cb-confirm-card{background-color:#1b1b1b;box-shadow:0 30px 70px -20px rgba(0,0,0,.7),inset 0 0 0 1px rgba(148,163,184,.12)}
+html.cb-admin-dark .cb-confirm-cancel{background-color:#262626;border-color:#3a3a3a;color:#e2e8f0}
+html.cb-admin-dark .cb-confirm-x{color:#a3a3a3}
+html.cb-admin-dark .cb-confirm-x:hover{background-color:#262626;color:#e2e8f0}
 html.cb-admin-dark .cb-confirm-icon-danger{background-color:rgba(239,68,68,.16);color:#f87171}
-html.cb-admin-dark .cb-sidebar{background:linear-gradient(180deg,#070f20 0%,#0b1730 100%);border-right:1px solid #16203a}
+html.cb-admin-dark .cb-sidebar{background:linear-gradient(180deg,#121212 0%,#121212 100%);border-right:1px solid #2c2c2c}
 html.cb-admin-dark .cb-sidebar .text-mist-100\/35{color:rgba(241,245,249,.48)!important}
 html.cb-admin-dark .cb-sidebar .text-mist-100\/50{color:rgba(241,245,249,.62)!important}
 html.cb-admin-dark .cb-sidebar .text-mist-100\/70{color:rgba(241,245,249,.82)!important}
 html.cb-admin-dark .cb-sidebar .text-mist-100\/80{color:rgba(241,245,249,.88)!important}
 html.cb-admin-dark input,html.cb-admin-dark textarea,html.cb-admin-dark select{color:#f1f5f9}
-html.cb-admin-dark input::placeholder,html.cb-admin-dark textarea::placeholder{color:#64728b}
-html.cb-admin-dark .cb-sk{background-color:#1e2638;background-image:linear-gradient(100deg,rgba(255,255,255,0) 30%,rgba(255,255,255,.07) 50%,rgba(255,255,255,0) 70%)}
+html.cb-admin-dark input::placeholder,html.cb-admin-dark textarea::placeholder{color:#737373}
+html.cb-admin-dark .cb-sk{background-color:#262626;background-image:linear-gradient(100deg,rgba(255,255,255,0) 30%,rgba(255,255,255,.07) 50%,rgba(255,255,255,0) 70%)}
 /* surfaces */
-html.cb-admin-dark .bg-white,html.cb-admin-dark .hover\:bg-white:hover{background-color:#151c2c!important}
-html.cb-admin-dark .focus\:bg-white:focus,html.cb-admin-dark .bg-\[\#fbfcfe\]{background-color:#0f1626!important}
-html.cb-admin-dark .bg-mist-50,html.cb-admin-dark .bg-slate-50,html.cb-admin-dark .disabled\:bg-mist-50:disabled{background-color:#101827!important}
+html.cb-admin-dark .bg-white,html.cb-admin-dark .hover\:bg-white:hover{background-color:#1b1b1b!important}
+html.cb-admin-dark .focus\:bg-white:focus,html.cb-admin-dark .bg-\[\#fbfcfe\]{background-color:#141414!important}
+html.cb-admin-dark .bg-mist-50,html.cb-admin-dark .bg-slate-50,html.cb-admin-dark .disabled\:bg-mist-50:disabled{background-color:#141414!important}
 html.cb-admin-dark .bg-mist-50\/70,html.cb-admin-dark .bg-mist-50\/60,html.cb-admin-dark .bg-mist-50\/50,html.cb-admin-dark .bg-slate-50\/70{background-color:rgba(16,24,39,.7)!important}
-html.cb-admin-dark .bg-mist-100,html.cb-admin-dark .bg-slate-100{background-color:#1b2436!important}
-html.cb-admin-dark .bg-mist-200,html.cb-admin-dark .bg-slate-200{background-color:#263043!important}
-html.cb-admin-dark .hover\:bg-mist-50:hover,html.cb-admin-dark .hover\:bg-slate-50:hover,html.cb-admin-dark .group:hover .group-hover\:bg-mist-50,html.cb-admin-dark .hover\:bg-mist-50\/70:hover,html.cb-admin-dark .hover\:bg-mist-50\/60:hover,html.cb-admin-dark .hover\:bg-slate-50\/60:hover,html.cb-admin-dark .hover\:bg-slate-50\/70:hover{background-color:#1b2436!important}
-html.cb-admin-dark .hover\:bg-mist-100:hover,html.cb-admin-dark .hover\:bg-slate-100:hover{background-color:#222c41!important}
+html.cb-admin-dark .bg-mist-100,html.cb-admin-dark .bg-slate-100{background-color:#262626!important}
+html.cb-admin-dark .bg-mist-200,html.cb-admin-dark .bg-slate-200{background-color:#2c2c2c!important}
+html.cb-admin-dark .hover\:bg-mist-50:hover,html.cb-admin-dark .hover\:bg-slate-50:hover,html.cb-admin-dark .group:hover .group-hover\:bg-mist-50,html.cb-admin-dark .hover\:bg-mist-50\/70:hover,html.cb-admin-dark .hover\:bg-mist-50\/60:hover,html.cb-admin-dark .hover\:bg-slate-50\/60:hover,html.cb-admin-dark .hover\:bg-slate-50\/70:hover{background-color:#262626!important}
+html.cb-admin-dark .hover\:bg-mist-100:hover,html.cb-admin-dark .hover\:bg-slate-100:hover{background-color:#262626!important}
 html.cb-admin-dark .bg-ink-900\/5{background-color:rgba(255,255,255,.05)!important}
 /* text */
 html.cb-admin-dark .text-ink-900,html.cb-admin-dark .text-slate-900{color:#f1f5f9!important}
 html.cb-admin-dark .text-ink-800,html.cb-admin-dark .text-slate-800{color:#e2e8f0!important}
 html.cb-admin-dark .text-ink-700,html.cb-admin-dark .text-slate-700{color:#cbd5e1!important}
-html.cb-admin-dark .text-ink-600,html.cb-admin-dark .text-slate-600{color:#a9b6c9!important}
-html.cb-admin-dark .text-slate-500,html.cb-admin-dark .text-ink-600\/70,html.cb-admin-dark .text-ink-600\/65,html.cb-admin-dark .text-ink-600\/60,html.cb-admin-dark .text-ink-600\/55{color:#94a3b8!important}
-html.cb-admin-dark .text-slate-400,html.cb-admin-dark .text-ink-600\/50,html.cb-admin-dark .text-ink-600\/45,html.cb-admin-dark .disabled\:text-ink-600\/60:disabled{color:#7385a0!important}
-html.cb-admin-dark .text-ink-600\/40,html.cb-admin-dark .text-ink-600\/35{color:#64728b!important}
-html.cb-admin-dark .text-ink-600\/30,html.cb-admin-dark .text-ink-600\/25,html.cb-admin-dark .text-ink-600\/20{color:#4b586e!important}
-html.cb-admin-dark .placeholder\:text-ink-600\/40::placeholder,html.cb-admin-dark .placeholder\:text-ink-600\/35::placeholder{color:#64728b!important}
+html.cb-admin-dark .text-ink-600,html.cb-admin-dark .text-slate-600{color:#b5b5b5!important}
+html.cb-admin-dark .text-slate-500,html.cb-admin-dark .text-ink-600\/70,html.cb-admin-dark .text-ink-600\/65,html.cb-admin-dark .text-ink-600\/60,html.cb-admin-dark .text-ink-600\/55{color:#a3a3a3!important}
+html.cb-admin-dark .text-slate-400,html.cb-admin-dark .text-ink-600\/50,html.cb-admin-dark .text-ink-600\/45,html.cb-admin-dark .disabled\:text-ink-600\/60:disabled{color:#7d7d7d!important}
+html.cb-admin-dark .text-ink-600\/40,html.cb-admin-dark .text-ink-600\/35{color:#737373!important}
+html.cb-admin-dark .text-ink-600\/30,html.cb-admin-dark .text-ink-600\/25,html.cb-admin-dark .text-ink-600\/20{color:#525252!important}
+html.cb-admin-dark .placeholder\:text-ink-600\/40::placeholder,html.cb-admin-dark .placeholder\:text-ink-600\/35::placeholder{color:#737373!important}
 html.cb-admin-dark .hover\:text-ink-900:hover,html.cb-admin-dark .hover\:text-slate-900:hover{color:#fff!important}
 html.cb-admin-dark .hover\:text-ink-800:hover,html.cb-admin-dark .hover\:text-slate-700:hover{color:#e2e8f0!important}
 /* borders */
-html.cb-admin-dark .border-mist-200,html.cb-admin-dark .border-slate-200{border-color:#263043!important}
-html.cb-admin-dark .border-mist-100,html.cb-admin-dark .border-slate-100{border-color:#1e2638!important}
-html.cb-admin-dark .border-mist-300,html.cb-admin-dark .hover\:border-mist-300:hover{border-color:#334155!important}
-html.cb-admin-dark .divide-mist-100>:not([hidden])~:not([hidden]),html.cb-admin-dark .divide-slate-100>:not([hidden])~:not([hidden]){border-color:#1e2638!important}
-html.cb-admin-dark .divide-mist-200>:not([hidden])~:not([hidden]){border-color:#263043!important}
+html.cb-admin-dark .border-mist-200,html.cb-admin-dark .border-slate-200{border-color:#2c2c2c!important}
+html.cb-admin-dark .border-mist-100,html.cb-admin-dark .border-slate-100{border-color:#262626!important}
+html.cb-admin-dark .border-mist-300,html.cb-admin-dark .hover\:border-mist-300:hover{border-color:#3a3a3a!important}
+html.cb-admin-dark .divide-mist-100>:not([hidden])~:not([hidden]),html.cb-admin-dark .divide-slate-100>:not([hidden])~:not([hidden]){border-color:#262626!important}
+html.cb-admin-dark .divide-mist-200>:not([hidden])~:not([hidden]){border-color:#2c2c2c!important}
 /* tinted status colours */
 html.cb-admin-dark .bg-blue-50,html.cb-admin-dark .bg-blue-50\/60,html.cb-admin-dark .hover\:bg-blue-50:hover{background-color:rgba(37,99,235,.16)!important}
 html.cb-admin-dark .text-blue-600{color:#60a5fa!important}
@@ -17760,24 +17807,24 @@ html.cb-admin-dark .border-rose-200{border-color:rgba(251,113,133,.32)!important
    The remaps above are now !important too (higher specificity wins); the rules below
    cover the colour classes that had no dark remap at all. */
 html.cb-admin-dark .bg-mist-50\/40,html.cb-admin-dark .bg-mist-50\/95{background-color:rgba(16,24,39,.7)!important}
-html.cb-admin-dark .hover\:bg-mist-200:hover{background-color:#2a3550!important}
+html.cb-admin-dark .hover\:bg-mist-200:hover{background-color:#3a3a3a!important}
 html.cb-admin-dark [class~="text-signal-blue"],html.cb-admin-dark [class~="hover:text-signal-blue"]:hover{color:#60a5fa!important}
 html.cb-admin-dark [class~="text-signal-red"],html.cb-admin-dark [class~="hover:text-signal-red"]:hover{color:#f87171!important}
 html.cb-admin-dark [class~="text-signal-red/80"]{color:rgba(248,113,113,.85)!important}
 html.cb-admin-dark [class~="text-signal-teal"]{color:#2dd4bf!important}
 html.cb-admin-dark [class~="text-signal-teal/80"]{color:rgba(45,212,191,.85)!important}
 html.cb-admin-dark [class~="text-signal-amber"]{color:#fbbf24!important}
-html.cb-admin-dark [class~="stroke-mist-100"]{stroke:#263043!important}
+html.cb-admin-dark [class~="stroke-mist-100"]{stroke:#2c2c2c!important}
 html.cb-admin-dark .bg-amber-50\/70{background-color:rgba(245,158,11,.14)!important}
 html.cb-admin-dark .bg-rose-50{background-color:rgba(244,63,94,.14)!important}
 html.cb-admin-dark .text-violet-600{color:#a78bfa!important}
-html.cb-admin-dark .text-slate-300{color:#4b586e!important}
-html.cb-admin-dark .ring-slate-200{--tw-ring-color:#263043!important}
+html.cb-admin-dark .text-slate-300{color:#525252!important}
+html.cb-admin-dark .ring-slate-200{--tw-ring-color:#2c2c2c!important}
 html.cb-admin-dark :is(.ring-blue-100,.ring-blue-200){--tw-ring-color:rgba(96,165,250,.32)!important}
 html.cb-admin-dark :is(.ring-emerald-100,.ring-amber-100,.ring-rose-100,.ring-violet-100){--tw-ring-color:rgba(148,163,184,.22)!important}
 
 /* login page */
-html.cb-admin-dark .cb-login-page{background-color:#0b1120}
+html.cb-admin-dark .cb-login-page{background-color:#0f0f0f}
 html.cb-admin-dark .cb-login-page .bg-white\/95,html.cb-admin-dark .cb-login-page .bg-white\/90{background-color:rgba(21,28,44,.92)}
 html.cb-admin-dark .cb-login-page .border-white\/80{border-color:rgba(148,163,184,.14)}
 `;
@@ -18724,7 +18771,7 @@ function AdminPrefsProvider({ children }) {
   }, []);
   const dark = theme === "dark" || (theme === "system" && sysDark);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = document.documentElement;
     el.classList.toggle("cb-admin-dark", dark);
     return () => el.classList.remove("cb-admin-dark");
@@ -19982,7 +20029,7 @@ function Layout() {
         <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden overscroll-x-none p-4 lg:p-6 xl:p-7">
           <div
             key={pathname}
-            className={`cb-page-enter${pathname === "/settings" || pathname === "/shop/settings" ? " is-settings" : ""}${pathname === "/cn-orders" || pathname === "/packages" || pathname === "/wh-arrived" ? " is-wide" : ""}`}
+            className={`cb-page-enter${pathname === "/settings" || pathname === "/shop/settings" ? " is-settings" : ""}${pathname === "/cn-orders" || pathname === "/packages" || pathname === "/wh-arrived" || pathname === "/inbound-origin" || pathname === "/outbound-origin" ? " is-wide" : ""}`}
           >
             <Outlet />
           </div>
@@ -25072,9 +25119,9 @@ function Login() {
         .cb-login-input{width:100%;border:1px solid #d1d5db;border-radius:8px;background:#fff;padding:14px 14px;font-size:14.5px;color:#0f172a;outline:none;box-shadow:none;transition:border-color .15s;}
         .cb-login-input:focus{background:#fff;border-color:#9ca3af;box-shadow:none;outline:none;}
         .cb-login-input:-webkit-autofill,.cb-login-input:-webkit-autofill:focus{-webkit-box-shadow:0 0 0 1000px #fff inset;-webkit-text-fill-color:#0f172a;}
-        html.cb-admin-dark .cb-login-input{background:#0f1626;color:#e5e7eb;border-color:#263043;}
-        html.cb-admin-dark .cb-login-input:focus{background:#0f1626;border-color:#475569;box-shadow:none;}
-        html.cb-admin-dark .cb-login-input:-webkit-autofill{-webkit-box-shadow:0 0 0 1000px #0f1626 inset;-webkit-text-fill-color:#e5e7eb;}
+        html.cb-admin-dark .cb-login-input{background:#141414;color:#e5e7eb;border-color:#2c2c2c;}
+        html.cb-admin-dark .cb-login-input:focus{background:#141414;border-color:#475569;box-shadow:none;}
+        html.cb-admin-dark .cb-login-input:-webkit-autofill{-webkit-box-shadow:0 0 0 1000px #141414 inset;-webkit-text-fill-color:#e5e7eb;}
       `}</style>
 
       {/* Floating waves behind the card */}
@@ -25286,7 +25333,8 @@ function timeAgoLabel(iso) {
   if (diffMin < 60) return `${diffMin} min ago`;
   const diffHr = Math.round(diffMin / 60);
   if (diffHr < 24) return `${diffHr} hr ago`;
-  return `${Math.round(diffHr / 24)} d ago`;
+  const days = Math.floor(diffHr / 24);
+  return `${days} ${days === 1 ? "day" : "days"} ago`;
 }
 
 // Most-recent real timestamp a package row carries, whichever stage it
@@ -33752,11 +33800,7 @@ function fmtDate(d) {
   if (!d) return "—";
   const dt = new Date(`${String(d).slice(0, 10)}T00:00:00`);
   if (Number.isNaN(dt.getTime())) return String(d);
-  return dt.toLocaleDateString("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
+  return fmtIsoDay(dt);
 }
 
 const tkKey = (tk) =>
@@ -65925,7 +65969,7 @@ if (typeof document !== "undefined" && !document.getElementById("cb-cn-font")) {
 // Presentation is scoped to this page; it follows the existing admin theme.
 const CN_DETAIL_LAYOUT_CSS = `
 .cn-detail-page{--cn-surface:#fff;--cn-soft:#f8fafc;--cn-border:#e2e8f0;--cn-text:#0f172a;--cn-muted:#64748b;--cn-blue:#2563eb;--cn-tint:#eff6ff;color:var(--cn-text);font-family:var(--cn-font);min-width:0}
-html.cb-admin-dark .cn-detail-page{--cn-surface:#151c2c;--cn-soft:#101827;--cn-border:#263043;--cn-text:#f1f5f9;--cn-muted:#94a3b8;--cn-blue:#93c5fd;--cn-tint:#182b4a}
+html.cb-admin-dark .cn-detail-page{--cn-surface:#1b1b1b;--cn-soft:#141414;--cn-border:#2c2c2c;--cn-text:#f1f5f9;--cn-muted:#a3a3a3;--cn-blue:#93c5fd;--cn-tint:#182b4a}
 .cn-detail-page{transition:opacity .2s ease}
 .cn-detail-page.is-busy{pointer-events:none}
 .cn-detail-page .cn-detail-shell{background:var(--cn-surface);border:1px solid var(--cn-border);border-radius:16px;padding:24px;box-shadow:0 2px 6px #0f172a03}
@@ -73415,11 +73459,7 @@ function rpDate(v) {
   if (!v) return "—";
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
+  return fmtIsoDay(d);
 }
 function rpAddDays(v, n) {
   if (!v || n == null) return null;
@@ -76300,13 +76340,7 @@ const CD_PAGE = 10;
 const cdDate = (v) => {
   if (!v) return "—";
   const d = new Date(v);
-  return Number.isNaN(d.getTime())
-    ? "—"
-    : d.toLocaleDateString("en-GB", {
-        day: "2-digit",
-        month: "short",
-        year: "numeric",
-      });
+  return Number.isNaN(d.getTime()) ? "—" : fmtIsoDay(d);
 };
 // Time of day (local), e.g. "05:53 PM"
 const cdTime = (v) => {
@@ -81815,7 +81849,7 @@ function PaymentGatewayPage() {
         </div>
         <div className="min-w-0">
           <div className="text-xs font-semibold text-slate-500">{label}</div>
-          <div className="text-xl font-extrabold text-slate-900">{value}</div>
+          <div className="text-xl font-medium text-slate-900">{value}</div>
           {hint && <div className="text-[11px] text-slate-400">{hint}</div>}
         </div>
       </div>
@@ -82423,7 +82457,7 @@ function PaymentGatewayPage() {
               <div className="text-sm font-medium text-slate-500">
                 Total Received
               </div>
-              <div className="mt-1 text-3xl font-extrabold tracking-tight text-slate-900">
+              <div className="mt-1 text-3xl font-medium tracking-tight text-slate-900">
                 {loading ? (
                   <Skeleton className="h-9 w-32 rounded-lg" />
                 ) : (
@@ -82435,7 +82469,7 @@ function PaymentGatewayPage() {
               <div className="text-sm font-medium text-slate-500">
                 Transactions
               </div>
-              <div className="mt-1 flex justify-end text-2xl font-extrabold text-slate-900">
+              <div className="mt-1 flex justify-end text-2xl font-medium text-slate-900">
                 {loading ? <Skeleton className="h-8 w-12 rounded-lg" /> : total}
               </div>
               <div className="text-sm text-slate-400">
@@ -83412,11 +83446,14 @@ function PaymentsPage() {
       label: "Paid At",
       render: (r) => (
         <>
-          <div className="font-semibold text-slate-800">
+          <div className="font-semibold text-slate-900">
             {cdDate(r.created_at)}
           </div>
-          <div className="text-[11px] text-slate-400">
-            {cdAgo(r.created_at)}
+          <div className="text-[12px] text-slate-500">
+            {cdTime(r.created_at)}{" "}
+            <span className="font-semibold text-blue-600">
+              · {timeAgoLabel(r.created_at)}
+            </span>
           </div>
         </>
       ),
@@ -83567,7 +83604,7 @@ function PaymentsPage() {
       <div className="mb-5 grid overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:grid-cols-2 xl:grid-cols-4">
         <div className="border-b border-slate-200 p-5 xl:border-b-0 xl:border-r">
           <div className="text-xs font-semibold text-slate-500">Paid (net)</div>
-          <div className="mt-1 text-2xl font-extrabold text-slate-900">
+          <div className="mt-1 text-2xl font-medium text-slate-900">
             {ready ? money(st.net) : "—"}
           </div>
           <div className="mt-3 space-y-0.5 text-xs text-slate-500">
@@ -83591,7 +83628,7 @@ function PaymentsPage() {
           <div className="text-xs font-semibold text-slate-500">
             Paid by Customer
           </div>
-          <div className="mt-1 text-2xl font-extrabold text-slate-900">
+          <div className="mt-1 text-2xl font-medium text-slate-900">
             {ready ? money(st.customerAmt) : "—"}
           </div>
           <div className="mt-3 text-xs text-slate-500">
@@ -83603,7 +83640,7 @@ function PaymentsPage() {
           <div className="text-xs font-semibold text-slate-500">
             Paid by Admin
           </div>
-          <div className="mt-1 text-2xl font-extrabold text-slate-900">
+          <div className="mt-1 text-2xl font-medium text-slate-900">
             {ready ? money(st.adminAmt) : "—"}
           </div>
           <div className="mt-3 text-xs text-slate-500">
@@ -83613,7 +83650,7 @@ function PaymentsPage() {
         </div>
         <div className="p-5">
           <div className="text-xs font-semibold text-slate-500">Payments</div>
-          <div className="mt-1 text-2xl font-extrabold text-slate-900">
+          <div className="mt-1 text-2xl font-medium text-slate-900">
             {ready ? st.count.toLocaleString("en-US") : "—"}
           </div>
           <div className="mt-3 space-y-0.5 text-xs text-slate-500">
@@ -84024,7 +84061,7 @@ function ServiceChargePage() {
           <div className="text-xs font-semibold text-slate-500">
             {tab} Amount
           </div>
-          <div className="text-xl font-extrabold text-slate-900">
+          <div className="text-xl font-medium text-slate-900">
             {money(total)}
           </div>
         </div>
@@ -84809,7 +84846,7 @@ function WalletTopUpPage() {
         </div>
         <div>
           <div className="text-xs font-semibold text-slate-500">{label}</div>
-          <div className="text-xl font-extrabold text-slate-900">{value}</div>
+          <div className="text-xl font-medium text-slate-900">{value}</div>
         </div>
       </div>
     );
@@ -90214,7 +90251,7 @@ function shopErr(e) {
   if (known.test(m)) return m.replace(/^[A-Z_]{4,}:\s*/, "");
   return "Something went wrong. Please try again.";
 }
-const shopDt = (x) => (x ? new Date(x).toLocaleString() : "—");
+const shopDt = (x) => fmtIsoDayTime(x);
 const shopNum = (v) => (v === "" || v == null ? null : Number(v));
 // Discount is typed as a percentage in the admin form; the database keeps
 // storing the final discounted price (discount_price) so customer pages,
@@ -95467,7 +95504,7 @@ function ShopDashboardChart({ rows, dates, loading, error, onDates }) {
 }
 const SHOP_DASHBOARD_CSS = `
 .shop-dashboard{--sd-bg:#fff;--sd-soft:#f8fafc;--sd-border:#e2e8f0;--sd-text:#17243b;--sd-muted:#64748b;--sd-hover:#f1f5f9;min-width:0;color:var(--sd-text);font-family:Inter,"Noto Sans Khmer",system-ui,sans-serif}
-html.cb-admin-dark .shop-dashboard{--sd-bg:#151c2c;--sd-soft:#101827;--sd-border:#2a3549;--sd-text:#f1f5f9;--sd-muted:#94a3b8;--sd-hover:#24334d;color-scheme:dark}
+html.cb-admin-dark .shop-dashboard{--sd-bg:#1b1b1b;--sd-soft:#141414;--sd-border:#2a3549;--sd-text:#f1f5f9;--sd-muted:#a3a3a3;--sd-hover:#24334d;color-scheme:dark}
 .shop-dashboard .sd-header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:24px}.shop-dashboard .sd-header h1{font-size:28px;font-weight:750;letter-spacing:-.03em}.shop-dashboard .sd-header p{font-size:13px;color:var(--sd-muted);margin-top:6px}
 .shop-dashboard .sd-panel{background:var(--sd-bg);border:1px solid var(--sd-border);border-radius:16px;padding:24px;min-width:0}.shop-dashboard .sd-activity{margin-top:20px}.shop-dashboard .sd-section-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:26px 0 12px}.shop-dashboard .sd-section-heading h2{font-size:16px;font-weight:700}.shop-dashboard .sd-section-heading span,.shop-dashboard .sd-muted{color:var(--sd-muted);font-size:12px}
 .shop-dashboard .sd-featured{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}.shop-dashboard .sd-feature{padding:20px;background:var(--sd-bg);border:1px solid var(--sd-border);border-radius:14px;transition:transform .18s ease,box-shadow .18s ease}.shop-dashboard .sd-feature:hover{transform:translateY(-3px);box-shadow:0 8px 24px #0f172a0c}.shop-dashboard .sd-feature-top{display:flex;justify-content:space-between;gap:12px;color:var(--sd-muted);font-size:13px;font-weight:600}.shop-dashboard .sd-feature-icon{display:grid;place-items:center;width:34px;height:34px;background:#eff6ff;color:#2563eb;border-radius:10px;flex-shrink:0}.shop-dashboard .sd-feature strong{font-size:28px;font-weight:750;letter-spacing:-.03em;display:block;margin:6px 0;overflow-wrap:anywhere}.shop-dashboard .sd-feature p{font-size:12px;color:var(--sd-muted)}
@@ -95815,9 +95852,7 @@ function ShopDashboardExtras({ dates, reload, k }) {
                   <strong>{r.order_no}</strong>
                   <small>
                     {r.customers?.name || "Customer"} · Paid{" "}
-                    {new Date(r.paid_at).toLocaleDateString("en-GB", {
-                      timeZone: SHOP_DASH_TZ,
-                    })}
+                    {fmtIsoDay(r.paid_at)}
                   </small>
                 </div>
                 <span className="sd-action">
@@ -95894,10 +95929,7 @@ function ShopDashboardExtras({ dates, reload, k }) {
             <div>
               <strong>{r.order_no}</strong>
               <small>
-                {r.customers?.name || "Customer"} ·{" "}
-                {new Date(r.created_at).toLocaleDateString("en-GB", {
-                  timeZone: SHOP_DASH_TZ,
-                })}
+                {r.customers?.name || "Customer"} · {fmtIsoDay(r.created_at)}
               </small>
               <span className="sd-status">
                 {r.status} · {r.payment_status}
@@ -97229,7 +97261,7 @@ html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){box-shadow:0 2px 
 .cb-premium-dialog-foot{flex-wrap:wrap;background:var(--cbx-page);border-radius:0 0 16px 16px;}
 .cb-premium-dialog-close{display:grid;place-items:center;width:40px;height:40px;border-radius:10px;color:var(--cbx-muted);}
 .cb-premium-dialog-close:hover{background:var(--cbx-hover);}
-html.cb-admin-dark .cb-app .cb-sk,html.cb-admin-dark .cb-premium-dialog .cb-sk{background-color:#263043;background-image:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.07) 50%,transparent 70%);}
+html.cb-admin-dark .cb-app .cb-sk,html.cb-admin-dark .cb-premium-dialog .cb-sk{background-color:#2c2c2c;background-image:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.07) 50%,transparent 70%);}
 @media(max-width:767px){
  .cb-app main{padding:16px 12px;}
  .cb-app :is(h1,.cb-page-title,.cbx-page-title){font-size:22px;}
@@ -97845,6 +97877,85 @@ html.cb-admin-dark .cb-app main table td :is(.rounded-full,.rounded-md){border:1
 .cb-app .cbx-kpi-cell .flex.items-center>span:last-child{color:var(--cbx-muted);font-weight:500;}
 .cb-app .cbx-kpi-strip{box-shadow:none;border-radius:16px;}
 .cb-app .cb-stat{border-top:0;}
+/* Sidebar menu: larger, bolder items (matches the DRSB admin) */
+.cb-app .cbx-sidebar .cbx-nav-link{font-size:15.5px;font-weight:600;min-height:44px;padding-top:9px;padding-bottom:9px;gap:14px;}
+.cb-app .cbx-sidebar .cbx-nav-link svg{width:22px;height:22px;stroke-width:1.9;}
+.cb-app .cbx-sidebar:not(.is-collapsed) .cbx-nav-link{padding-left:14px;padding-right:12px;}
+.cb-app .cbx-sidebar .cbx-side-group{font-size:13px;font-weight:500;}
+/* Big KPI numbers: medium weight like the Finance dashboard, not bold */
+.cb-app .cbx-kpi-cell .tabular-nums:is(.font-bold,.font-extrabold,.font-semibold),
+.cb-app .cb-stat .tabular-nums:is(.font-bold,.font-extrabold,.font-semibold){font-weight:500;letter-spacing:-.01em;}
+/* ===== Admin dark = Customer dark (neutral black, orange accent) ===== */
+html.cb-admin-dark{--cb-bg:#0f0f0f;--cb-border:#2c2c2c;--cb-text:#f5f5f5;--cb-muted:#a3a3a3;
+ --cbx-page:#0f0f0f;--cbx-card:#1b1b1b;--cbx-text:#f5f5f5;--cbx-muted:#a3a3a3;
+ --cbx-border:#2c2c2c;--cbx-border-strong:#3a3a3a;--cbx-hover:#262626;--cbx-blue-soft:rgba(255,143,58,.14);
+ --cbx-side-bg:#121212;--cbx-side-border:#2c2c2c;--cbx-side-title:#f5f5f5;--cbx-side-sub:#a3a3a3;--cbx-side-group:#8a8a8a;
+ --cbx-side-text:#d4d4d4;--cbx-side-hover-bg:#262626;--cbx-side-hover-text:#fff;
+ --cbx-side-active-bg:rgba(255,143,58,.16);--cbx-side-active-text:#ff8f3a;--cbx-side-bar:#ff8f3a;
+ --cbx-input-bg:#141414;--cbx-input-border:#3a3a3a;--cbx-avatar-bg:#3a3a3a;
+ --jz-glass:rgba(34,34,34,.6);--jz-shadow:none;}
+html.cb-admin-dark body,html.cb-admin-dark .bg-\[\#f4f7fb\]{background:#0f0f0f;color:#f5f5f5}
+html.cb-admin-dark .cb-surface,html.cb-admin-dark .cb-bell-btn,html.cb-admin-dark .cb-user-pill,html.cb-admin-dark .cb-confirm-card{background-color:#1b1b1b;border-color:#2c2c2c}
+html.cb-admin-dark .cb-topbar{background:rgba(15,15,15,.85);border-bottom-color:#2c2c2c}
+html.cb-admin-dark .cb-input,html.cb-admin-dark .cb-input:focus{background:#141414;border-color:#2c2c2c;color:#f5f5f5}
+html.cb-admin-dark .cb-input:focus{border-color:#ff8f3a;box-shadow:0 0 0 4px rgba(255,143,58,.14)}
+html.cb-admin-dark .cb-table-row:hover,html.cb-admin-dark .cb-bell-btn:hover,html.cb-admin-dark .cb-user-pill:hover{background:#262626}
+html.cb-admin-dark .cb-dot,html.cb-admin-dark .cb-badge{border-color:#0f0f0f}
+html.cb-admin-dark .cb-sidebar{background:#121212;border-right:1px solid #2c2c2c}
+html.cb-admin-dark .cb-confirm-cancel{background-color:#262626;border-color:#3a3a3a;color:#f5f5f5}
+html.cb-admin-dark .cb-confirm-x:hover{background-color:#262626}
+html.cb-admin-dark input::placeholder,html.cb-admin-dark textarea::placeholder{color:#737373}
+html.cb-admin-dark .cb-sk,html.cb-admin-dark .cb-app .cb-sk,html.cb-admin-dark .cb-premium-dialog .cb-sk{background-color:#262626}
+html.cb-admin-dark .bg-white,html.cb-admin-dark .hover\:bg-white:hover{background-color:#1b1b1b!important}
+html.cb-admin-dark .focus\:bg-white:focus,html.cb-admin-dark .bg-\[\#fbfcfe\]{background-color:#141414!important}
+html.cb-admin-dark .bg-mist-50,html.cb-admin-dark .bg-slate-50,html.cb-admin-dark .disabled\:bg-mist-50:disabled{background-color:#141414!important}
+html.cb-admin-dark .bg-mist-50\/70,html.cb-admin-dark .bg-mist-50\/60,html.cb-admin-dark .bg-mist-50\/50,html.cb-admin-dark .bg-slate-50\/70{background-color:rgba(20,20,20,.7)!important}
+html.cb-admin-dark .bg-mist-100,html.cb-admin-dark .bg-slate-100{background-color:#262626!important}
+html.cb-admin-dark .bg-mist-200,html.cb-admin-dark .bg-slate-200{background-color:#333!important}
+html.cb-admin-dark .hover\:bg-mist-50:hover,html.cb-admin-dark .hover\:bg-slate-50:hover,html.cb-admin-dark .hover\:bg-mist-100:hover,html.cb-admin-dark .hover\:bg-slate-100:hover{background-color:#262626!important}
+html.cb-admin-dark .text-ink-900,html.cb-admin-dark .text-slate-900{color:#f5f5f5!important}
+html.cb-admin-dark .text-ink-800,html.cb-admin-dark .text-slate-800{color:#ededed!important}
+html.cb-admin-dark .text-ink-700,html.cb-admin-dark .text-slate-700{color:#d4d4d4!important}
+html.cb-admin-dark .text-ink-600,html.cb-admin-dark .text-slate-600{color:#b5b5b5!important}
+html.cb-admin-dark .text-slate-500,html.cb-admin-dark .text-ink-600\/70,html.cb-admin-dark .text-ink-600\/65,html.cb-admin-dark .text-ink-600\/60,html.cb-admin-dark .text-ink-600\/55{color:#a3a3a3!important}
+html.cb-admin-dark .text-slate-400,html.cb-admin-dark .text-ink-600\/50,html.cb-admin-dark .text-ink-600\/45{color:#7d7d7d!important}
+html.cb-admin-dark .text-ink-600\/40,html.cb-admin-dark .text-ink-600\/35{color:#6b6b6b!important}
+html.cb-admin-dark .hover\:text-ink-800:hover,html.cb-admin-dark .hover\:text-slate-700:hover{color:#ededed!important}
+html.cb-admin-dark .border-mist-200,html.cb-admin-dark .border-slate-200{border-color:#2c2c2c!important}
+html.cb-admin-dark .border-mist-100,html.cb-admin-dark .border-slate-100,html.cb-admin-dark .divide-mist-100>:not([hidden])~:not([hidden]),html.cb-admin-dark .divide-slate-100>:not([hidden])~:not([hidden]){border-color:#262626!important}
+html.cb-admin-dark .divide-mist-200>:not([hidden])~:not([hidden]){border-color:#2c2c2c!important}
+html.cb-admin-dark .border-mist-300,html.cb-admin-dark .hover\:border-mist-300:hover{border-color:#3a3a3a!important}
+html.cb-admin-dark .bg-slate-100.text-slate-600,html.cb-admin-dark .bg-slate-100.text-slate-700{background-color:rgba(255,255,255,.08)!important;color:#d4d4d4!important}
+html.cb-admin-dark .cb-app :is(.cb-card,.cb-surface,.cbx-card){background:#1b1b1b!important;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)!important;border-color:#2c2c2c}
+html.cb-admin-dark .cb-app .cbx-sidebar{--cbx-side-bg:#121212;--cbx-side-border:#2c2c2c;--cbx-side-title:#f5f5f5;--cbx-side-sub:#a3a3a3;--cbx-side-group:#8a8a8a;--cbx-side-text:#d4d4d4;--cbx-side-hover-bg:#262626;--cbx-side-hover-text:#fff;--cbx-side-active-bg:rgba(255,143,58,.16);--cbx-side-active-text:#ff8f3a;box-shadow:none}
+html.cb-admin-dark .cb-app .cbx-sidebar .cbx-nav-link.is-active{background:rgba(255,143,58,.16);color:#ff8f3a;border-color:rgba(255,143,58,.32)}
+html.cb-admin-dark .cb-app .cbx-sidebar .cbx-nav-link:hover:not(.is-active){background:#262626;color:#fff}
+html.cb-admin-dark .cb-app .cbx-sidebar .cbx-nav-link:focus-visible{border-color:#ff8f3a}
+html.cb-admin-dark .cb-app .cbx-sidebar .cbx-nav-link.is-active::before{background:#ff8f3a}
+/* --- Admin dark: modals/forms with hard-coded light colours, pricing toggles, no light flash --- */
+html.cb-admin-dark{background:#0f0f0f}
+html.cb-admin-dark .cb-app,html.cb-admin-dark .cb-app main{background:#0f0f0f}
+html.cb-admin-dark .cbx-modal,html.cb-admin-dark .cbx-modal.cbx-modal-fin{background:#1b1b1b;color:#f5f5f5;border:1px solid #2c2c2c}
+html.cb-admin-dark .cbx-modal-fin .cbx-modal-head{border-bottom-color:#2c2c2c}
+html.cb-admin-dark .cbx-modal-fin .cbx-modal-title,html.cb-admin-dark .cbx-modal-title{color:#f5f5f5}
+html.cb-admin-dark .cbx-modal-fin .cbx-modal-foot{border-top-color:#2c2c2c;background:transparent}
+html.cb-admin-dark .cbx-modal-foot{background:#141414}
+html.cb-admin-dark .cbx-modal-fin .cbx-modal-foot .cbx-btn:not(.cbx-btn-primary):not(.cbx-btn-danger){background:#262626;border-color:#3a3a3a;color:#f5f5f5;box-shadow:none}
+html.cb-admin-dark .cbx-modal-fin .cbx-modal-foot .cbx-btn:hover:not(:disabled):not(.cbx-btn-primary):not(.cbx-btn-danger){background:#333}
+html.cb-admin-dark .cbx-modal-wide .cbx-modal-foot .cbx-btn:not(.cbx-btn-primary){background:#262626;border-color:#3a3a3a;color:#f5f5f5;box-shadow:none}
+html.cb-admin-dark .cbx-fin-form label.uppercase,html.cb-admin-dark .cbx-shop-form .shop-f-label{color:#e5e5e5}
+html.cb-admin-dark .cbx-shop-form .shop-f-hint{color:#a3a3a3}
+html.cb-admin-dark .cbx-fin-form :is(input,select,textarea).border-mist-200,html.cb-admin-dark .cbx-fin-form .cbx-fin-wrap,html.cb-admin-dark .cbx-shop-form :is(input:not([type="checkbox"]):not([type="file"]),select,textarea){background-color:#141414;border-color:#3a3a3a;color:#f5f5f5;box-shadow:none}
+html.cb-admin-dark .cbx-fin-form .cbx-fin-wrap input{color:#f5f5f5;background:transparent}
+html.cb-admin-dark .cbx-fin-form :is(input,select,textarea).border-mist-200::placeholder,html.cb-admin-dark .cbx-shop-form :is(input,select,textarea)::placeholder{color:#737373}
+html.cb-admin-dark .cbx-fin-form :is(input,select,textarea).border-mist-200:focus,html.cb-admin-dark .cbx-fin-form .cbx-fin-wrap:focus-within,html.cb-admin-dark .cbx-shop-form :is(input:not([type="checkbox"]):not([type="file"]),select,textarea):focus{border-color:#ff8f3a}
+html.cb-admin-dark .cbx-shop-form :is(input,select,textarea):disabled{background-color:#1b1b1b;color:#737373}
+html.cb-admin-dark :is(.cbx-modal,.cb-premium-dialog,.cb-modal-backdrop) :is(input,select,textarea){background-color:#141414;border-color:#3a3a3a;color:#f5f5f5}
+html.cb-admin-dark :is(.cbx-modal,.cb-premium-dialog,.cb-modal-backdrop) :is(input,select,textarea):focus{border-color:#ff8f3a}
+html.cb-admin-dark :is(.cbx-modal,.cb-premium-dialog,.cb-modal-backdrop) :is(h1,h2,h3,h4,label){color:#f5f5f5}
+html.cb-admin-dark .bg-ink-900{background-color:#2c2c2c!important;color:#f5f5f5}
+html.cb-admin-dark .bg-ink-800,html.cb-admin-dark .bg-ink-700{background-color:#333!important;color:#f5f5f5}
+
 .cb-app :is(.cb-card,.cb-surface,.cbx-card){box-shadow:0 1px 2px rgba(16,24,40,.04)!important;border-radius:16px!important;}
 .cb-app main table th{background:transparent;text-transform:uppercase;letter-spacing:.06em;font-size:12.5px;font-weight:600;color:var(--cbx-muted);border-bottom:1px solid var(--cbx-border);}
 .cb-app main table td{padding-top:16px;padding-bottom:16px;}
