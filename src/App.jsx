@@ -40748,7 +40748,7 @@ const CustomerApp = (() => {
       {children}
     </div>
   );
-  const Top = ({ title, back, right, left }) => {
+  const Top = ({ title, back, right, left, onBack }) => {
     const nav = useNavigate();
     return (
       <header
@@ -40757,7 +40757,7 @@ const CustomerApp = (() => {
       >
         {back && (
           <button
-            onClick={() => nav(-1)}
+            onClick={() => (onBack ? onBack() : nav(-1))}
             aria-label="Back"
             className="w-11 h-11 -ml-1 grid place-items-center rounded-full bg-white/15 active:bg-white/30 transition-colors"
           >
@@ -44382,6 +44382,8 @@ const CustomerApp = (() => {
     // ABA Pay on a phone: the button opens ABA Mobile; the QR is only for paying from another
     // bank app / another phone, so it stays hidden until asked (or until the app did not open).
     const [showQr, setShowQr] = useState(false);
+    const [cancelAsk, setCancelAsk] = useState(false);
+    const [cancelBusy, setCancelBusy] = useState(false);
     const [now, setNow] = useState(Date.now());
     const [resuming, setResuming] = useState(false);
 
@@ -44646,6 +44648,24 @@ const CustomerApp = (() => {
       /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
     const storeLink = isIOS ? links.app_store : links.play_store;
 
+    const cancelPayment = async () => {
+      if (!row?.id || cancelBusy) return;
+      setCancelBusy(true);
+      setErr("");
+      try {
+        const r = await callGw("cancel", { payment_id: row.id });
+        if (r?.payment) applyRow({ ...row, ...r.payment });
+        setCancelAsk(false);
+        return r?.cancelled === true; // false => it was already paid; stay and show the result
+      } catch (e) {
+        setErr(errText(e));
+        setCancelAsk(false);
+        return false;
+      } finally {
+        setCancelBusy(false);
+      }
+    };
+
     const resetAll = () => {
       try {
         localStorage.removeItem(LS_KEY);
@@ -44655,6 +44675,7 @@ const CustomerApp = (() => {
       setRow(null);
       setQrImg(null);
       setShowQr(false);
+      setCancelAsk(false);
       setErr("");
       setStep("amount");
     };
@@ -44693,7 +44714,70 @@ const CustomerApp = (() => {
 
     return (
       <>
-        <Top title={tr("Top Up", "បញ្ចូលទឹកប្រាក់")} back />
+        <Top
+          title={tr("Top Up", "បញ្ចូលទឹកប្រាក់")}
+          back
+          onBack={() => {
+            // Leaving an unpaid QR: ask first, like the banking apps do.
+            if (step === "pay" && row?.overall_status === "pending")
+              setCancelAsk(true);
+            else nav(-1);
+          }}
+        />
+        {cancelAsk &&
+          createPortal(
+            <div
+              className="fixed inset-0 z-[9999] grid place-items-center bg-slate-900/60 px-6"
+              onClick={() => !cancelBusy && setCancelAsk(false)}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="w-full max-w-sm rounded-2xl bg-white p-5 text-center text-slate-900 shadow-xl"
+              >
+                <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-amber-50 text-amber-500">
+                  <WarnIcon size={30} />
+                </div>
+                <h3 className="mt-3 text-[15px] font-bold">
+                  {tr("Payment", "ការបង់ប្រាក់")}
+                </h3>
+                <p className="mt-1 text-sm text-slate-600">
+                  {tr(
+                    "Are you sure you want to cancel this payment?",
+                    "តើអ្នកប្រាកដថាចង់បោះបង់ការបង់ប្រាក់នេះមែនទេ?",
+                  )}
+                </p>
+                <p className="mt-1 text-xs text-slate-400">
+                  {tr(
+                    "Do not pay this QR after cancelling.",
+                    "សូមកុំបង់ប្រាក់តាម QR នេះ បន្ទាប់ពីបោះបង់។",
+                  )}
+                </p>
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    disabled={cancelBusy}
+                    onClick={() => setCancelAsk(false)}
+                    className="rounded-xl border border-slate-200 bg-white py-3 text-sm font-semibold text-slate-700"
+                  >
+                    {tr("Keep paying", "បន្តបង់")}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={cancelBusy}
+                    onClick={async () => {
+                      if (await cancelPayment()) nav(-1);
+                    }}
+                    className="rounded-xl bg-red-600 py-3 text-sm font-bold text-white disabled:opacity-60"
+                  >
+                    {cancelBusy
+                      ? tr("Cancelling…", "កំពុងបោះបង់…")
+                      : tr("OK", "យល់ព្រម")}
+                  </button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )}
         <div className="px-4 pt-4 pb-10 space-y-4">
           {resuming && (
             <Card className="p-6 text-center">
