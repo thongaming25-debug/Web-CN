@@ -6267,20 +6267,19 @@ function PaginationBar({
       "inline-flex h-9 w-10 items-center justify-center rounded-lg border border-mist-200 bg-white text-ink-700 hover:bg-mist-50 disabled:opacity-40 disabled:cursor-not-allowed";
     return (
       <div className="flex items-center justify-end gap-x-6 gap-y-2 flex-wrap px-4 lg:px-5 py-3 border-t border-mist-200 text-sm text-ink-700">
-        <label className="flex items-center gap-2">
+        <div className="flex items-center gap-2">
           Rows per page
-          <select
-            value={pageSize}
-            onChange={(e) => onPageSize(Number(e.target.value))}
-            className="h-9 rounded-lg border border-mist-200 bg-white px-2.5 text-sm"
-          >
-            {pageSizes.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-        </label>
+          <CbSelect
+            compact
+            className="w-[84px]"
+            value={String(pageSize)}
+            onChange={(v) => v && onPageSize(Number(v))}
+            options={pageSizes.map((n) => ({
+              value: String(n),
+              label: String(n),
+            }))}
+          />
+        </div>
         <span>
           {from} to {to} of {total.toLocaleString("en-US")} results
         </span>
@@ -20814,6 +20813,8 @@ function CbSelect({
   searchable,
   disabled = false,
   compact = false,
+  icon,
+  className = "",
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState(null);
@@ -20919,8 +20920,9 @@ function CbSelect({
       ?.scrollIntoView({ block: "nearest" });
   }, [active, open, pos]);
 
+  const LeadIcon = icon ? Icons[icon] || null : null;
   return (
-    <div className="relative">
+    <div className={`relative ${className}`}>
       <button
         ref={btnRef}
         id={id}
@@ -20936,8 +20938,9 @@ function CbSelect({
             : "h-12 rounded-lg text-[15px] shadow-sm"
         } ${open ? "border-blue-500" : compact ? "border-slate-200" : "border-slate-300"}`}
       >
+        {LeadIcon && <LeadIcon size={15} className="shrink-0 text-slate-500" />}
         <span
-          className={`truncate ${
+          className={`truncate ${LeadIcon ? "flex-1" : ""} ${
             selected
               ? compact
                 ? "text-slate-800"
@@ -26720,9 +26723,21 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
         (s, r) => s + Math.abs(finNum(r.amount, r.amount_usd, r.value) ?? 0),
         0,
       );
-  const adminTopUp = walletSum(["top_up"]);
+  // Online (ABA PayWay) top ups are written by the payment gateway with
+  // created_by = "ABA PayWay"; they are not cash collected by staff.
+  const isOnlineTopUp = (r) => String(r.created_by || "") === "ABA PayWay";
+  const onlineTopUp = wallet
+    .filter(
+      (r) =>
+        String(r.type || "").toLowerCase() === "top_up" && isOnlineTopUp(r),
+    )
+    .reduce(
+      (s, r) => s + Math.abs(finNum(r.amount, r.amount_usd, r.value) ?? 0),
+      0,
+    );
+  const adminTopUp = walletSum(["top_up"]) - onlineTopUp;
   const topUpReversed = walletSum(["top_up_reversal"]);
-  const topUpGrand = adminTopUp - topUpReversed;
+  const topUpGrand = adminTopUp + onlineTopUp - topUpReversed;
   const productOrderWallet =
     walletSum(["shop_order_payment_wallet"]) -
     walletSum(["shop_order_refund_wallet"]);
@@ -27078,13 +27093,18 @@ function FinancialDashboard({ showChina, onRefresh, refreshing }) {
                   value: finMoney(adminTopUp),
                 },
                 {
+                  label: "Online Top Up (ABA PayWay)",
+                  value: finMoney(onlineTopUp),
+                  hint: "Paid by customers through the app",
+                },
+                {
                   label: "Top Up Reversed",
                   value: finMoney(topUpReversed),
                 },
                 {
                   label: "Grand Total",
                   value: finMoney(topUpGrand),
-                  hint: "Top up minus reversals",
+                  hint: "Admin + online top up minus reversals",
                   grand: true,
                 },
               ]}
@@ -81421,6 +81441,30 @@ const PG_OVERALL_STATUS = {
   cancelled: ["Cancelled", "bg-slate-100 text-slate-600"],
 };
 
+function PgSelect({
+  icon,
+  value,
+  onChange,
+  options,
+  placeholder,
+  clearLabel,
+  width = "w-[170px]",
+}) {
+  return (
+    <CbSelect
+      compact
+      icon={icon}
+      className={`${width} shrink-0`}
+      value={value}
+      onChange={onChange}
+      options={options}
+      placeholder={placeholder}
+      allowClear
+      clearLabel={clearLabel || placeholder}
+    />
+  );
+}
+
 function PgBadge({ map, value }) {
   const [label, tone] = map[value] || [
     value || "—",
@@ -81493,6 +81537,7 @@ function PaymentGatewayPage() {
   const location = useLocation();
   const { user } = useAuth();
   const canTx = hasPermission(user, "payment_gateway.transactions");
+  const canRecon = hasPermission(user, "payment_gateway.reconcile");
   const initialTab = new URLSearchParams(location.search).get("tab");
   const [tab, setTab] = useState(
     initialTab === "transactions" && canTx
@@ -81519,9 +81564,12 @@ function PaymentGatewayPage() {
   // transactions
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
+  const [paidTotal, setPaidTotal] = useState(0);
+  const [verifyingId, setVerifyingId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  const [searchField, setSearchField] = useState("transaction");
   const [search, setSearch] = useState("");
   const [statusF, setStatusF] = useState("");
   const [methodF, setMethodF] = useState("");
@@ -81612,6 +81660,7 @@ function PaymentGatewayPage() {
         p_limit: pageSize,
         p_offset: page * pageSize,
         p_bank: bankF || null,
+        p_field: searchField,
       });
       if (!alive) return;
       if (e) {
@@ -81622,6 +81671,7 @@ function PaymentGatewayPage() {
         setError("");
         setRows(data?.rows || []);
         setTotal(Number(data?.total) || 0);
+        setPaidTotal(Number(data?.paid_total) || 0);
       }
       setLoading(false);
     })();
@@ -81636,6 +81686,7 @@ function PaymentGatewayPage() {
     methodF,
     bankF,
     search,
+    searchField,
     page,
     pageSize,
     reload,
@@ -81685,6 +81736,7 @@ function PaymentGatewayPage() {
           p_limit: 100,
           p_offset: off,
           p_bank: bankF || null,
+          p_field: searchField,
         });
         if (e) throw e;
         all.push(...(data?.rows || []));
@@ -81773,42 +81825,59 @@ function PaymentGatewayPage() {
   const S = stats;
   const sv = (v, fmt = (x) => x) => (statsLoading ? sk : S ? fmt(v) : "—");
 
+  const verifyRow = async (r) => {
+    setVerifyingId(r.id);
+    try {
+      const out = await pgCall("admin-recheck", { payment_id: r.id });
+      emitCBToast(
+        "ok",
+        out?.result === "credited" ? "Payment confirmed" : "Checked with ABA",
+        out?.result === "credited"
+          ? "The payment was confirmed and added to the customer's wallet."
+          : "ABA has not confirmed this payment yet.",
+      );
+      setReload((n) => n + 1);
+    } catch (e) {
+      emitCBToast("err", "Verify failed", pgErrText(e));
+    } finally {
+      setVerifyingId(null);
+    }
+  };
+  const bankTone = (name) => {
+    const n = String(name || "").toUpperCase();
+    if (n.includes("ABA")) return "bg-blue-50 text-blue-700";
+    if (n.includes("WING")) return "bg-emerald-50 text-emerald-700";
+    if (n.includes("ACLEDA")) return "bg-indigo-50 text-indigo-700";
+    return "bg-slate-100 text-slate-700";
+  };
+
   const cols = [
+    {
+      key: "created",
+      label: "Created At",
+      render: (r) => (
+        <>
+          <div className="font-semibold text-slate-900">
+            {cdDate(r.created_at)}
+          </div>
+          <div className="text-[12px] text-slate-500">
+            {cdTime(r.created_at)}{" "}
+            <span className="font-semibold text-blue-600">
+              · {timeAgoLabel(r.created_at)}
+            </span>
+          </div>
+        </>
+      ),
+    },
     {
       key: "ref",
       label: "Transaction ID",
       render: (r) => (
-        <span className="font-mono text-[12px] font-semibold text-slate-800">
-          {r.merchant_ref}
-        </span>
-      ),
-    },
-    {
-      key: "cid",
-      label: "Customer ID",
-      render: (r) => (
-        <span className="font-semibold text-blue-700">
-          {r.customer_code ? fmtCustomerId(r.customer_code) : "—"}
-        </span>
-      ),
-    },
-    {
-      key: "cname",
-      label: "Customer Name",
-      render: (r) => (
-        <span className="text-slate-800">{r.customer_name || "—"}</span>
-      ),
-    },
-    {
-      key: "gw",
-      label: "Gateway",
-      render: () => <span className="text-slate-600">ABA PayWay</span>,
-    },
-    {
-      key: "method",
-      label: "Method",
-      render: (r) => (
-        <span className="font-semibold">{pgMethodLabel(r.method)}</span>
+        <HoverCopy value={r.merchant_ref} label="Copy transaction ID">
+          <span className="font-mono text-[12.5px] font-semibold text-slate-800">
+            {r.merchant_ref}
+          </span>
+        </HoverCopy>
       ),
     },
     {
@@ -81816,7 +81885,9 @@ function PaymentGatewayPage() {
       label: "Bank Name",
       render: (r) =>
         r.bank_name ? (
-          <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-bold text-slate-700">
+          <span
+            className={`rounded-md px-2 py-1 text-[11px] font-extrabold uppercase ${bankTone(r.bank_name)}`}
+          >
             {r.bank_name}
           </span>
         ) : (
@@ -81824,64 +81895,82 @@ function PaymentGatewayPage() {
         ),
     },
     {
-      key: "bank",
-      label: "Bank Ref",
+      key: "cid",
+      label: "Customer",
       render: (r) => (
-        <span className="font-mono text-[12px] text-slate-500">
-          {r.bank_ref || "—"}
-        </span>
+        <>
+          {r.customer_code ? (
+            <HoverCopy
+              value={fmtCustomerId(r.customer_code)}
+              label="Copy customer ID"
+            >
+              <span className="font-semibold text-blue-700">
+                {fmtCustomerId(r.customer_code)}
+              </span>
+            </HoverCopy>
+          ) : (
+            <div className="font-semibold text-blue-700">—</div>
+          )}
+          <div className="max-w-[180px] truncate text-[12px] text-slate-500">
+            {r.customer_name || ""}
+          </div>
+        </>
+      ),
+    },
+    {
+      key: "method",
+      label: "Payment Option",
+      render: (r) => (
+        <span className="text-slate-800">{pgMethodLabel(r.method)}</span>
       ),
     },
     {
       key: "amount",
       label: "Amount",
       numeric: true,
-      render: (r) => <span className="font-bold">{money(r.amount)}</span>,
-    },
-    {
-      key: "cur",
-      label: "Currency",
-      render: (r) => <span className="text-slate-500">{r.currency}</span>,
-    },
-    {
-      key: "ps",
-      label: "Payment Status",
-      render: (r) => <PgBadge map={PG_PAY_STATUS} value={r.payment_status} />,
-    },
-    {
-      key: "ws",
-      label: "Wallet Status",
-      render: (r) => <PgBadge map={PG_WALLET_STATUS} value={r.wallet_status} />,
+      render: (r) => (
+        <span className="font-bold text-slate-900">{money(r.amount)}</span>
+      ),
     },
     {
       key: "os",
-      label: "Overall",
-      render: (r) => (
-        <PgBadge map={PG_OVERALL_STATUS} value={r.overall_status} />
-      ),
+      label: "Status",
+      render: (r) => {
+        const rev = Number(r.reversed_amount) || 0;
+        return (
+          <div className="flex flex-col items-start gap-1">
+            <PgBadge map={PG_OVERALL_STATUS} value={r.overall_status} />
+            {rev > 0 && (
+              <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-bold text-red-600">
+                {rev >= Number(r.amount)
+                  ? "Reversed"
+                  : `Reversed ${money(rev)}`}
+              </span>
+            )}
+          </div>
+        );
+      },
     },
     {
-      key: "created",
-      label: "Created",
-      render: (r) => (
-        <>
-          <div className="font-semibold text-slate-800">
-            {cdDate(r.created_at)}
-          </div>
-          <div className="text-[11px] text-slate-400">
-            {cdTime(r.created_at)}
-          </div>
-        </>
-      ),
-    },
-    {
-      key: "paid",
-      label: "Paid",
-      render: (r) => (
-        <span className="text-slate-500">
-          {r.paid_at ? pgDateTime(r.paid_at) : "—"}
-        </span>
-      ),
+      key: "act",
+      label: "",
+      render: (r) =>
+        canRecon &&
+        (r.overall_status === "pending" ||
+          r.overall_status === "needs_review") ? (
+          <button
+            type="button"
+            disabled={verifyingId === r.id}
+            onClick={(e) => {
+              e.stopPropagation();
+              verifyRow(r);
+            }}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-500 bg-white px-3 text-xs font-bold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+          >
+            <Icons.Check size={14} />{" "}
+            {verifyingId === r.id ? "Checking…" : "Verify"}
+          </button>
+        ) : null,
     },
   ];
 
@@ -81979,39 +82068,61 @@ function PaymentGatewayPage() {
     </div>
   );
 
-  const tabBtn = (key, label, icon) => {
-    const Ic = Icons[icon] || Icons.Circle;
-    return (
-      <button
-        key={key}
-        type="button"
-        onClick={() => setTab(key)}
-        className={`flex h-10 items-center gap-2 rounded-xl px-4 text-sm font-bold transition-colors ${
+  const tabBtn = (key, label, count) => (
+    <button
+      key={key}
+      type="button"
+      onClick={() => setTab(key)}
+      className={`group relative flex items-center gap-2 px-4 pb-3 text-[15px] font-semibold transition-colors ${
+        tab === key ? "text-blue-600" : "text-slate-500 hover:text-slate-800"
+      }`}
+    >
+      {label}
+      {count != null && (
+        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">
+          {count}
+        </span>
+      )}
+      <span
+        className={`absolute inset-x-2 -bottom-px h-0.5 rounded transition-colors ${
           tab === key
-            ? "bg-blue-600 text-white"
-            : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"
+            ? "bg-blue-600"
+            : "bg-transparent group-hover:bg-slate-300"
         }`}
-      >
-        <Ic size={15} /> {label}
-      </button>
-    );
-  };
+      />
+    </button>
+  );
 
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const filterBar = (
     <div className="mb-4 flex flex-wrap items-center gap-2">
       {tab === "transactions" && (
-        <div className="relative min-w-[220px] flex-1 sm:max-w-xs">
-          <Icons.Search
-            size={15}
-            className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+        <div className="flex h-10 min-w-[300px] flex-1 items-center rounded-xl border border-slate-200 bg-white transition-colors hover:border-slate-300 focus-within:border-blue-500 focus-within:hover:border-blue-500 sm:max-w-xl">
+          <CbSelect
+            compact
+            icon="ListFilter"
+            className="h-full w-[215px] shrink-0 border-r border-slate-200 [&_button]:!h-full [&_button]:!rounded-l-xl [&_button]:!rounded-r-none [&_button]:!border-0 [&_button]:font-semibold"
+            value={searchField}
+            onChange={(v) => {
+              setSearchField(v || "transaction");
+              setPage(0);
+            }}
+            options={[
+              { value: "transaction", label: "Transaction ID" },
+              { value: "customer_id", label: "Customer ID" },
+              { value: "customer_name", label: "Customer Name" },
+            ]}
           />
           <input
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Transaction ID, Customer ID, name, bank…"
-            className="h-10 w-full rounded-xl border border-slate-200 pl-9 pr-3 text-sm outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+            placeholder={`Search ${searchField === "customer_id" ? "Customer ID" : searchField === "customer_name" ? "Customer Name" : "Transaction ID"}`}
+            style={{ outline: "none", boxShadow: "none", border: 0 }}
+            className="h-full min-w-0 flex-1 bg-transparent px-3 text-sm placeholder:text-slate-400"
           />
+          <span className="flex h-full w-10 shrink-0 items-center justify-center border-l border-slate-200 text-slate-400">
+            <Icons.Search size={15} />
+          </span>
         </div>
       )}
       <DateRangeFilter
@@ -82024,63 +82135,77 @@ function PaymentGatewayPage() {
       />
       {tab === "transactions" && (
         <>
-          <select
+          <PgSelect
+            icon="CircleDot"
+            placeholder="Status"
+            clearLabel="All statuses"
             value={statusF}
-            onChange={(e) => {
-              setStatusF(e.target.value);
+            onChange={(v) => {
+              setStatusF(v);
               setPage(0);
             }}
-            className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm"
-          >
-            <option value="">All statuses</option>
-            {Object.entries(PG_OVERALL_STATUS).map(([k, [l]]) => (
-              <option key={k} value={k}>
-                {l}
-              </option>
-            ))}
-          </select>
-          <select
+            options={Object.entries(PG_OVERALL_STATUS).map(([k, [l]]) => ({
+              value: k,
+              label: l,
+            }))}
+          />
+          <PgSelect
+            icon="QrCode"
+            placeholder="Payment option"
+            clearLabel="All options"
+            width="w-[190px]"
             value={methodF}
-            onChange={(e) => {
-              setMethodF(e.target.value);
+            onChange={(v) => {
+              setMethodF(v);
               setPage(0);
             }}
-            className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm"
-          >
-            <option value="">All methods</option>
-            <option value="aba_pay">ABA Pay</option>
-            <option value="khqr">KHQR</option>
-          </select>
-          <select
+            options={[
+              { value: "aba_pay", label: "ABA Pay" },
+              { value: "khqr", label: "KHQR" },
+            ]}
+          />
+          <PgSelect
+            icon="Landmark"
+            placeholder="Bank Name"
+            clearLabel="All banks"
             value={bankF}
-            onChange={(e) => {
-              setBankF(e.target.value);
+            onChange={(v) => {
+              setBankF(v);
               setPage(0);
             }}
-            className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm"
-            title="Payer bank (as reported by ABA)"
-          >
-            <option value="">All banks</option>
-            {banks.map((b) => (
-              <option key={b} value={b}>
-                {b}
-              </option>
-            ))}
-          </select>
+            options={banks.map((b) => ({ value: b, label: b }))}
+          />
+          {(statusF || methodF || bankF || searchInput) && (
+            <button
+              type="button"
+              onClick={() => {
+                setStatusF("");
+                setMethodF("");
+                setBankF("");
+                setSearchInput("");
+                setPage(0);
+              }}
+              className="flex h-10 items-center gap-1.5 rounded-xl bg-red-50 px-3 text-sm font-semibold text-red-600 hover:bg-red-100"
+            >
+              <Icons.X size={14} /> Clear
+            </button>
+          )}
         </>
       )}
-      <select
+      <CbSelect
+        compact
+        icon="Database"
+        className="w-[170px] shrink-0"
         value={env}
-        onChange={(e) => {
-          setEnv(e.target.value);
+        onChange={(v) => {
+          setEnv(v || "sandbox");
           setPage(0);
         }}
-        className="h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm"
-        title="Which environment's records to show (does not change how payments are processed)"
-      >
-        <option value="sandbox">Sandbox data</option>
-        <option value="production">Production data</option>
-      </select>
+        options={[
+          { value: "sandbox", label: "Sandbox data" },
+          { value: "production", label: "Production data" },
+        ]}
+      />
       <div className="ml-auto flex items-center gap-2">
         {tab === "transactions" && canTx && (
           <button
@@ -82110,8 +82235,8 @@ function PaymentGatewayPage() {
 
   return (
     <div className="w-full min-w-0">
-      <div className="mb-5 flex flex-wrap items-center gap-3">
-        <h1 className="cb-page-title text-2xl font-extrabold text-slate-900">
+      <div className="mb-6 flex flex-wrap items-center gap-3">
+        <h1 className="cb-page-title text-3xl font-extrabold tracking-tight text-slate-900 sm:text-4xl">
           Payment Gateway
         </h1>
         {cfg && (
@@ -82128,13 +82253,18 @@ function PaymentGatewayPage() {
         )}
       </div>
 
-      <div className="mb-5 flex flex-wrap gap-2">
-        {tabBtn("overview", "Overview", "LayoutDashboard")}
-        {canTx && tabBtn("transactions", "All Transactions", "List")}
-        {tabBtn("settings", "Gateway Settings", "Settings")}
+      <div className="mb-6 flex flex-wrap gap-1 border-b border-slate-200">
+        {tabBtn("overview", "Overview")}
+        {canTx &&
+          tabBtn(
+            "transactions",
+            "All Transactions",
+            tab === "transactions" && !loading ? total : null,
+          )}
+        {tabBtn("settings", "Gateway Settings")}
       </div>
 
-      {tab !== "settings" && filterBar}
+      {tab === "overview" && filterBar}
 
       {/* ---------------- Overview ---------------- */}
       {tab === "overview" && (
@@ -82202,6 +82332,9 @@ function PaymentGatewayPage() {
               "bg-emerald-500",
               "Total Wallet Credited",
               sv(S?.credited, money),
+              S && Number(S.reversed) > 0
+                ? `Reversed by staff: ${money(S.reversed)}`
+                : undefined,
             )}
             {stat(
               "TriangleAlert",
@@ -82284,39 +82417,80 @@ function PaymentGatewayPage() {
 
       {/* ---------------- Transactions ---------------- */}
       {tab === "transactions" && canTx && (
-        <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="overflow-hidden rounded-xl border border-slate-200">
-            <DataTable
-              caption="Payment gateway transactions"
-              columns={cols}
-              rows={rows}
-              rowKey={(r) => r.id}
-              rowClassName={(r) =>
-                r.overall_status === "needs_review" ? "bg-red-50/60" : ""
-              }
-              loading={loading && rows.length === 0}
-              skeletonRows={6}
-              minWidth={1280}
-              onRowClick={(r) => navigate(`/payment-gateway/${r.id}`)}
-              error={error ? { title: error } : null}
-              onRetry={() => setReload((n) => n + 1)}
-              emptyTitle="No transactions found."
-              emptyHint="Try another date range, status or search."
-            />
-            <PaginationBar
-              page={page}
-              pageCount={pageCount}
-              total={total}
-              shown={rows.length}
-              onPage={setPage}
-              pageSize={pageSize}
-              onPageSize={(n) => {
-                setPageSize(n);
-                setPage(0);
-              }}
-            />
+        <>
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div>
+              <div className="text-sm font-medium text-slate-500">
+                Total Received
+              </div>
+              <div className="mt-1 text-3xl font-extrabold tracking-tight text-slate-900">
+                {loading ? (
+                  <Skeleton className="h-9 w-32 rounded-lg" />
+                ) : (
+                  money(paidTotal)
+                )}
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-sm font-medium text-slate-500">
+                Transactions
+              </div>
+              <div className="mt-1 flex justify-end text-2xl font-extrabold text-slate-900">
+                {loading ? <Skeleton className="h-8 w-12 rounded-lg" /> : total}
+              </div>
+              <div className="text-sm text-slate-400">
+                matching the table filters
+              </div>
+            </div>
+            <div className="flex basis-full items-center gap-1.5 text-xs text-slate-400">
+              <Icons.Info size={14} />
+              Paid ·{" "}
+              {(() => {
+                const r = resolveDateRange(dateRange);
+                return !r.from && !r.to
+                  ? "All time"
+                  : r.from === r.to
+                    ? r.from
+                    : `${r.from || "…"} – ${r.to || "…"}`;
+              })()}{" "}
+              · {bankF || "All banks"}
+            </div>
           </div>
-        </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            {filterBar}
+            <div className="overflow-hidden rounded-xl border border-slate-200">
+              <DataTable
+                caption="Payment gateway transactions"
+                columns={cols}
+                rows={rows}
+                rowKey={(r) => r.id}
+                rowClassName={(r) =>
+                  r.overall_status === "needs_review" ? "bg-red-50/60" : ""
+                }
+                loading={loading}
+                skeletonRows={Math.min(pageSize, 8)}
+                minWidth={980}
+                onRowClick={(r) => navigate(`/payment-gateway/${r.id}`)}
+                error={error ? { title: error } : null}
+                onRetry={() => setReload((n) => n + 1)}
+                emptyTitle="No transactions found."
+                emptyHint="Try another date range, status or search."
+              />
+              <PaginationBar
+                page={page}
+                pageCount={pageCount}
+                total={total}
+                shown={rows.length}
+                onPage={setPage}
+                pageSize={pageSize}
+                onPageSize={(n) => {
+                  setPageSize(n);
+                  setPage(0);
+                }}
+              />
+            </div>
+          </div>
+        </>
       )}
 
       {/* ---------------- Settings ---------------- */}
@@ -82328,7 +82502,17 @@ function PaymentGatewayPage() {
             </p>
           )}
           {cfgLoading && !cfg ? (
-            <Skeleton className="h-64 w-full rounded-xl" />
+            <div className="divide-y divide-slate-100" aria-busy="true">
+              {Array.from({ length: 10 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="flex items-center justify-between gap-6 py-3.5"
+                >
+                  <Skeleton className="h-4 w-44 rounded-md" delay={i * 40} />
+                  <Skeleton className="h-4 w-36 rounded-md" delay={i * 40} />
+                </div>
+              ))}
+            </div>
           ) : cfg ? (
             <>
               <div className="divide-y divide-slate-100 text-sm">
@@ -82510,9 +82694,28 @@ function PaymentGatewayDetailPage() {
 
   if (loading && !d) {
     return (
-      <div className="space-y-4">
-        <Skeleton className="h-10 w-72 rounded-xl" />
-        <Skeleton className="h-64 w-full rounded-2xl" />
+      <div className="space-y-5" aria-busy="true">
+        <Skeleton className="h-4 w-36 rounded-md" />
+        <div className="flex flex-wrap items-center gap-3">
+          <Skeleton className="h-9 w-72 rounded-xl" />
+          <Skeleton className="h-7 w-24 rounded-full" />
+        </div>
+        <div className="grid gap-4 lg:grid-cols-2">
+          {[0, 1].map((c) => (
+            <div
+              key={c}
+              className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+            >
+              <Skeleton className="h-5 w-48 rounded-md" />
+              {Array.from({ length: 7 }).map((_, i) => (
+                <div key={i} className="flex justify-between gap-6">
+                  <Skeleton className="h-4 w-32 rounded-md" delay={i * 40} />
+                  <Skeleton className="h-4 w-40 rounded-md" delay={i * 40} />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -82693,6 +82896,16 @@ function PaymentGatewayDetailPage() {
             "Wallet status",
             <PgBadge map={PG_WALLET_STATUS} value={p.wallet_status} />,
           ),
+          ...(Number(d.reversed_amount) > 0
+            ? [
+                row(
+                  "Reversed by staff",
+                  <span className="font-bold text-red-600">
+                    −{money(d.reversed_amount)}
+                  </span>,
+                ),
+              ]
+            : []),
           row("Created", pgDateTime(p.created_at)),
           row("Expires", pgDateTime(p.expires_at)),
           row("Paid", pgDateTime(p.paid_at)),
@@ -82823,9 +83036,11 @@ async function deleteWalletTransactions(ids, adjustBalance) {
     throw new Error(
       /does not exist|schema cache/i.test(m)
         ? "Run delete_wallet_transactions.sql in Supabase first."
-        : /permission_denied/.test(m)
-          ? "Only Super Admin can delete transactions."
-          : m || "Unable to delete transactions",
+        : /online_top_up_cannot_be_deleted/.test(m)
+          ? "Online (ABA) top ups cannot be deleted. Reverse the top up instead."
+          : /permission_denied/.test(m)
+            ? "Only Super Admin can delete transactions."
+            : m || "Unable to delete transactions",
     );
   }
   return data || {};
@@ -83343,9 +83558,6 @@ function PaymentsPage() {
       </span>
     </button>
   );
-  const selCls =
-    "h-10 rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10";
-
   return (
     <div className="w-full min-w-0">
       <h1 className="cb-page-title mb-4 text-2xl font-extrabold text-slate-900">
@@ -83433,38 +83645,47 @@ function PaymentsPage() {
             value={dateRange}
             onChange={setDateRange}
           />
-          <select
+          <CbSelect
+            compact
+            className="w-[170px] shrink-0"
             value={fType}
-            onChange={(e) => setFType(e.target.value)}
-            className={selCls}
-            aria-label="Payment type"
-          >
-            <option value="">Payment Type</option>
-            <option value="Shipping Fee">Shipping Fee</option>
-            <option value="CN Order">CN Order</option>
-            <option value="Product Order">Product Order</option>
-          </select>
-          <select
+            onChange={setFType}
+            placeholder="Payment Type"
+            allowClear
+            clearLabel="All types"
+            options={[
+              { value: "Shipping Fee", label: "Shipping Fee" },
+              { value: "CN Order", label: "CN Order" },
+              { value: "Product Order", label: "Product Order" },
+            ]}
+          />
+          <CbSelect
+            compact
+            className="w-[190px] shrink-0"
             value={fMethod}
-            onChange={(e) => setFMethod(e.target.value)}
-            className={selCls}
-            aria-label="Payment method"
-          >
-            <option value="">Payment Method</option>
-            <option value="Wallet">Wallet</option>
-            <option value="Cash">Cash</option>
-          </select>
-          <select
+            onChange={setFMethod}
+            placeholder="Payment Method"
+            allowClear
+            clearLabel="All methods"
+            options={[
+              { value: "Wallet", label: "Wallet" },
+              { value: "Cash", label: "Cash" },
+            ]}
+          />
+          <CbSelect
+            compact
+            className="w-[180px] shrink-0"
             value={fBy}
-            onChange={(e) => setFBy(e.target.value)}
-            className={selCls}
-            aria-label="Paid by"
-          >
-            <option value="">User Paid By</option>
-            <option value="customer">Customer</option>
-            <option value="admin">Admin</option>
-            <option value="unknown">Unknown</option>
-          </select>
+            onChange={setFBy}
+            placeholder="User Paid By"
+            allowClear
+            clearLabel="All users"
+            options={[
+              { value: "customer", label: "Customer" },
+              { value: "admin", label: "Admin" },
+              { value: "unknown", label: "Unknown" },
+            ]}
+          />
           {hasFilter && (
             <button
               type="button"
@@ -84697,7 +84918,14 @@ function WalletTopUpPage() {
       key: "created_by",
       label: "By",
       render: (r) => (
-        <span className="text-slate-500">{r.created_by || "—"}</span>
+        <span className="inline-flex items-center gap-1.5 text-slate-500">
+          {r.created_by || "—"}
+          {r.created_by === "ABA PayWay" && (
+            <span className="rounded-md bg-blue-50 px-1.5 py-0.5 text-[10px] font-extrabold uppercase text-blue-700">
+              Online
+            </span>
+          )}
+        </span>
       ),
     },
   ];
@@ -85021,6 +85249,24 @@ function WalletTopUpDetailPage() {
   const company = useSystemSettings()?.company;
   const [copied, setCopied] = useState(false);
   const [reload, setReload] = useState(0);
+  // Online (ABA) top up: link back to its Payment Gateway record (needs gateway permission).
+  const [gwPayId, setGwPayId] = useState(null);
+  useEffect(() => {
+    if (
+      !supabase ||
+      !tx ||
+      tx.created_by !== "ABA PayWay" ||
+      tx.type !== "top_up"
+    )
+      return undefined;
+    let alive = true;
+    supabase
+      .rpc("payment_gateway_find_by_wallet_tx", { p_wallet_tx: String(tx.id) })
+      .then(({ data }) => alive && setGwPayId(data || null));
+    return () => {
+      alive = false;
+    };
+  }, [tx]);
 
   useEffect(() => {
     let alive = true;
@@ -85438,6 +85684,16 @@ function WalletTopUpDetailPage() {
                   {section("Source of funds")}
                   {row("Method", method || "—")}
                   {row("Note", note || "—")}
+                  {gwPayId &&
+                    row(
+                      "Payment record",
+                      <Link
+                        to={`/payment-gateway/${gwPayId}`}
+                        className="font-semibold text-blue-700 hover:underline"
+                      >
+                        View in Payment Gateway
+                      </Link>,
+                    )}
 
                   {section("Approval")}
                   {row("Proceed By", tx.created_by || "—")}
