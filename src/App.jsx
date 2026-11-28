@@ -13844,6 +13844,7 @@ function WarehouseFormModal({ open, type, existing, onClose, onSave }) {
         </>
       }
       maxW="max-w-lg"
+      className="cbx-modal-fin"
       onClose={onClose}
       onSubmit={submit}
       busy={saving}
@@ -13851,83 +13852,85 @@ function WarehouseFormModal({ open, type, existing, onClose, onSave }) {
       submitLabel="Save"
       busyLabel="កំពុងSave..."
     >
-      {fields.map(([key, label]) => {
-        if (
-          isKh &&
-          (key === "province" || key === "district" || key === "commune")
-        ) {
-          // Pick from the Address master data so names always match what
-          // customers choose (Admin → Address).
-          const po = khTree.find((r) => khMatch(r, v.province));
-          const dO = po?.[3].find((r) => khMatch(r, v.district));
-          const opts =
-            key === "province"
-              ? khTree
-              : key === "district"
-                ? po?.[3] || []
-                : dO?.[3] || [];
-          const cur = v[key] || "";
-          const known = !cur || opts.some((r) => khMatch(r, cur));
+      <div className="cbx-fin-form flex flex-col gap-5">
+        {fields.map(([key, label]) => {
+          if (
+            isKh &&
+            (key === "province" || key === "district" || key === "commune")
+          ) {
+            // Pick from the Address master data so names always match what
+            // customers choose (Admin → Address).
+            const po = khTree.find((r) => khMatch(r, v.province));
+            const dO = po?.[3].find((r) => khMatch(r, v.district));
+            const opts =
+              key === "province"
+                ? khTree
+                : key === "district"
+                  ? po?.[3] || []
+                  : dO?.[3] || [];
+            const cur = v[key] || "";
+            const known = !cur || opts.some((r) => khMatch(r, cur));
+            return (
+              <div key={key}>
+                <label className={LABEL_CLS}>{label}</label>
+                <select
+                  value={cur}
+                  disabled={
+                    (key === "district" && !v.province) ||
+                    (key === "commune" && !v.district)
+                  }
+                  onChange={(e) =>
+                    setV((x) => ({
+                      ...x,
+                      [key]: e.target.value,
+                      ...(key === "province"
+                        ? { district: "", commune: "" }
+                        : {}),
+                      ...(key === "district" ? { commune: "" } : {}),
+                    }))
+                  }
+                  className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
+                >
+                  <option value="">— Select —</option>
+                  {!known && <option value={cur}>{cur}</option>}
+                  {opts.map((r) => (
+                    <option key={r[0]} value={r[2]}>
+                      {r[2]}
+                      {r[1] ? ` · ${r[1]}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            );
+          }
           return (
             <div key={key}>
               <label className={LABEL_CLS}>{label}</label>
-              <select
-                value={cur}
-                disabled={
-                  (key === "district" && !v.province) ||
-                  (key === "commune" && !v.district)
-                }
-                onChange={(e) =>
-                  setV((x) => ({
-                    ...x,
-                    [key]: e.target.value,
-                    ...(key === "province"
-                      ? { district: "", commune: "" }
-                      : {}),
-                    ...(key === "district" ? { commune: "" } : {}),
-                  }))
-                }
+              <input
+                value={v[key] ?? ""}
+                disabled={key === "code" && !!existing}
+                onChange={(e) => setV((x) => ({ ...x, [key]: e.target.value }))}
                 className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
-              >
-                <option value="">— Select —</option>
-                {!known && <option value={cur}>{cur}</option>}
-                {opts.map((r) => (
-                  <option key={r[0]} value={r[2]}>
-                    {r[2]}
-                    {r[1] ? ` · ${r[1]}` : ""}
-                  </option>
-                ))}
-              </select>
+              />
+              {key === "code" && existing && (
+                <p className="text-[11px] text-ink-600/50 mt-1">
+                  Code មិនអាចប្តូរបានទេ ព្រោះ Order/TK ប្រើវាជាឯកសារយោង
+                </p>
+              )}
             </div>
           );
-        }
-        return (
-          <div key={key}>
-            <label className={LABEL_CLS}>{label}</label>
-            <input
-              value={v[key] ?? ""}
-              disabled={key === "code" && !!existing}
-              onChange={(e) => setV((x) => ({ ...x, [key]: e.target.value }))}
-              className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
-            />
-            {key === "code" && existing && (
-              <p className="text-[11px] text-ink-600/50 mt-1">
-                Code មិនអាចប្តូរបានទេ ព្រោះ Order/TK ប្រើវាជាឯកសារយោង
-              </p>
-            )}
-          </div>
-        );
-      })}
-      <div>
-        <label className={LABEL_CLS}>Status</label>
-        <select
-          value={v.status}
-          onChange={(e) => setV((x) => ({ ...x, status: e.target.value }))}
-          className={INPUT_CLS}
-        >
-          <option value="Active">Active</option>
-          <option value="Disabled">Disabled</option>
-        </select>
+        })}
+        <div>
+          <label className={LABEL_CLS}>Status</label>
+          <select
+            value={v.status}
+            onChange={(e) => setV((x) => ({ ...x, status: e.target.value }))}
+            className={INPUT_CLS}
+          >
+            <option value="Active">Active</option>
+            <option value="Disabled">Disabled</option>
+          </select>
+        </div>
       </div>
     </AppModal>
   );
@@ -14098,35 +14101,36 @@ function WarehouseDetailModal({ wh, canManage, onClose }) {
         ["tks", `TK (${mine.length})`],
       ];
 
-  return (
-    <div
-      className="fixed inset-0 bg-ink-900/40 z-50 flex items-center justify-center px-4"
-      onClick={onClose}
-    >
+  return createPortal(
+    <div className="cbx-modal-backdrop cb-modal-backdrop" onClick={onClose}>
       <div
+        role="dialog"
+        aria-modal="true"
         onClick={(e) => e.stopPropagation()}
-        className="bg-white rounded-md shadow-lg w-full max-w-3xl max-h-[88vh] overflow-y-auto"
+        className="cbx-modal cbx-modal-fin max-w-3xl w-full"
       >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-mist-200">
-          <div>
-            <h3 className="font-display font-bold text-base text-ink-900">
+        <div className="cbx-modal-head">
+          <div className="min-w-0">
+            <h3 className="cbx-modal-title">
               {wh.code} · {wh.name}
             </h3>
-            <p className="text-xs text-ink-600/50 mt-0.5">
+            <p className="cbx-modal-sub">
               {isKh ? "Cambodia Receiving Branch" : "China Warehouse"}
             </p>
           </div>
           <div className="flex items-center gap-2">
             <StatusBadge label={wh.status} />
             <button
+              type="button"
               onClick={onClose}
-              className="w-7 h-7 flex items-center justify-center rounded-md border border-mist-200 text-ink-600/60 hover:bg-mist-50"
+              aria-label="Close"
+              className="cbx-modal-x"
             >
-              <X size={14} />
+              <X size={18} />
             </button>
           </div>
         </div>
-        <div className="flex gap-1 px-5 pt-3 border-b border-mist-200 overflow-x-auto">
+        <div className="flex gap-1 px-8 pt-3 border-b border-mist-200 overflow-x-auto flex-shrink-0">
           {tabs.map(([key, label]) => (
             <button
               key={key}
@@ -14142,7 +14146,7 @@ function WarehouseDetailModal({ wh, canManage, onClose }) {
             </button>
           ))}
         </div>
-        <div className="p-5">
+        <div className="p-8 overflow-y-auto min-h-0">
           {tab === "info" && (
             <InfoGrid
               items={[
@@ -14198,7 +14202,8 @@ function WarehouseDetailModal({ wh, canManage, onClose }) {
           {tab === "tks" && <MiniTkTable rows={mine} />}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -14585,6 +14590,7 @@ function KhAddrFormModal({
         </>
       }
       maxW="max-w-lg"
+      className="cbx-modal-fin"
       onClose={onClose}
       onSubmit={submit}
       busy={saving}
@@ -14592,93 +14598,99 @@ function KhAddrFormModal({
       submitLabel="Save"
       busyLabel="កំពុង Save..."
     >
-      {(kind === "district" || kind === "commune") && (
-        <div>
-          <label className={LABEL_CLS}>Municipality *</label>
-          <select
-            value={v.province_code}
-            disabled={kind === "district" && !!existing}
-            onChange={(e) =>
-              setV((x) => ({
-                ...x,
-                province_code: e.target.value,
-                district_code: "",
-              }))
-            }
-            className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
-          >
-            <option value="">— Select —</option>
-            {provinces.map((p) => (
-              <option key={p.code} value={p.code}>
-                {p.name_en} {p.name_km ? `· ${p.name_km}` : ""}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-      {kind === "commune" && (
-        <div>
-          <label className={LABEL_CLS}>District *</label>
-          <select
-            value={v.district_code}
-            disabled={!v.province_code || !!existing}
-            onChange={set("district_code")}
-            className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
-          >
-            <option value="">— Select —</option>
-            {districts
-              .filter((d) => d.province_code === v.province_code)
-              .map((d) => (
-                <option key={d.code} value={d.code}>
-                  {d.name_en} {d.name_km ? `· ${d.name_km}` : ""}
+      <div className="cbx-fin-form flex flex-col gap-5">
+        {(kind === "district" || kind === "commune") && (
+          <div>
+            <label className={LABEL_CLS}>Municipality *</label>
+            <select
+              value={v.province_code}
+              disabled={kind === "district" && !!existing}
+              onChange={(e) =>
+                setV((x) => ({
+                  ...x,
+                  province_code: e.target.value,
+                  district_code: "",
+                }))
+              }
+              className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
+            >
+              <option value="">— Select —</option>
+              {provinces.map((p) => (
+                <option key={p.code} value={p.code}>
+                  {p.name_en} {p.name_km ? `· ${p.name_km}` : ""}
                 </option>
               ))}
-          </select>
+            </select>
+          </div>
+        )}
+        {kind === "commune" && (
+          <div>
+            <label className={LABEL_CLS}>District *</label>
+            <select
+              value={v.district_code}
+              disabled={!v.province_code || !!existing}
+              onChange={set("district_code")}
+              className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
+            >
+              <option value="">— Select —</option>
+              {districts
+                .filter((d) => d.province_code === v.province_code)
+                .map((d) => (
+                  <option key={d.code} value={d.code}>
+                    {d.name_en} {d.name_km ? `· ${d.name_km}` : ""}
+                  </option>
+                ))}
+            </select>
+          </div>
+        )}
+        <div>
+          <label className={LABEL_CLS}>Code *</label>
+          <input
+            value={v.code}
+            disabled={!!existing}
+            onChange={set("code")}
+            className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
+          />
+          <p className="text-[11px] text-ink-600/50 mt-1">
+            {existing
+              ? "Code មិនអាចប្តូរបានទេ ព្រោះទិន្នន័យផ្សេងប្រើវាជាឯកសារយោង"
+              : hint}
+          </p>
         </div>
-      )}
-      <div>
-        <label className={LABEL_CLS}>Code *</label>
-        <input
-          value={v.code}
-          disabled={!!existing}
-          onChange={set("code")}
-          className={`${INPUT_CLS} disabled:bg-mist-50 disabled:text-ink-600/60`}
-        />
-        <p className="text-[11px] text-ink-600/50 mt-1">
-          {existing
-            ? "Code មិនអាចប្តូរបានទេ ព្រោះទិន្នន័យផ្សេងប្រើវាជាឯកសារយោង"
-            : hint}
-        </p>
-      </div>
-      <div>
-        <label className={LABEL_CLS}>Name KH</label>
-        <input
-          value={v.name_km}
-          onChange={set("name_km")}
-          className={INPUT_CLS}
-        />
-      </div>
-      <div>
-        <label className={LABEL_CLS}>Name EN *</label>
-        <input
-          value={v.name_en}
-          onChange={set("name_en")}
-          className={INPUT_CLS}
-        />
-        <p className="text-[11px] text-ink-600/50 mt-1">
-          ឈ្មោះ EN ត្រូវបានរក្សាទុកក្នុងអាសយដ្ឋានអតិថិជន និងប្រើផ្គូផ្គងជាមួយ
-          Branch
-        </p>
-      </div>
-      <div>
-        <label className={LABEL_CLS}>Status</label>
-        <select value={v.status} onChange={set("status")} className={INPUT_CLS}>
-          <option value="Active">Active</option>
-          <option value="Disabled">Disabled</option>
-        </select>
-        <p className="text-[11px] text-ink-600/50 mt-1">
-          Disabled = លាក់ពី Customer (និងកូនរបស់វា) ប៉ុន្តែទិន្នន័យចាស់នៅដដែល
-        </p>
+        <div>
+          <label className={LABEL_CLS}>Name KH</label>
+          <input
+            value={v.name_km}
+            onChange={set("name_km")}
+            className={INPUT_CLS}
+          />
+        </div>
+        <div>
+          <label className={LABEL_CLS}>Name EN *</label>
+          <input
+            value={v.name_en}
+            onChange={set("name_en")}
+            className={INPUT_CLS}
+          />
+          <p className="text-[11px] text-ink-600/50 mt-1">
+            ឈ្មោះ EN ត្រូវបានរក្សាទុកក្នុងអាសយដ្ឋានអតិថិជន និងប្រើផ្គូផ្គងជាមួយ
+            Branch
+          </p>
+        </div>
+        <div>
+          <label className={LABEL_CLS}>Status</label>
+          <select
+            value={v.status}
+            onChange={set("status")}
+            className={INPUT_CLS}
+          >
+            <option value="Active">Active</option>
+            <option value="Disabled">Disabled</option>
+          </select>
+          <p className="text-[11px] text-ink-600/50 mt-1">
+            Disabled = លាក់ពី Customer (និងកូនរបស់វា) ប៉ុន្តែទិន្នន័យចាស់នៅដដែល
+          </p>
+        </div>
       </div>
     </AppModal>
   );
@@ -97885,6 +97897,9 @@ html.cb-admin-dark .cb-app main table td :is(.rounded-full,.rounded-md){border:1
 /* Big KPI numbers: medium weight like the Finance dashboard, not bold */
 .cb-app .cbx-kpi-cell .tabular-nums:is(.font-bold,.font-extrabold,.font-semibold),
 .cb-app .cb-stat .tabular-nums:is(.font-bold,.font-extrabold,.font-semibold){font-weight:500;letter-spacing:-.01em;}
+/* Every big figure on the dashboards uses the same medium weight as the "Total Orders" card */
+.cb-app main :is(.tabular-nums,.font-display):is(.text-xl,.text-2xl,.text-3xl,.text-4xl,[class*="text-[20px]"],[class*="text-[22px]"],[class*="text-[24px]"],[class*="text-[26px]"],[class*="text-[28px]"],[class*="text-[30px]"],[class*="text-[32px]"]):is(.font-semibold,.font-bold,.font-extrabold,.font-black){font-weight:500;letter-spacing:-.01em;}
+.cb-app main :is(.jz-fin-group,.jz-fin-stat,.cbx-kpi-strip,.cb-stat) :is(p,span,div).tabular-nums:is(.font-semibold,.font-bold,.font-extrabold){font-weight:500;}
 /* ===== Admin dark = Customer dark (neutral black, orange accent) ===== */
 html.cb-admin-dark{--cb-bg:#0f0f0f;--cb-border:#2c2c2c;--cb-text:#f5f5f5;--cb-muted:#a3a3a3;
  --cbx-page:#0f0f0f;--cbx-card:#1b1b1b;--cbx-text:#f5f5f5;--cbx-muted:#a3a3a3;
